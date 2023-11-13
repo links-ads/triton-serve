@@ -3,9 +3,9 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project-name"
-authors = [{ name = "author name", email = "author@email.com" }]
-description = "Project description"
+name = "triton-serve"
+authors = [{name = "Edoardo Arnaudo", email = "edoardo.arnaudo@linksfoundation.com"}, {{name = "Lorenzo D'Amico", email = "lorenzo.damico@linksfoundation.com"}]
+description = "Deployment framework based on NVIDIA Triton Inference Server"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
@@ -58,13 +58,13 @@ test = [
 # Using the __main__.py file, the package is already executable with `python -m package_name`.
 # However, the following section allows a nicer invocation using the `package_name` command directly.
 # [project.scripts]
-# package_name = "package_name.cli:main"
+# package_name = "triton-serve"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.dynamic]
-version = { attr = "package_name.__version__" }
+version = {attr = "triton_serve.__version__"}
 
 [tool.black]
 line-length = 119

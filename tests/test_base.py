@@ -1,5 +1,5 @@
-from project_name import __version__
-from project_name.cli import main
+from triton_serve import __version__
+from triton_serve.cli import main
 
 
 def test_example_fixture(example_fixture):
