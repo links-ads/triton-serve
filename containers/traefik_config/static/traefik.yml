@@ -1,0 +1,39 @@
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# -- (Optional) Change Log Level and Format here...
+#     - loglevels [DEBUG, INFO, WARNING, ERROR, CRITICAL]
+#     - format [common, json, logfmt]
+log:
+  level: ERROR
+  format: common
+  filePath: /var/log/traefik/traefik.log
+
+
+# -- (Optional) Enable API and Dashboard here, don't do in production
+api:
+  dashboard: true
+  insecure: true
+
+# -- Change EntryPoints here...
+entryPoints:
+  http:
+    address: :80
+    forwardedHeaders:
+      insecure: true
+
+providers:
+  docker:
+    # -- (Optional) Enable this, if you want to expose all containers automatically
+    exposedByDefault: true
+  file:
+    #directory: /etc/traefik
+    directory: /config_files
+    watch: true
+
+experimental:
+  plugins:
+    sablier:
+      moduleName: "github.com/acouvreur/sablier"
+      version: "v1.4.0"
