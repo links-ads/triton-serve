@@ -160,5 +160,6 @@ cython_debug/
 model_repository/
 
 # test folders
-containers/backend/serve/api/models/
+containers/backend/serve/api/models/model_test
+containers/backend/serve/api/models/model_test_err
 containers/backend/serve/test.py
