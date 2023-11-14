@@ -156,4 +156,9 @@ cython_debug/
 .idea/
 .vscode/
 
+# model repository of the triton servers
 model_repository/
+
+# test folders
+containers/backend/serve/api/models/
+containers/backend/serve/test.py
