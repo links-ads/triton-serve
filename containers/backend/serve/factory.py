@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from typing import Callable
 
 from serve.api import models
+from serve.api import services
 #from serve.security import api_key_auth
 #from serve.config.settings import AppSettings
 
@@ -69,6 +70,7 @@ def register_routers(app: FastAPI):
     :type app: FastAPI
     """
     app.include_router(models.router, tags=["models"])
+    app.include_router(services.router, tags=["services"])
 
 
 def update_upload_schema(app: FastAPI, function: Callable, name: str) -> None:

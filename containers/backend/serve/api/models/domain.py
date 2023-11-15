@@ -8,9 +8,8 @@ from serve.common import utils
 
 
 from pathlib import Path
+from serve.common.constants import BASE_PATH, LOCAL_MODEL_REPOSITORY
 
-
-BASE_PATH = Path(__file__).parent.parent.parent.parent.parent.parent
 
 def get_models(query_name: Optional[str] = None, version: Optional[int] = None) -> List[Model]:
     """Retrieves a list of models, filtered by the given parameters, if present.
@@ -26,7 +25,7 @@ def get_models(query_name: Optional[str] = None, version: Optional[int] = None) 
     models = []
 
     # add the models folder to the path
-    models_path = Path(BASE_PATH, "model_repository")
+    models_path = LOCAL_MODEL_REPOSITORY
     
     for model_path in models_path.iterdir():
         if model_path.is_dir():
@@ -59,7 +58,7 @@ def get_model(name: str, version: int) -> Optional[Model]:
     :return: a model entity, if present. Return None if model is not found
     :rtype: Optional[Model]
     """
-    models_path = Path(BASE_PATH, "model_repository")
+    models_path = LOCAL_MODEL_REPOSITORY
 
     model_path = Path(models_path, name, str(version), "model.onnx")
     if not model_path.exists():
@@ -81,7 +80,7 @@ def post_model(name: str, version: int, model_file: bytes) -> Optional[Model]:
     :return: a model entity, if present. Return None if model is not found
     :rtype: Optional[Model]
     """
-    models_path = Path(BASE_PATH, "model_repository")
+    models_path = LOCAL_MODEL_REPOSITORY
     temp_folder = Path(BASE_PATH, "containers","backend", "serve", "common", "temp", name + str(version))
 
     model_path = Path(models_path, name, str(version), "model.onnx")
