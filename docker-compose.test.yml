@@ -1,0 +1,27 @@
+version: '3'
+
+volumes:
+  configs:
+  models:
+
+services:
+  backend:
+    container_name: serve-backend_test
+    volumes: 
+      - configs:/var/serve/configs
+      - models:/var/serve/models
+    ports:
+      - 7510:5000
+    command: pytest --cov-report=term --cov=serve tests/
+
+  traefik:
+    container_name: serve-traefik_test
+    ports:
+      # The HTTP port
+      - 7500:80
+    volumes:
+    # dynamic configurations
+      - configs:/etc/traefik/configs
+
+  sablier:
+    container_name: serve-sablier_test

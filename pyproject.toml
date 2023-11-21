@@ -26,8 +26,11 @@ classifiers = [
 # "torch @ https://download.pytorch.org/whl/cu117/torch-2.0.1%2Bcu117-cp310-cp310-linux_x86_64.whl",
 # "torchvision @ https://download.pytorch.org/whl/cu117/torchvision-0.15.2%2Bcu117-cp310-cp310-linux_x86_64.whl",
 dependencies = [
-"docker >= 6.1.3 ",
-"pyyaml"
+    "docker >= 6.1.3, < 7.0.0",
+    "fastapi >= 0.104.0, < 1.0.0",
+    "uvicorn[standard] >= 0.15.0, < 0.16.0",
+    "pydantic-settings >= 2.1.0, < 3.0.0",
+    "python-multipart >= 0.0.6, < 1.0.0",
 ]
 
 # Dynamic metadata allow to assign the version number to the package at build time.
@@ -44,8 +47,6 @@ dev = [
     "isort >= 5.1.0, < 6.0.0",
     "gitchangelog >= 3.0.4, < 4.0.0",
     "ruff >= 0.0.1, < 0.1.0",
-    "pika >= 1.3.2",
-    "docker >= 6.1.3"
 ]
 # Add documentation dependencies here
 docs = [
