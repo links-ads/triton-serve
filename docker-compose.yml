@@ -1,0 +1,47 @@
+version: '3'
+
+services:
+  backend:
+      build:
+        context: .
+        dockerfile: containers/backend/Dockerfile
+        args:
+        - TARGET=${BUILD_TARGET:-dev}
+      image: links/serve-backend:${VERSION:-latest}
+      container_name: serve-backend
+      volumes: 
+        - /var/run/docker.sock:/var/run/docker.sock
+      env_file:
+        - .env
+      depends_on:
+        - traefik
+        - sablier
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
+        - traefik.http.routers.serve-backend.entrypoints=http
+        - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
+        - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/serve
+
+  traefik:
+    build: 
+      context: containers/traefik
+      dockerfile: Dockerfile
+      args:
+        - TARGET=${BUILD_TARGET:-dev}
+    image: links/serve-traefik:${VERSION:-latest}
+    command: --api.insecure=true --providers.docker
+    container_name: serve-traefik
+    volumes:
+    # dynamic configuration
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+  
+  sablier:
+    image: acouvreur/sablier:1.4.0
+    container_name: serve-sablier
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 10000:10000
+    labels:
+      - traefik.enable=true

@@ -155,12 +155,3 @@ cython_debug/
 # IDE and editors
 .idea/
 .vscode/
-
-# model repository of the triton servers
-model_repository/
-
-# test folders
-containers/backend/serve/api/models/model_test
-containers/backend/serve/api/models/model_test_err
-containers/backend/serve/test.py
-containers/backend/serve/api/models/model_test.zip

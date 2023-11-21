@@ -36,12 +36,6 @@ lint: check-venv		## Run ruff, black, mypy (optional).
 	@$(PY_BIN)/black --check src/ tests/
 	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
 
-.PHONY: test
-test: lint			## Run tests and generate coverage report.
-	$(PY_BIN)/pytest -v --cov-config .coveragerc --cov=project_name -l --tb=short --maxfail=1 tests/
-	$(PY_BIN)/coverage xml
-	$(PY_BIN)/coverage html
-
 .PHONY: clean
 clean:				## Clean unused files (VENV=true to also remove the virtualenv).
 	@find ./ -name '*.pyc' -exec rm -f {} \;
@@ -82,3 +76,34 @@ release:			## Create a new tag for release.
 	@echo "creating git tag : v$${TAG}"
 	@git tag v$${TAG}
 	@git push -u origin HEAD --tags
+
+.PHONY: build
+build:				## Build the compose project.
+	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+	@echo "Building images with target: $${TARGET}"
+	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml build $${ARGS}
+
+.PHONY: up
+up:				## Start the project.
+	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+	@echo "Starting containers with target: $${TARGET}"
+	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml up -d $${ARGS}
+
+.PHONY: down
+down:				## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
+	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+	@echo "Stopping containers with target: $${TARGET}"
+	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml down $${ARGS}
+
+.PHONY: test
+test:				## Run tests.
+	@echo "Executing docker-compose test commands, renewing volumes and exiting on webserver completion"
+	@export BUILD_TARGET=test
+	@docker compose -p serve-test \
+        -f docker-compose.yml \
+        -f docker-compose.test.yml up \
+        --build --abort-on-container-exit --exit-code-from backend
+	@echo "Tearing everything down, including anonymous volumes"
+	@docker compose -p serve-test \
+        -f docker-compose.yml \
+        -f docker-compose.test.yml down -v
