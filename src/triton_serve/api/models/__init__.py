@@ -29,7 +29,6 @@ def get_models(
     models_path = settings.repository_path
     models = domain.list_models(models_path, model_name=model_name, version=version)
     return models
-        
 
 
 @router.get("/models/{name}/{version}", response_model=ModelSchema, status_code=200, tags=["models"])

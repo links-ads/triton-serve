@@ -3,8 +3,9 @@ from pydantic import BaseModel, validator
 
 
 class ModelSchema(BaseModel):
-    name: str 
-    version: int 
+    name: str
+    version: int
+
 
 class ModelCreateSchema(ModelSchema):
     def __init__(self, name: str = Form(...), version: int = Form(1)):

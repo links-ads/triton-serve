@@ -34,7 +34,7 @@ class AppSettings(BaseSettings):
     service_network: str | None = None
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
-    
+
     # test settings
     zips_path: Path = Path("/var/serve/zips")
     tests_dir: Path = Path("./tests")
