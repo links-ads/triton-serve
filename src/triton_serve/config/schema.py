@@ -1,5 +1,6 @@
 from enum import Enum
 from pathlib import Path
+from pydantic import ConfigDict
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,3 +34,7 @@ class AppSettings(BaseSettings):
     service_network: str | None = None
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
+    
+    # test settings
+    zips_path: Path = Path("/var/serve/zips")
+    tests_dir: Path = Path("./tests")

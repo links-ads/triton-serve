@@ -98,7 +98,7 @@ class LocalModelStorage(ModelStorage):
                 # and its config.pbtxt
                 if len(filenames) > 1:
                     assert any(f.name == "config.pbtxt" for f in filenames), "Config file not found"
-                    assert any(f.name.endwith(".onnx") for f in filenames), "ONNX file not found"
+                    assert any(f.name.endswith(".onnx") for f in filenames), "ONNX file not found"
                     assert len(filenames) == 2, "Too many files in the archive"
                 else:
                     # check that the file is called model.onnx

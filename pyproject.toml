@@ -58,6 +58,9 @@ test = [
     "coverage >= 7.3.0, < 8",
     "pytest >= 7.4.0, < 8",
     "pytest-cov >= 4.1.0, < 5",
+    "httpx >= 0.25.0, < 1",
+    "coloredlogs >= 15.0.0, < 16",
+    "pytest-order >= 1.2.0, < 2",
 ]
 
 # Uncomment this section if you intend to use the package as a CLI.

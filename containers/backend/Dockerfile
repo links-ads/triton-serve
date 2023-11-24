@@ -26,8 +26,8 @@ RUN echo "Building production branch"
 
 FROM base AS branch-test
 RUN echo "Building testing branch"
-COPY tests/ tests/
 RUN pip install -e .[test]
+COPY tests/ tests/
 
 FROM branch-${TARGET}
 

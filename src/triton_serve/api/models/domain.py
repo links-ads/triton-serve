@@ -27,7 +27,7 @@ def list_models(repository_path: Path, model_name: str | None = None, version: i
     for model_dir in model_dirs:
         if model_dir.is_dir():
             if model_name and model_name != model_dir.name:
-                continue  # Skip if query_name doesn't match the model directory name
+                continue  # Skip if name doesn't match the model directory name
 
             versions = []
             if version:  # If version is specified, only check that specific version
@@ -47,7 +47,6 @@ def list_models(repository_path: Path, model_name: str | None = None, version: i
                 models.append(ModelSchema(name=model_dir.name, version=ver))
 
     return models
-
 
 def get_model(repository_path: Path, name: str, version: int) -> ModelSchema | None:
     """
@@ -78,7 +77,7 @@ def create_model(
     """Uploads a model given the name and the version.
 
     :param name: filename of the model
-    :type query_name: str
+    :type name: str
     :param version: model version
     :type version: int
     :param version: zip file containing the model.onnx and the pbtxt file (optional)
