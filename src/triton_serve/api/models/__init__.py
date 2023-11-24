@@ -15,18 +15,21 @@ def get_models(
     settings: AppSettings = Depends(get_settings),
 ):
     """
-    Retrieves a list of models, allowing filtering by `query_name` and `versions`.
+    Retrieves a list of models, allowing filtering by `name` and `versions`.
 
     **Arguments:**
-    - `query_name` (`Optional[str]`, optional): Model `query_name` as specified by the user. Defaults to `None`.
+    - `name` (`Optional[str]`, optional): Model `name` as specified by the user. Defaults to `None`.
     - `version` (`Optional[int]`, optional): Version of the model. Defaults to `None`.
 
     **Returns:**
     - `List[Model]`: A list of models.
     """
+    if model_name == "":
+        raise HTTPException(status_code=422, detail="Model name cannot be empty")
     models_path = settings.repository_path
     models = domain.list_models(models_path, model_name=model_name, version=version)
     return models
+        
 
 
 @router.get("/models/{name}/{version}", response_model=ModelSchema, status_code=200, tags=["models"])

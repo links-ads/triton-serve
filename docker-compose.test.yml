@@ -3,6 +3,7 @@ version: '3'
 volumes:
   configs:
   models:
+  zips:
 
 services:
   backend:
@@ -10,9 +11,11 @@ services:
     volumes: 
       - configs:/var/serve/configs
       - models:/var/serve/models
+      - zips:/var/serve/zips
     ports:
       - 7510:5000
-    command: pytest --cov-report=term --cov=serve tests/
+    command: pytest -sv --cov-report=term --cov=src tests/
+    tty: true
 
   traefik:
     container_name: serve-traefik_test

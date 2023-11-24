@@ -3,9 +3,8 @@ from pydantic import BaseModel, validator
 
 
 class ModelSchema(BaseModel):
-    name: str
-    version: int
-
+    name: str 
+    version: int 
 
 class ModelCreateSchema(ModelSchema):
     def __init__(self, name: str = Form(...), version: int = Form(1)):
@@ -13,7 +12,7 @@ class ModelCreateSchema(ModelSchema):
 
     @validator("name")
     def validate_name(cls, v):
-        if v is None:
+        if not v:
             raise ValueError("Model name cannot be empty")
         return v
 
