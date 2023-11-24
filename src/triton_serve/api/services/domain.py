@@ -5,6 +5,8 @@ from docker import DockerClient
 from docker.errors import APIError
 from fastapi import HTTPException
 
+from triton_serve.api.schema import ServiceSchema
+
 
 def spawn_worker_container(
     client: DockerClient,
@@ -124,7 +126,7 @@ def create_service(
         configs_path (Path): The path to the traefik configs.
 
     Returns:
-        str: The id of the created container.
+        `service` (`ServiceCreateSchema`): The created service.
 
     Raises:
         HTTPException: If the container could not be created.
@@ -139,3 +141,6 @@ def create_service(
         worker_volume=service_models_volume,
     )
     update_traefik_config(service_prefix=service_url_prefix, service_name=service_name, config_path=configs_path)
+
+    service = ServiceSchema(name=service_name, models=models)
+    return service

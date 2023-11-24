@@ -22,7 +22,7 @@ async def post_model(
     - `service` (`ServiceCreateSchema`): The service to be created.
 
     **Returns:**
-    - `Service`: The created service.
+    - `Service` (`ServiceCreateSchema`): The created service.
     """
     service = domain.create_service(
         client=docker_client,

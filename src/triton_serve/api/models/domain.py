@@ -48,6 +48,7 @@ def list_models(repository_path: Path, model_name: str | None = None, version: i
 
     return models
 
+
 def get_model(repository_path: Path, name: str, version: int) -> ModelSchema | None:
     """
     Retrieves a model given the name and version.
