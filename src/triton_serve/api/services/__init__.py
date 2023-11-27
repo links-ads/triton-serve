@@ -24,7 +24,7 @@ async def post_model(
     **Returns:**
     - `Service` (`ServiceCreateSchema`): The created service.
     """
-    service = domain.create_service(
+    domain.create_service(
         client=docker_client,
         service_name=service.name,
         image_name=settings.service_image,
@@ -35,4 +35,3 @@ async def post_model(
         models=service.models,
         configs_path=settings.configs_path,
     )
-    return service

@@ -37,6 +37,9 @@ def spawn_worker_container(
     Raises:
         HTTPException: If the container could not be created.
     """
+    # check if container with the same name already exists
+    if worker_name in [container.name for container in client.containers.list()]:
+        raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
     models_string = " ".join([f"--load-model={model}" for model in models])
     command = f"{worker_command} {models_string}"
     labels = {"sablier.enable": "true", "sablier.group": "serve-workers"}
@@ -141,6 +144,3 @@ def create_service(
         worker_volume=service_models_volume,
     )
     update_traefik_config(service_prefix=service_url_prefix, service_name=service_name, config_path=configs_path)
-
-    service = ServiceSchema(name=service_name, models=models)
-    return service

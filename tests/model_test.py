@@ -178,6 +178,6 @@ def test_get_model(test_client, name, version):
         ("onnx_and_config", None, 422),
     ],
 )
-def test_get_model_iunsuccessful(test_client, name, expected_code, version):
+def test_get_model_unsuccessful(test_client, name, expected_code, version):
     response = test_client.get(f"/models/{name}/{version}")
     assert response.status_code == expected_code, f"This modelo should not exist: {response.json()}"

@@ -80,16 +80,21 @@ def create_zips(test_settings):
 # Instantiates the docker client and cleanes up the containers after the tests
 @pytest.fixture(scope="session")
 def test_containers():
-    client = docker_client()
+    client = next(docker_client())
     spawned_containers_names = []
     yield {
         "client": client,
         "spawned_containers_names": spawned_containers_names,
     }
+
     # clean up containers
     for container_name in spawned_containers_names:
-        LOG.debug(f"Removing container {container_name}...")
+        # check if container exists
+        if container_name not in [container.name for container in client.containers.list()]:
+            LOG.info(f"Container {container_name} was not created, skipping deletion")
+            continue
+        LOG.info(f"Removing container {container_name}...")
         container = client.containers.get(container_name)
         container.stop()
         container.remove()
-        LOG.debug(f"Container {container_name} removed.")
+        LOG.info(f"Container {container_name} removed.")
