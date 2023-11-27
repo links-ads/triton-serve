@@ -6,6 +6,7 @@ from docker.errors import APIError
 from fastapi import HTTPException
 
 from triton_serve.api.schema import ServiceSchema
+from triton_serve.api.services.traefik_config import get_traefik_config_manager
 
 
 def spawn_worker_container(
@@ -63,46 +64,6 @@ def spawn_worker_container(
         raise HTTPException(status_code=500, detail=f"Error creating container: {e}")
 
 
-def update_traefik_config(service_prefix: str, service_name: str, config_path: Path):
-    prefix_name = f"{service_prefix}/{service_name}"
-    path_prefix = f"PathPrefix(`{prefix_name}`)"
-    service_url = f"http://{service_name}:8000"
-
-    yaml_file_name = config_path / f"{service_name}.yaml"
-    raw_data = {
-        "http": {
-            "services": {service_name: {"loadBalancer": {"servers": [{"url": service_url}]}}},
-            "middlewares": {
-                f"{service_name}_sablier": {
-                    "plugin": {
-                        "sablier": {
-                            "group": "serve-workers",
-                            "names": service_name,
-                            "sablierUrl": "http://sablier:10000",
-                            "sessionDuration": "1m",
-                            "blocking": {
-                                "timeout": "30s",
-                            },
-                        }
-                    }
-                },
-                f"{service_name}_stripprefix": {"stripPrefix": {"prefixes": [prefix_name]}},
-            },
-            "routers": {
-                service_name: {
-                    "rule": path_prefix,
-                    "entryPoints": ["http"],
-                    "middlewares": [f"{service_name}_sablier@file", f"{service_name}_stripprefix@file"],
-                    "service": service_name,
-                }
-            },
-        }
-    }
-
-    with open(yaml_file_name, "w") as file:
-        yaml.dump(raw_data, file)
-
-
 def create_service(
     client: DockerClient,
     service_name: str,
@@ -113,6 +74,7 @@ def create_service(
     service_models_volume: Path,
     models: list[str],
     configs_path: Path,
+    repository_path: Path,
 ):
     """Creates a triton docker container loading the models specified in the models list.
 
@@ -134,6 +96,11 @@ def create_service(
     Raises:
         HTTPException: If the container could not be created.
     """
+    traefik_config_manager = get_traefik_config_manager(configs_path=configs_path)
+    # check if the models specified exist
+    for model in models:
+        if not (repository_path / model).exists():
+            raise HTTPException(status_code=409, detail=f"Model {model} does not exist")
     spawn_worker_container(
         client=client,
         image_name=image_name,
@@ -143,4 +110,36 @@ def create_service(
         models=models,
         worker_volume=service_models_volume,
     )
-    update_traefik_config(service_prefix=service_url_prefix, service_name=service_name, config_path=configs_path)
+    traefik_config_manager.add(service_prefix=service_url_prefix, service_name=service_name)
+
+
+def delete_service(
+    client: DockerClient,
+    service_name: str,
+    configs_path: Path,
+):
+    """Deletes a triton docker container and the traefik config for the service.
+
+    Args:
+
+        client (DockerClient): The docker client.
+        service_name (str): The name of the service.
+        configs_path (Path): The path to the traefik configs.
+
+    Returns:
+        `None`
+
+    Raises:
+        HTTPException: If the container could not be deleted.
+    """
+    traefik_config_manager = get_traefik_config_manager(configs_path=configs_path)
+    # check if service exists
+    if service_name not in [container.name for container in client.containers.list()]:
+        raise HTTPException(status_code=404, detail=f"Service with name {service_name} does not exist")
+    try:
+        container = client.containers.get(service_name)
+        container.stop()
+        container.remove()
+    except APIError as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting service: {e}")
+    traefik_config_manager.delete(service_name=service_name)
