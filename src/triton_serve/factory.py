@@ -4,6 +4,7 @@ from starlette.middleware.cors import CORSMiddleware
 from triton_serve import __version__
 from triton_serve.api import models, services
 from triton_serve.config import AppSettings
+import os
 
 
 def create_app(settings: AppSettings) -> FastAPI:

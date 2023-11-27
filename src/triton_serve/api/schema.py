@@ -30,6 +30,18 @@ class ServiceCreateSchema(BaseModel):
     name: str
     models: list[str]
 
+    @validator("name")
+    def validate_name(cls, v):
+        if not v:
+            raise ValueError("Service name cannot be empty")
+        return v
+
+    @validator("models")
+    def validate_models(cls, v):
+        if v is None:
+            raise ValueError("Model cannot be empty")
+        return v
+
 
 class ServiceSchema(BaseModel):
     name: str
