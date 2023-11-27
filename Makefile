@@ -128,3 +128,6 @@ stop-dev:
 	@docker compose \
 		-f docker-compose.yml \
 		-f docker-compose.dev.yml down -v
+
+.PHONY: restat-dev
+restart-dev: stop-dev start-dev

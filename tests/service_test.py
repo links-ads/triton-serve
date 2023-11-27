@@ -13,7 +13,7 @@ coloredlogs.install(logger=LOG, isatty=True)
 
 
 # Test service creation
-@pytest.mark.order(after="model_test.py::test_create_model_success")
+@pytest.mark.dependency(depends=["model_test.py::test_create_model_success"])
 @pytest.mark.parametrize(
     "name, models",
     [
@@ -35,7 +35,7 @@ def test_create_service_success(test_client, test_containers, name, models):
 
 
 # Test service creation unsuccessful
-@pytest.mark.order(after="test_create_service_success")
+@pytest.mark.dependency(depends=["test_create_service_success"])
 @pytest.mark.parametrize(
     "name, models, expected_status_code",
     [
@@ -52,7 +52,7 @@ def test_create_service_unsuccessful(test_client, test_containers, name, models,
     assert response.status_code == expected_status_code, f"Cannot create service: {response.json()}"
 
 
-@pytest.mark.order(after="test_create_service_success")
+@pytest.mark.order(depends=["test_create_service_unsuccessful"])
 @pytest.mark.parametrize("name, expected_status_code", [("test_service_1", 204), ("not_existing_service", 404)])
 def test_delete_model(test_client, name, expected_status_code):
     response = test_client.delete(f"/services/{name}")

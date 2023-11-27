@@ -86,7 +86,7 @@ def test_create_model_unsuccessful_parameters(test_client, test_settings, create
         assert response.status_code == 422
 
 
-@pytest.mark.order(after="test_create_model_success")
+@pytest.mark.dependency(depends=["test_create_model_success"])
 @pytest.mark.parametrize("name, version, num_files", [("onnx_and_config", 1, 2)])
 def test_create_model_unsuccess_already_existing(
     test_client, test_storage, test_settings, create_zips, name, version, num_files
@@ -104,7 +104,7 @@ def test_create_model_unsuccess_already_existing(
         assert response.status_code == 409, f"Cannot create model: {response.json()}"
 
 
-@pytest.mark.order(after="test_create_model_success")
+@pytest.mark.dependency(depends=["test_create_model_unsuccess_already_existing"])
 @pytest.mark.parametrize(
     "name, version, expected_json",
     [
@@ -144,7 +144,7 @@ def test_get_models(test_client, name, version, expected_json):
     assert all(model in expected_json for model in response.json()), "Wrong models returned"
 
 
-@pytest.mark.order(after="test_create_model_success")
+@pytest.mark.dependency(depends=["test_create_model_unsuccess_already_existing"])
 @pytest.mark.parametrize("name, version", [("", 1), ("onnx_and_config", "this_is_not_an_integer")])
 def test_get_models_unsuccessful(test_client, name, version):
     query_params = {}
@@ -159,7 +159,7 @@ def test_get_models_unsuccessful(test_client, name, version):
     assert response.status_code == 422
 
 
-@pytest.mark.order(after="test_create_model_success")
+@pytest.mark.dependency(depends=["test_create_model_unsuccess_already_existing"])
 @pytest.mark.parametrize("name, version", [("onnx_and_config", 1)])
 def test_get_model(test_client, name, version):
     response = test_client.get(f"/models/{name}/{version}")
@@ -167,7 +167,7 @@ def test_get_model(test_client, name, version):
     assert response.json() == {"name": name, "version": version}
 
 
-@pytest.mark.order(after="test_create_model_success")
+@pytest.mark.dependency(depends=["test_get_model"])
 @pytest.mark.parametrize(
     "name, version, expected_code",
     [
@@ -181,3 +181,28 @@ def test_get_model(test_client, name, version):
 def test_get_model_unsuccessful(test_client, name, expected_code, version):
     response = test_client.get(f"/models/{name}/{version}")
     assert response.status_code == expected_code, f"This modelo should not exist: {response.json()}"
+
+
+@pytest.mark.dependency(
+    depends=[
+        "test_get_model_unsuccessful",
+    ]
+)
+@pytest.mark.parametrize("name, version", [("not_existing", 1)])
+def test_delete_model(name, version, test_client, test_storage, test_settings):
+    response = test_client.delete(f"/models/{name}/{version}")
+    assert response.status_code == 404, f"Model should not be present but 404 is not returned: {response.json()}"
+
+
+@pytest.mark.dependency(
+    depends=[
+        "test_get_model_unsuccessful",
+    ]
+)
+@pytest.mark.parametrize("name, version", [("onnx_and_config", 1)])
+def test_delete_model_successful(name, version, test_client, test_storage, test_settings):
+    response = test_client.delete(f"/models/{name}/{version}")
+    assert response.status_code == 204, f"Cannot delete model: {response.json()}"
+    # check that the model is not present inside the models directory, that is /var/serve/models for the test container
+    model_path = test_storage.load(ModelSchema(name=name, version=version))
+    assert not os.path.exists(model_path), "Model not deleted from the model repository"

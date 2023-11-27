@@ -87,3 +87,28 @@ async def create_model(
         storage=storage,
     )
     return model
+
+
+@router.delete("/models/{name}/{version}", status_code=204, tags=["models"])
+def delete_model(
+    name: str,
+    version: int,
+    settings: AppSettings = Depends(get_settings),
+    storage: ModelStorage = Depends(get_storage),
+):
+    """
+    Deletes a model by name and version.
+
+    **Arguments:**
+    - `name` (`str`): The name of the model.
+    - `version` (`int`): The version of the model.
+
+    **Returns:**
+    - `None`
+    """
+
+    repository_path = settings.repository_path
+    model = domain.get_model(repository_path, name, version)
+    if model is None:
+        raise HTTPException(status_code=404, detail=f"Model with name={name} and version={version} does not exist")
+    domain.delete_model(storage, model)

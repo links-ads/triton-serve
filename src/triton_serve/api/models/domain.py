@@ -77,14 +77,18 @@ def create_model(
 ) -> ModelSchema | None:
     """Uploads a model given the name and the version.
 
-    :param name: filename of the model
-    :type name: str
-    :param version: model version
-    :type version: int
-    :param version: zip file containing the model.onnx and the pbtxt file (optional)
-    :type version: str
-    :return: a model entity, if present. Return None if model is not found
-    :rtype: Optional[Model]
+    Args:
+        name (str): The name of the model to create.
+        version (int): The version of the model to create.
+        package (UploadFile): The package containing the model.
+        storage (ModelStorage): The storage implementation to use.
+
+    Returns:
+        ModelSchema: Returns the created ModelSchema instance.
+
+    Raises:
+        HTTPException: If the model already exists.
+        HTTPException: If the file is invalid.
     """
     model = ModelSchema(name=name, version=version)
     try:
@@ -92,3 +96,24 @@ def create_model(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid file uploaded: {e}")
     return model
+
+
+def delete_model(storage: ModelStorage, model: ModelSchema) -> None:
+    """
+    Deletes a model given the name and the version.
+
+    Args:
+        storage (ModelStorage): The storage implementation to use.
+        model (ModelSchema): The model to delete.
+
+    Raises:
+        HTTPException: If the model could not be deleted.
+
+    Returns:
+        None
+
+    """
+    try:
+        storage.delete(model)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Can't delete model: {e}")
