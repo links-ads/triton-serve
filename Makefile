@@ -97,6 +97,8 @@ down:				## Stop the project eliminating containers, use ARGS="-v" to remove vol
 
 .PHONY: test
 test:				## Run tests.
+	@echo copying ./envs/test.env to .env
+	@cp ./envs/test.env .env
 	@echo "Executing docker-compose test commands, renewing volumes and exiting on webserver completion"
 	@export BUILD_TARGET=test
 	@docker compose -p serve-test \
@@ -107,3 +109,22 @@ test:				## Run tests.
 	@docker compose -p serve-test \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
+
+.PHONY: start-dev
+start-dev:				## Run the project in development mode.
+	@echo copying ./envs/dev.env to .env
+	@cp ./envs/dev.env .env
+	@echo "Executing docker-compose dev commands, renewing volumes and exiting on webserver completion"
+	@export BUILD_TARGET=dev
+	@docker compose \
+		-f docker-compose.yml \
+		-f docker-compose.dev.yml up \
+		--build -d
+
+.PHONY: stop-dev
+stop-dev:
+	@echo "Tearing everything down, including anonymous volumes"
+	@export BUILD_TARGET=dev
+	@docker compose \
+		-f docker-compose.yml \
+		-f docker-compose.dev.yml down -v

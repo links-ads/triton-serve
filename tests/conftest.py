@@ -91,7 +91,7 @@ def test_containers():
     for container_name in spawned_containers_names:
         # check if container exists
         if container_name not in [container.name for container in client.containers.list()]:
-            LOG.info(f"Container {container_name} was not created, skipping deletion")
+            LOG.info(f"Container {container_name} does not exist, skipping deletion")
             continue
         LOG.info(f"Removing container {container_name}...")
         container = client.containers.get(container_name)
