@@ -10,6 +10,7 @@ import multipart
 import pytest
 import urllib3
 from fastapi.testclient import TestClient
+
 from src.triton_serve.config import get_settings
 from src.triton_serve.factory import create_app
 
@@ -18,7 +19,7 @@ logging.getLogger(docker.__name__).setLevel(logging.WARNING)
 logging.getLogger(urllib3.__name__).setLevel(logging.WARNING)
 LOG = logging.getLogger(pytest.__name__)
 
-TESTS_DIR = os.getenv("TESTS_DIR", Path(__file__).parent)
+TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
 
 
 @pytest.fixture(scope="session")
@@ -29,7 +30,7 @@ def test_settings():
 
 @pytest.fixture(scope="session")
 def test_dir():
-    return TESTS_DIR
+    return TEST_DIR
 
 
 @pytest.fixture(scope="session")
@@ -77,7 +78,7 @@ def make_zip():
         """
         archive = io.BytesIO()
         archive.name = "package.zip"
-        data_dir = TESTS_DIR / "data"
+        data_dir = TEST_DIR / "data"
         try:
             with ZipFile(archive, "w") as f:
                 if add_model:
