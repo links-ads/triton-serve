@@ -3,7 +3,12 @@ from fastapi import APIRouter, Depends
 
 from triton_serve.api.schema import ServiceCreateSchema
 from triton_serve.api.services import domain
-from triton_serve.config import AppSettings, get_settings
+from triton_serve.config import (
+    AppSettings,
+    TraefikConfigManager,
+    get_settings,
+    get_traefik,
+)
 from triton_serve.extensions import docker_client
 
 router = APIRouter()
@@ -14,6 +19,7 @@ async def post_service(
     service: ServiceCreateSchema,
     docker_client: DockerClient = Depends(docker_client),
     settings: AppSettings = Depends(get_settings),
+    traefik: TraefikConfigManager = Depends(get_traefik),
 ):
     """
     Creates a new service with the specified models.
@@ -26,6 +32,7 @@ async def post_service(
     """
     domain.create_service(
         client=docker_client,
+        traefik=traefik,
         service_name=service.name,
         image_name=settings.service_image,
         base_command=settings.service_command,
@@ -33,7 +40,6 @@ async def post_service(
         service_url_prefix=settings.service_prefix,
         service_models_volume=settings.service_volume,
         models=service.models,
-        configs_path=settings.configs_path,
         repository_path=settings.repository_path,
     )
 
@@ -43,6 +49,7 @@ async def delete_service(
     name: str,
     docker_client: DockerClient = Depends(docker_client),
     settings: AppSettings = Depends(get_settings),
+    traefik: TraefikConfigManager = Depends(get_traefik),
 ):
     """
     Deletes a service with the specified name.
@@ -55,6 +62,6 @@ async def delete_service(
     """
     domain.delete_service(
         client=docker_client,
+        traefik=traefik,
         service_name=name,
-        configs_path=settings.configs_path,
     )

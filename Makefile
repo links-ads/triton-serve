@@ -2,13 +2,14 @@
 PY_ENV=.venv
 PY_BIN=$(shell python -c "print('$(PY_ENV)/bin') if __import__('pathlib').Path('$(PY_ENV)/bin/pip').exists() else print('')")
 
+# Define default target
+.DEFAULT_GOAL := help
+DOCKER_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.$(TARGET).yml
+
 .PHONY: help
 help:				## This help screen
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
-.PHONY: init
-init:				## Initialize the project template
-	@$(PY_BIN)/python init.py
 
 .PHONY: show
 show:				## Show the current environment.
@@ -17,24 +18,29 @@ show:				## Show the current environment.
 	@$(PY_BIN)/python -V
 	@$(PY_BIN)/python -m site
 
+
 .PHONY: check-venv
 check-venv:			## Check if the virtualenv exists.
 	@if [ "$(PY_BIN)" = "" ]; then echo "No virtualenv detected, create one using 'make virtualenv'"; exit 1; fi
 
+
 .PHONY: install
 install: check-venv		## Install the project in dev mode.
 	@$(PY_BIN)/pip install -e .[dev,docs,test]
+
 
 .PHONY: fmt
 fmt: check-venv			## Format code using black & isort.
 	$(PY_BIN)/isort -v --src src/ tests/ --virtual-env $(PY_ENV)
 	$(PY_BIN)/black src/ tests/
 
+
 .PHONY: lint
 lint: check-venv		## Run ruff, black, mypy (optional).
 	@$(PY_BIN)/ruff check src/
 	@$(PY_BIN)/black --check src/ tests/
 	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
+
 
 .PHONY: clean
 clean:				## Clean unused files (VENV=true to also remove the virtualenv).
@@ -54,6 +60,7 @@ clean:				## Clean unused files (VENV=true to also remove the virtualenv).
 	@rm -rf docs/_build
 	@if [ "$(VENV)" != "" ]; then echo "Removing virtualenv..."; rm -rf $(PY_ENV); fi
 
+
 .PHONY: virtualenv
 virtualenv:			## Create a virtual environment.
 	@echo "creating virtualenv ..."
@@ -62,6 +69,7 @@ virtualenv:			## Create a virtual environment.
 	@./$(PY_ENV)/bin/pip install -U pip
 	@echo
 	@echo "==| Please run 'source $(PY_ENV)/bin/activate' to enable the environment |=="
+
 
 .PHONY: release
 release:			## Create a new tag for release.
@@ -77,57 +85,49 @@ release:			## Create a new tag for release.
 	@git tag v$${TAG}
 	@git push -u origin HEAD --tags
 
+
+check-target:				## Check if TARGET variable is set.
+	@if [ -z "$(TARGET)" ]; then echo "TARGET is not set, launch the command setting TARGET=dev|prod"; exit 1; fi
+	@if [ "$(TARGET)" != "dev" ] && [ "$(TARGET)" != "prod" ]; then echo "TARGET must be either dev or prod"; exit 1; fi
+	@echo "Symlinking .env file to $${TARGET}.env"
+	@ln -sf ./envs/$${TARGET}.env .env
+
 .PHONY: build
-build:				## Build the compose project.
-	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+build:	check-target		## Build the compose project.
 	@echo "Building images with target: $${TARGET}"
-	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml build $${ARGS}
+	@$(DOCKER_COMPOSE) build $${c}
+
 
 .PHONY: up
-up:				## Start the project.
-	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+up: check-target			## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
-	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml up -d $${ARGS}
+	@$(DOCKER_COMPOSE) up -d $${c}
+
+stop: check-target			## Stop the project.
+	@echo "Stopping containers with target: $${TARGET}"
+	@$(DOCKER_COMPOSE) stop $${c}
 
 .PHONY: down
-down:				## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
-	@if [ -z "$(BUILD_TARGET)" ]; then read -p "Please provide the build target: (dev, prod, test) : " TARGET; else TARGET=$(BUILD_TARGET); fi
+down: check-target			## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
 	@echo "Stopping containers with target: $${TARGET}"
-	@docker compose -f docker-compose.yml -f docker-compose.$${TARGET}.yml down $${ARGS}
+	@$(DOCKER_COMPOSE) down $${c}
+
+.PHONY: restart
+restart: check-target		## Restart the project.
+	@echo "Restarting containers with target: $${TARGET}"
+	stop up
 
 .PHONY: test
 test:				## Run tests.
-	@echo copying ./envs/test.env to .env
-	@cp ./envs/test.env .env
-	@echo "Executing docker-compose test commands, renewing volumes and exiting on webserver completion"
-	@export BUILD_TARGET=test
+	@echo "Setting up test environment..."
+	@ln -sf ./envs/test.env .env
+	@echo "Executing containerized tests..."
+	@export TARGET=test
 	@docker compose -p serve-test \
         -f docker-compose.yml \
         -f docker-compose.test.yml up \
         --build --abort-on-container-exit --exit-code-from backend
-	@echo "Tearing everything down, including anonymous volumes"
+	@echo "Tearing everything down..."
 	@docker compose -p serve-test \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
-
-.PHONY: start-dev
-start-dev:				## Run the project in development mode.
-	@echo copying ./envs/dev.env to .env
-	@cp ./envs/dev.env .env
-	@echo "Executing docker-compose dev commands, renewing volumes and exiting on webserver completion"
-	@export BUILD_TARGET=dev
-	@docker compose \
-		-f docker-compose.yml \
-		-f docker-compose.dev.yml up \
-		--build -d
-
-.PHONY: stop-dev
-stop-dev:
-	@echo "Tearing everything down, including anonymous volumes"
-	@export BUILD_TARGET=dev
-	@docker compose \
-		-f docker-compose.yml \
-		-f docker-compose.dev.yml down -v
-
-.PHONY: restat-dev
-restart-dev: stop-dev start-dev
