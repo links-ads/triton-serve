@@ -6,7 +6,7 @@ services:
         context: .
         dockerfile: containers/backend/Dockerfile
         args:
-        - TARGET=${BUILD_TARGET:-dev}
+        - TARGET=${TARGET:-dev}
       image: links/serve-backend:${VERSION:-latest}
       container_name: serve-backend
       volumes: 
@@ -28,7 +28,7 @@ services:
       context: containers/traefik
       dockerfile: Dockerfile
       args:
-        - TARGET=${BUILD_TARGET:-dev}
+        - TARGET=${TARGET:-dev}
     image: links/serve-traefik:${VERSION:-latest}
     command: --api.insecure=true --providers.docker
     container_name: serve-traefik

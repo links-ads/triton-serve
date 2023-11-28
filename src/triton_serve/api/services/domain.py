@@ -1,12 +1,10 @@
 from pathlib import Path
 
-import yaml
 from docker import DockerClient
 from docker.errors import APIError
 from fastapi import HTTPException
 
-from triton_serve.api.schema import ServiceSchema
-from triton_serve.api.services.traefik_config import get_traefik_config_manager
+from triton_serve.config.traefik import TraefikConfigManager
 
 
 def spawn_worker_container(
@@ -61,11 +59,12 @@ def spawn_worker_container(
         )
         return container.id
     except APIError as e:
-        raise HTTPException(status_code=500, detail=f"Error creating container: {e}")
+        raise HTTPException(status_code=e.status_code, detail=f"Error creating container: {e}")
 
 
 def create_service(
     client: DockerClient,
+    traefik: TraefikConfigManager,
     service_name: str,
     image_name: str,
     base_command: str,
@@ -73,7 +72,6 @@ def create_service(
     service_url_prefix: str,
     service_models_volume: Path,
     models: list[str],
-    configs_path: Path,
     repository_path: Path,
 ):
     """Creates a triton docker container loading the models specified in the models list.
@@ -96,7 +94,6 @@ def create_service(
     Raises:
         HTTPException: If the container could not be created.
     """
-    traefik_config_manager = get_traefik_config_manager(configs_path=configs_path)
     # check if the models specified exist
     for model in models:
         if not (repository_path / model).exists():
@@ -110,19 +107,20 @@ def create_service(
         models=models,
         worker_volume=service_models_volume,
     )
-    traefik_config_manager.add(service_prefix=service_url_prefix, service_name=service_name)
+    traefik.add(service_prefix=service_url_prefix, service_name=service_name)
 
 
 def delete_service(
     client: DockerClient,
+    traefik: TraefikConfigManager,
     service_name: str,
-    configs_path: Path,
 ):
     """Deletes a triton docker container and the traefik config for the service.
 
     Args:
 
         client (DockerClient): The docker client.
+        traefik (TraefikConfigManager): The traefik config manager.
         service_name (str): The name of the service.
         configs_path (Path): The path to the traefik configs.
 
@@ -132,7 +130,6 @@ def delete_service(
     Raises:
         HTTPException: If the container could not be deleted.
     """
-    traefik_config_manager = get_traefik_config_manager(configs_path=configs_path)
     # check if service exists
     if service_name not in [container.name for container in client.containers.list()]:
         raise HTTPException(status_code=404, detail=f"Service with name {service_name} does not exist")
@@ -141,5 +138,5 @@ def delete_service(
         container.stop()
         container.remove()
     except APIError as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting service: {e}")
-    traefik_config_manager.delete(service_name=service_name)
+        raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}")
+    traefik.delete(service_name=service_name)

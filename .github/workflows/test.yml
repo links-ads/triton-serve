@@ -1,0 +1,25 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Run tests
+        uses: isbang/compose-action@v1.5.1
+        with:
+          compose-file: |
+            docker-compose.yml
+            docker-compose.test.yml
+          up-flags: "--build --abort-on-container-exit --exit-code-from backend"
+          down-flags: "--volumes"
+          env:
+            TARGET: test

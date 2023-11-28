@@ -1,19 +1,24 @@
+import io
 import logging
-import zipfile
+import os
+from contextlib import contextmanager
 from pathlib import Path
+from zipfile import ZipFile
 
-import coloredlogs
+import docker
+import multipart
 import pytest
+import urllib3
 from fastapi.testclient import TestClient
-
 from src.triton_serve.config import get_settings
-from src.triton_serve.config.schema import AppSettings
-from src.triton_serve.extensions import docker_client
 from src.triton_serve.factory import create_app
-from src.triton_serve.storage.local import LocalModelStorage
 
+logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
+logging.getLogger(docker.__name__).setLevel(logging.WARNING)
+logging.getLogger(urllib3.__name__).setLevel(logging.WARNING)
 LOG = logging.getLogger(pytest.__name__)
-coloredlogs.install(logger=LOG, isatty=True)
+
+TESTS_DIR = os.getenv("TESTS_DIR", Path(__file__).parent)
 
 
 @pytest.fixture(scope="session")
@@ -23,9 +28,8 @@ def test_settings():
 
 
 @pytest.fixture(scope="session")
-def test_storage(test_settings):
-    storage = LocalModelStorage(test_settings.repository_path)
-    yield storage
+def test_dir():
+    return TESTS_DIR
 
 
 @pytest.fixture(scope="session")
@@ -42,59 +46,48 @@ def test_client(test_app):
     yield client
 
 
-def _create_zip(
-    test_settings: AppSettings,
-    archive_name: str,
-    model_filename: str = "model.onnx",
-    model_file: bool = True,
-    config_file: bool = False,
-):
-    """Utility function to create a zip file with the given files.
-
-    Args:
-        archive_name (str): name of the archive
-        config_file (bool, optional): whether to include a config file. Defaults to False.
-    """
-    model_test_dir = test_settings.tests_dir / "data" / "model_test"
-    zip_file = test_settings.zips_path / archive_name
-
-    with zipfile.ZipFile(zip_file, "w") as model_zip:
-        # write the files in the zip file
-        if model_file:
-            model_zip.write(model_test_dir / "model.onnx", arcname=Path(model_filename))
-        if config_file:
-            model_zip.write(model_test_dir / "config.pbtxt", arcname=Path("config.pbtxt"))
-
-
-# Create a zip file with model.onnx and config.pbtxt
-# In the tests/data folder, put a folder called model_test with the model.onnx and config.pbtxt files
 @pytest.fixture(scope="session")
-def create_zips(test_settings):
-    _create_zip(test_settings, "onnx_and_config.zip", config_file=True)
-    _create_zip(test_settings, "only_onnx.zip", config_file=False)
-    _create_zip(test_settings, "wrong_model_name.zip", config_file=False, model_filename="wrong_model_name.onnx")
-    _create_zip(test_settings, "no_model.zip", model_file=False, config_file=True)
-    yield
+def test_docker():
+    client = docker.from_env()
+    try:
+        yield client
+        containers = [c for c in client.containers.list() if c.name.startswith("trt-srv_test_sv")]
+        for container in containers:
+            LOG.info(f"Removing container {container.name}...")
+            container.stop()
+            container.remove()
+            LOG.info(f"Container {container.name} removed.")
+    finally:
+        client.close()
 
 
-# Instantiates the docker client and cleanes up the containers after the tests
 @pytest.fixture(scope="session")
-def test_containers():
-    client = next(docker_client())
-    spawned_containers_names = []
-    yield {
-        "client": client,
-        "spawned_containers_names": spawned_containers_names,
-    }
+def make_zip():
+    @contextmanager
+    def _create_zip(
+        model_name: str = "model.onnx",
+        add_model: bool = True,
+        add_config: bool = False,
+    ):
+        """Utility function to create a zip file with the given files.
 
-    # clean up containers
-    for container_name in spawned_containers_names:
-        # check if container exists
-        if container_name not in [container.name for container in client.containers.list()]:
-            LOG.info(f"Container {container_name} does not exist, skipping deletion")
-            continue
-        LOG.info(f"Removing container {container_name}...")
-        container = client.containers.get(container_name)
-        container.stop()
-        container.remove()
-        LOG.info(f"Container {container_name} removed.")
+        Args:
+            archive_name (str): name of the archive
+            config_file (bool, optional): whether to include a config file. Defaults to False.
+        """
+        archive = io.BytesIO()
+        archive.name = "package.zip"
+        data_dir = TESTS_DIR / "data"
+        try:
+            with ZipFile(archive, "w") as f:
+                if add_model:
+                    f.write(data_dir / "model.onnx", arcname=Path(model_name))
+                if add_config:
+                    f.write(data_dir / "config.pbtxt", arcname=Path("config.pbtxt"))
+            archive.seek(0)
+            yield archive
+        finally:
+            if archive:
+                archive.close()
+
+    return _create_zip

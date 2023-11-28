@@ -157,4 +157,7 @@ cython_debug/
 .vscode/
 
 # Other
-local_tests
+**/data/
+*.zip
+*.tar.gz
+*.tgz

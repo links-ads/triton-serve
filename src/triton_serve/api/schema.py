@@ -1,5 +1,5 @@
 from fastapi import Form
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 
 class ModelSchema(BaseModel):
@@ -11,13 +11,13 @@ class ModelCreateSchema(ModelSchema):
     def __init__(self, name: str = Form(...), version: int = Form(1)):
         super().__init__(name=name, version=version)
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, v):
         if not v:
             raise ValueError("Model name cannot be empty")
         return v
 
-    @validator("version")
+    @field_validator("version")
     def validate_version(cls, v):
         if v is None:
             raise ValueError("Model version cannot be empty")
@@ -30,13 +30,13 @@ class ServiceCreateSchema(BaseModel):
     name: str
     models: list[str]
 
-    @validator("name")
+    @field_validator("name")
     def validate_name(cls, v):
         if not v:
             raise ValueError("Service name cannot be empty")
         return v
 
-    @validator("models")
+    @field_validator("models")
     def validate_models(cls, v):
         if v is None:
             raise ValueError("Model cannot be empty")

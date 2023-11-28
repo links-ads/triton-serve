@@ -14,7 +14,7 @@ services:
       - zips:/var/serve/zips
     ports:
       - 7510:5000
-    command: pytest -sv --cov-report=term --cov=src tests/
+    command: pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
     tty: true
 
   traefik:
