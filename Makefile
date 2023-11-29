@@ -95,22 +95,22 @@ check-target:				## Check if TARGET variable is set.
 .PHONY: build
 build:	check-target		## Build the compose project.
 	@echo "Building images with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) build $${c}
+	@$(DOCKER_COMPOSE) build $${ARGS}
 
 
 .PHONY: up
 up: check-target			## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) up -d $${c}
+	@$(DOCKER_COMPOSE) up -d $${ARGS}
 
 stop: check-target			## Stop the project.
 	@echo "Stopping containers with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) stop $${c}
+	@$(DOCKER_COMPOSE) stop $${ARGS}
 
 .PHONY: down
 down: check-target			## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
 	@echo "Stopping containers with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) down $${c}
+	@$(DOCKER_COMPOSE) down $${ARGS}
 
 .PHONY: restart
 restart: check-target		## Restart the project.
