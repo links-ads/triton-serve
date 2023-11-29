@@ -2,6 +2,7 @@ from enum import Enum
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class StorageType(str, Enum):
@@ -34,3 +35,6 @@ class AppSettings(BaseSettings):
     service_network: str | None = None
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
+
+    # security
+    app_secret: str = Field(...)

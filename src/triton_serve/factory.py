@@ -1,9 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Security
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve import __version__
 from triton_serve.api import models, services
 from triton_serve.config import AppSettings
+from triton_serve.security import api_key_auth
 
 
 def create_app(settings: AppSettings) -> FastAPI:
@@ -39,5 +40,5 @@ def register_routers(app: FastAPI):
     :param app: FastAPI instance
     :type app: FastAPI
     """
-    app.include_router(models.router, tags=["models"])
-    app.include_router(services.router, tags=["services"])
+    app.include_router(models.router, tags=["models"], dependencies=[Security(api_key_auth)])
+    app.include_router(services.router, tags=["services"], dependencies=[Security(api_key_auth)])
