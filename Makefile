@@ -131,3 +131,9 @@ test:				## Run tests.
 	@docker compose -p serve-test \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
+
+.PHONY: restart-dev
+restart-dev:
+	@ln -sf ./envs/dev.env .env
+	@docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+	@docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
