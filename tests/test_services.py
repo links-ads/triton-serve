@@ -1,6 +1,6 @@
 import logging
-
 import pytest
+import requests
 
 LOG = logging.getLogger(pytest.__name__)
 
@@ -42,3 +42,25 @@ def test_create_service_wrong_inputs(test_client, name, models, expected_status_
 def test_delete_service(test_client, name, expected_status_code):
     response = test_client.delete(f"/services/{name}")
     assert response.status_code == expected_status_code
+
+
+# =================================
+# Test on triton service endpoints
+# =================================
+
+
+@pytest.mark.order(after="test_delete_service")
+@pytest.mark.parametrize("name", [("trt-srv_test_svc2")])
+def test_triton_ping(name):
+    url = f"http://serve-traefik_test/{name}/v2/health/ready"
+    response = requests.get(url)
+    assert response.status_code == 200
+
+
+@pytest.mark.order(after="test_triton_ping")
+@pytest.mark.parametrize("name, models", [("trt-srv_test_svc3", ["model_cfg", "model"])])
+def test_models_ready(name, models):
+    for model in models:
+        url = f"http://serve-traefik_test/{name}/v2/models/{model}/ready"
+        response = requests.get(url)
+        assert response.status_code == 200
