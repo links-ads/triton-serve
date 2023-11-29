@@ -41,9 +41,10 @@ def test_app():
 
 
 @pytest.fixture(scope="session")
-def test_client(test_app):
+def test_client(test_app, test_settings):
     LOG.debug("Initializing test client...")
     client = TestClient(app=test_app)
+    client.headers.update({"X-API-Key": test_settings.app_secret})
     yield client
 
 
