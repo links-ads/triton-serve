@@ -5,7 +5,6 @@ import pytest
 LOG = logging.getLogger(pytest.__name__)
 
 
-@pytest.mark.dependency(name="test_create_model")
 @pytest.mark.parametrize("name, version", [("model_cfg", 1), ("model", 1), ("model_cfg", 2)])
 def test_create_model(test_client, test_settings, make_zip, name, version):
     """
@@ -60,7 +59,7 @@ def test_create_model_wrong_params(test_client, make_zip, name, version):
     assert response.status_code == 422
 
 
-@pytest.mark.dependency(name="test_create_model_already_existing", depends=["test_create_model"])
+@pytest.mark.order(after="test_create_model")
 @pytest.mark.parametrize("name, version", [("model_cfg", 1)])
 def test_create_model_already_existing(test_client, make_zip, name, version):
     with make_zip(add_model=True, add_config=True) as package:
@@ -69,7 +68,7 @@ def test_create_model_already_existing(test_client, make_zip, name, version):
     assert response.status_code == 409
 
 
-@pytest.mark.dependency(depends=["test_create_model_already_existing"])
+@pytest.mark.order(after="test_create_model_already_existing")
 @pytest.mark.parametrize(
     "name, version, expected_json",
     [
@@ -125,7 +124,7 @@ def test_get_models(test_client, name, version, expected_json):
     assert all(model in expected_json for model in data)
 
 
-@pytest.mark.dependency(depends=["test_create_model_already_existing"])
+@pytest.mark.order(after="test_create_model_already_existing")
 @pytest.mark.parametrize("name, version", [("", 1), ("model_cfg", "not_an_integer")])
 def test_get_models_wrong_params(test_client, name, version):
     query_params = {}
@@ -138,7 +137,7 @@ def test_get_models_wrong_params(test_client, name, version):
     assert response.status_code == 422
 
 
-@pytest.mark.dependency(name="test_get_model", depends=["test_create_model_already_existing"])
+@pytest.mark.order(after="test_create_model_already_existing")
 @pytest.mark.parametrize("name, version", [("model_cfg", 1)])
 def test_get_model(test_client, name, version):
     response = test_client.get(f"/models/{name}/{version}")
@@ -146,7 +145,7 @@ def test_get_model(test_client, name, version):
     assert response.json() == {"name": name, "version": version}
 
 
-@pytest.mark.dependency(name="test_get_model_wrong_params", depends=["test_get_model"])
+@pytest.mark.order(after="test_get_model")
 @pytest.mark.parametrize(
     "name, version, expected_code",
     [
@@ -162,14 +161,14 @@ def test_get_model_wrong_params(test_client, name, expected_code, version):
     assert response.status_code == expected_code, f"This modelo should not exist: {response.json()}"
 
 
-@pytest.mark.dependency(depends=["test_get_model_wrong_params"])
+@pytest.mark.order(after="test_get_model_wrong_params")
 @pytest.mark.parametrize("name, version", [("not_existing", 1)])
 def test_delete_non_existent_model(name, version, test_client):
     response = test_client.delete(f"/models/{name}/{version}")
     assert response.status_code == 404
 
 
-@pytest.mark.dependency(depends=["test_get_model_wrong_params"])
+@pytest.mark.order(after="test_get_model_wrong_params")
 @pytest.mark.parametrize("name, version", [("model_cfg", 1)])
 def test_delete_model(name, version, test_client, test_settings):
     response = test_client.delete(f"/models/{name}/{version}")
