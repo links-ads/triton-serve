@@ -123,11 +123,11 @@ test:				## Run tests.
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
 	@export TARGET=test
-	@docker compose -p serve-test \
+	@docker compose -p triton-serve \
         -f docker-compose.yml \
         -f docker-compose.test.yml up \
         --build --abort-on-container-exit --exit-code-from backend
 	@echo "Tearing everything down..."
-	@docker compose -p serve-test \
+	@docker compose -p triton-serve \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
