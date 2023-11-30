@@ -5,6 +5,11 @@ volumes:
   models:
   zips:
 
+networks:
+  default:
+    external:
+      name: serve-test_default
+
 services:
   backend:
     container_name: serve-backend_test
@@ -16,6 +21,8 @@ services:
       - 7510:5000
     command: pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
     tty: true
+    networks:
+      - serve-test_default
 
   traefik:
     container_name: serve-traefik_test
@@ -25,6 +32,10 @@ services:
     volumes:
     # dynamic configurations
       - configs:/etc/traefik/configs
+    networks:
+      - serve-test_default
 
   sablier:
     container_name: serve-sablier_test
+    networks:
+      - serve-test_default
