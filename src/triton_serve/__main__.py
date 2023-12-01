@@ -6,6 +6,5 @@ a command line interface for your project.
 
 from triton_serve.cli import main
 
-
 if __name__ == "__main__":
     main()
