@@ -1,71 +1,58 @@
-# python-template
-A simple template to bootstrap Python packages.
-It should be slightly faster than starting from scratch each time.
+# Triton Serve
+A simple deployment framework based on [NVIDIA Triton Inference Server](https://github.com/triton-inference-server/server).
 
 ## Features
 
-- 🍨 **As vanilla as it gets** - Pure standard python, including `setuptools` as build tool.
-- ✏️ **One config file** - The `pyproject.toml` handles everything: dependencies, tools, versioning.
-- 🏷️ **Dynamic versioning** - The package version is dynamically set at build time, taken from `package_name.__version__`
+This framework is meant to satisfy the following requirements:
+- **Ease of use** - The framework simplifies the deployment process by handling the Docker containers itself, abstracting away the deployment issue.
+- **Containers on demand** - Triton containers can automatically start and stop thanks to Traefik's Sablier plugin, to save resources when possible.
+- **Robustness** - Models are deployed using a vanilla NVIDIA Triton Inference Server, offering a powerful and feature-rich platform for every necessity. 
 
-## Getting Started
+## Concept
 
-To use this template, follow these steps:
+![architecture](docs/assets/triton-serve.png)
 
-1. Click the "Use this template" button at the top of the repository and follow the procedure.
+The architecture of Triton Serve is quite straightforward: the overall system is composed of a single management backend, a single reverse proxy/load balancer, and a variable number of Triton container instances.
 
-2. Clone your new repository to your local machine:
+### Management Backend
 
-   ```bash
-   git clone https://github.com/your-username/your-repo.git
-   ```
+The backend represents the main entry point of the tool. This service provides standard a REST API with operations such as:
 
-3. Navigate to the project directory. Optional but recommended: create and activate a Python virtual environment to isolate your project's dependencies.
-E.g.:
+- CRUD endpoints to manage models (upload, update, delete models and so on)
+- CRUD endpoints to manage services (create, update, delete Triton services)
 
-   ```bash
-   cd your-repo
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows, use .venv\Scripts\activate
-   ```
-5. The template provides a simple "self-destructing" initialization script, `init.py`, that automatically provides the necessary information to generate a fully functional python package (project name, author, ...).
-From a python environment, or any other means, this script can be launched as easily as:
+This service aims to simplify the model deployment phase for every user, even without prior knowledge about Docker or best practices for model deployment in general.
+In fact, the backend internally handles that part by taking the list of models to deploy, and by doing the necessary actions to make them available through an NVIDIA Triton Inference Server instance.
 
-    ```bash
-    # launch and follow the prompts
-    python init.py
-    ```
+### Proxy
 
-6. Install the required dependencies:
+The "proxy" actually provides several features: 
+- it acts as the main (and only) entry point for every service in the framework
+- it automatically registers the Triton services under a subpath dynamically
+- it handles the on-demand provision of these services, using [Sablier](https://github.com/acouvreur/sablier).
 
-   ```bash
-    # Install the bare minimum, editable is usually preferred when developing
-   pip install -e .
-   # Install extras
-   pip install -e .[dev|docs|test]
-   ```
+### Triton services
 
+In practice, Triton services are nothing more than a vanilla Triton container, programmatically launched and managed by the backend service. These containers are launched in explicit mode so that only the required list of models is loaded on startup.
 
-7. You're good to go! Of course, you can further customize it to your liking.
+## Installation
 
-> **Note**
->
-> The `init.py` script is self-contained and will delete itself once the procedure is completed. It is absolutely safe to delete if you prefer to edit the files manually.
+The framework uses `docker-compose`, and it can be run through the provided makefile with a few commands.
 
-## Extra goodies
-
-If you are using VS Code as your editor of choice, you can use the following
-snippet in your `settings.json` file to format and sort imports on save.
-
-```json
-{
-    "python.formatting.provider": "black",
-    "[python]": {
-        "editor.formatOnSave": true,
-        "editor.codeActionsOnSave": {
-            "source.organizeImports": true
-        },
-    },
-}
+```console
+$ make run TARGET=dev|prod
 ```
-Of course, this is completely optional.
+
+
+
+## Development
+
+The main bulk of code is Python-based: the development only requires a working Python environment. The following commands provide an example of development installation.
+
+```bash
+$ git clone https://github.com/links-ads/triton-serve
+$ cd triton-serve
+$ python -m venv .venv
+$ source .venv/bin/activate  # On Windows, use .venv\Scripts\activate
+$ pip install -e .[dev,test,docs]
+```
