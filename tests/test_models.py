@@ -17,16 +17,17 @@ def test_create_model(test_client, test_settings, make_zip, name, version):
     LOG.debug(f"Response: {response.json()}")
     assert response.status_code == 201
     # check if the model is present inside the models repository
-    expected_path = test_settings.repository_path / name / str(version)
-    assert expected_path.exists() and expected_path.is_dir()
+    expected_config_path = test_settings.repository_path / name
+    expected_model_path = expected_config_path / str(version)
+    assert expected_model_path.exists() and expected_model_path.is_dir() and expected_model_path.is_dir()
     # check that the files extracted are correct
-    files = [f for f in expected_path.iterdir()]
-    assert len(files) == 1 if not has_config else 2
+    cfg_files = [f for f in expected_config_path.iterdir() if f.is_file()]
+    model_files = [f for f in expected_model_path.iterdir() if f.is_file()]
+    len(model_files) == 1
     if has_config:
-        assert any(f.name == "config.pbtxt" for f in files)
-        assert any(f.name.endswith(".onnx") for f in files)
-    else:
-        assert files[0].name == "model.onnx"
+        assert len(cfg_files) == 1
+        assert cfg_files[0].name == "config.pbtxt"
+    assert model_files[0].name == "model.onnx"
 
 
 @pytest.mark.parametrize(
