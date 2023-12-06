@@ -1,5 +1,9 @@
 version: '3'
 
+volumes:
+  psgdata:
+  pgAdmin4data:
+
 services:
   backend:
       volumes: 
@@ -19,3 +23,18 @@ services:
     # dynamic configurations
       - ./data/configs:/etc/traefik/configs
 
+  database:
+    volumes:
+        - psgdata:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+
+  pgadmin:
+    container_name: pgadmin4_container
+    image: dpage/pgadmin4:8.0
+    env_file:
+        - .env
+    volumes:
+        - pgAdmin4data:/var/lib/pgadmin
+    ports:
+      - "5050:80"
