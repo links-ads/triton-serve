@@ -100,14 +100,13 @@ class LocalModelStorage(ModelStorage):
                     assert any(f.name == "config.pbtxt" for f in filenames), "Config file not found"
                     assert any(f.name.endswith(".onnx") for f in filenames), "ONNX file not found"
                     assert len(filenames) == 2, "Too many files in the archive"
+                    # extract the config file
+                    archive.extract("config.pbtxt", path=self.base_path / model.name)
                 else:
                     # check that the file is called model.onnx
-                    assert filenames[0].name == "model.onnx", (
-                        "Missing 'model.onnx' file: either rename it "
-                        "or set the 'default_model_filename' configuration parameter."
-                    )
-                # extract the files
-                archive.extractall(model_path)
+                    assert filenames[0].name == "model.onnx", "Missing 'model.onnx' file: either rename it "
+                # extract the model
+                archive.extract("model.onnx", model_path)
 
         return model_path
 
