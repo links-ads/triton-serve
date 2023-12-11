@@ -38,3 +38,10 @@ class AppSettings(BaseSettings):
 
     # security
     app_secret: str = Field(...)
+
+    # database
+    db_user: str = Field(...)
+    db_password: str = Field(...)
+    db_host: str = "serve-database"
+    db_port: int = 5432
+    db_name: str = "devices_db"

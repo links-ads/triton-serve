@@ -1,10 +1,23 @@
 from fastapi import FastAPI, Security
 from starlette.middleware.cors import CORSMiddleware
-
+from contextlib import asynccontextmanager
+import logging
+import uvicorn
 from triton_serve import __version__
 from triton_serve.api import models, services
 from triton_serve.config import AppSettings
 from triton_serve.security import api_key_auth
+from triton_serve.database.checks import check_resources
+
+log = logging.getLogger(uvicorn.__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    assert (
+        check_resources()
+    ), "Saved resources in DB do not match current resources, are you using a different machine?"
+    yield
 
 
 def create_app(settings: AppSettings) -> FastAPI:
@@ -13,7 +26,11 @@ def create_app(settings: AppSettings) -> FastAPI:
     :return: configured FastAPI instance
     :rtype: FastAPI
     """
-    app = FastAPI(title=settings.api_title, version=__version__, description=settings.api_description)
+
+    app = FastAPI(
+        title=settings.api_title, version=__version__, description=settings.api_description, lifespan=lifespan
+    )
+
     register_middlewares(app)
     register_routers(app)
     return app
