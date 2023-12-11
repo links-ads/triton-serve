@@ -11,7 +11,7 @@ services:
         - ./data/models:/var/serve/models
       ports:
         - 7510:5000
-      command: uvicorn triton_serve.wsgi:app --root-path ${API_ROOT_PATH:-/} --host 0.0.0.0 --port 5000
+      command: uvicorn triton_serve.wsgi:app --root-path ${API_ROOT_PATH:-/} --host 0.0.0.0 --port 5000 --use-colors
 
   traefik:
     ports:
@@ -28,13 +28,3 @@ services:
         - psgdata:/var/lib/postgresql/data
     ports:
       - 5432:5432
-
-  pgadmin:
-    container_name: pgadmin4_container
-    image: dpage/pgadmin4:8.0
-    env_file:
-        - .env
-    volumes:
-        - pgAdmin4data:/var/lib/pgadmin
-    ports:
-      - "5050:80"

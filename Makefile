@@ -101,7 +101,7 @@ build:	check-target		## Build the compose project.
 .PHONY: up
 up: check-target			## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) up -d $${ARGS}
+	@$(DOCKER_COMPOSE) up --build -d $${ARGS}
 
 stop: check-target			## Stop the project.
 	@echo "Stopping containers with target: $${TARGET}"

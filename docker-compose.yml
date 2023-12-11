@@ -2,6 +2,7 @@ version: '3'
 
 services:
   backend:
+      runtime: nvidia
       build:
         context: .
         dockerfile: containers/backend/Dockerfile
@@ -16,6 +17,7 @@ services:
       depends_on:
         - traefik
         - sablier
+        - database
       labels:
         - traefik.enable=true
         - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
@@ -47,6 +49,7 @@ services:
       - traefik.enable=true
 
   database:
+    container_name: serve-database
     image: postgres:16.1-alpine3.18
     env_file:
       - .env
