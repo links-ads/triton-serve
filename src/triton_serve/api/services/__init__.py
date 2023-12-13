@@ -41,6 +41,7 @@ async def post_service(
         service_models_volume=settings.service_volume,
         models=service.models,
         repository_path=settings.repository_path,
+        gpu_requested=service.gpu,
     )
 
 

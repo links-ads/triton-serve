@@ -6,6 +6,7 @@ import psutil
 from triton_serve.database.dto import GPU, Machine
 from triton_serve.database.queries.machines import get_machine_resources
 from triton_serve.database.queries.devices import get_devices
+from triton_serve.database.connection import get_connection
 
 
 def get_gpu_info(executable: str, fields: List[str], field_format: str):
@@ -21,10 +22,7 @@ def get_gpu_info(executable: str, fields: List[str], field_format: str):
             gpu = GPU(line["uuid"], line["name"], int(line["memory.total"]), int(line["index"]))
             gpus.append(gpu)
         return gpus
-        # data = {"gpu_data": [g.dict() for g in gpus]}
-        # print(data)
     except Exception as e:
-        print(e)
         return output
 
 
@@ -38,6 +36,7 @@ def get_machine_info():
 
 
 def check_resources():
+    connection = get_connection()
     gpu_executable: str = "nvidia-smi"
     gpu_format: str = "csv,noheader,nounits"
     gpu_fields: List[str] = ["index", "uuid", "memory.total", "name"]
@@ -56,5 +55,7 @@ def check_resources():
 
     saved_gpus = get_devices(host_id)
     saved_resources = Machine(num_cpus, total_mem, saved_gpus)
+
+    connection.close()
 
     return current_resources == saved_resources
