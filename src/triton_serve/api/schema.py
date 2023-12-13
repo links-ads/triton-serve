@@ -1,5 +1,5 @@
 from fastapi import Form
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class ModelSchema(BaseModel):
@@ -29,6 +29,7 @@ class ModelCreateSchema(ModelSchema):
 class ServiceCreateSchema(BaseModel):
     name: str
     models: list[str]
+    gpu: bool = Field(default=False)
 
     @field_validator("name")
     def validate_name(cls, v):
@@ -40,6 +41,12 @@ class ServiceCreateSchema(BaseModel):
     def validate_models(cls, v):
         if v is None:
             raise ValueError("Model cannot be empty")
+        return v
+
+    @field_validator("gpu")
+    def validate_gpu(cls, v):
+        if not isinstance(v, bool):
+            raise ValueError("GPU needs to be a boolean")
         return v
 
 

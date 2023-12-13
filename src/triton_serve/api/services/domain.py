@@ -6,6 +6,14 @@ from fastapi import HTTPException
 
 from triton_serve.config.traefik import TraefikConfigManager
 
+from triton_serve.database.queries.services import create_service as create_service_db
+
+from time import time
+
+import docker
+from psycopg2 import extras
+from triton_serve.database.connection import get_connection, rollback
+
 
 def spawn_worker_container(
     client: DockerClient,
@@ -15,6 +23,7 @@ def spawn_worker_container(
     worker_network: str,
     worker_volume: str,
     models: list[str],
+    gpu_index: int = None,
     environment: dict[str, str] = None,
 ):
     """Spawns a triton worker container.
@@ -44,6 +53,11 @@ def spawn_worker_container(
     labels = {"sablier.enable": "true", "sablier.group": "serve-workers"}
     volumes = {worker_volume: {"bind": "/models", "mode": "ro"}}
     environment = environment or {}
+    devices = (
+        [docker.types.DeviceRequest(device_ids=[str(gpu_index)], capabilities=[["gpu", "nvidia", "compute"]])]
+        if gpu_index is not None
+        else None
+    )
 
     try:
         container = client.containers.run(
@@ -56,8 +70,12 @@ def spawn_worker_container(
             environment=environment,
             labels=labels,
             restart_policy={"Name": "unless-stopped"},
+            runtime="nvidia" if gpu_index is not None else None,
+            device_requests=devices,
         )
         return container.id
+    except docker.errors.DockerException as e:
+        raise HTTPException(status_code=500, detail=f"Error creating container")
     except APIError as e:
         raise HTTPException(status_code=e.status_code, detail=f"Error creating container: {e}")
 
@@ -73,6 +91,7 @@ def create_service(
     service_models_volume: Path,
     models: list[str],
     repository_path: Path,
+    gpu_requested: bool,
 ):
     """Creates a triton docker container loading the models specified in the models list.
 
@@ -98,16 +117,42 @@ def create_service(
     for model in models:
         if not (repository_path / model).exists():
             raise HTTPException(status_code=409, detail=f"Model {model} does not exist")
-    spawn_worker_container(
-        client=client,
-        image_name=image_name,
-        worker_name=service_name,
-        worker_command=base_command,
-        worker_network=service_network,
-        models=models,
-        worker_volume=service_models_volume,
-    )
-    traefik.add(service_prefix=service_url_prefix, service_name=service_name)
+    # create service in database
+    try:
+        connection = get_connection()
+        cursor = connection.cursor(cursor_factory=extras.RealDictCursor)
+        gpu_index = create_service_db(
+            service_name=service_name,
+            models=models,
+            created_at=int(time()),
+            gpu_requested=gpu_requested,
+            cursor=cursor,
+        )
+
+        spawn_worker_container(
+            client=client,
+            image_name=image_name,
+            worker_name=service_name,
+            worker_command=base_command,
+            worker_network=service_network,
+            models=models,
+            worker_volume=service_models_volume,
+            gpu_index=gpu_index,
+        )
+        traefik.add(service_prefix=service_url_prefix, service_name=service_name)
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+    except ValueError as e:
+        rollback(connection, cursor)
+        raise HTTPException(status_code=409, detail=f"Error creating service: {e}")
+    except APIError as e:
+        rollback(connection, cursor)
+        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}")
+    except Exception as e:
+        rollback(connection, cursor)
+        raise HTTPException(status_code=500, detail=f"Error creating service")
 
 
 def delete_service(

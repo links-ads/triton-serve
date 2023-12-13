@@ -3,6 +3,7 @@ version: '3'
 volumes:
   configs:
   models:
+  test_psdata:
 
 services:
   backend:
