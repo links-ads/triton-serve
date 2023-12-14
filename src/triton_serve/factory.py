@@ -7,7 +7,7 @@ from triton_serve import __version__
 from triton_serve.api import models, services
 from triton_serve.config import AppSettings
 from triton_serve.security import api_key_auth
-from triton_serve.database.checks import check_resources
+from triton_serve.database.initialization.checks import check_resources
 
 log = logging.getLogger(uvicorn.__name__)
 

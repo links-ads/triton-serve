@@ -35,16 +35,20 @@ def get_machine_info():
     return (num_cpus, total_mem)
 
 
-def check_resources():
-    connection = get_connection()
+def list_gpus():
     gpu_executable: str = "nvidia-smi"
     gpu_format: str = "csv,noheader,nounits"
     gpu_fields: List[str] = ["index", "uuid", "memory.total", "name"]
+    return get_gpu_info(gpu_executable, gpu_fields, gpu_format)
+
+
+def check_resources():
+    connection = get_connection()
 
     # get the number of cpus and total memory
     num_cpus, total_mem = get_machine_info()
     # get the list of GPUs
-    gpus = get_gpu_info(gpu_executable, gpu_fields, gpu_format)
+    gpus = list_gpus()
     # create a Resources object
     current_resources = Machine(num_cpus, total_mem, gpus)
 

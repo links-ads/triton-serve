@@ -26,12 +26,9 @@ services:
 
 
   database:
-      container_name: serve-database
-      image: postgres:16.1-alpine3.18
       volumes:
         - psgdata:/var/lib/postgresql/data
       ports:
         - 5433:5432
-      env_file:
-        - .env
+
 

@@ -46,3 +46,9 @@ services:
       - 10000:10000
     labels:
       - traefik.enable=true
+  
+  database:
+      container_name: serve-database
+      image: postgres:16.1-alpine3.18
+      env_file:
+        - .env

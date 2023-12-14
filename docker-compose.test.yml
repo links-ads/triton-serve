@@ -3,7 +3,7 @@ version: '3'
 volumes:
   configs:
   models:
-  test_psdata:
+  test_psgdata:
 
 services:
   backend:
@@ -27,3 +27,10 @@ services:
 
   sablier:
     container_name: serve-sablier_test
+
+  database:
+      volumes:
+        - test_psgdata:/var/lib/postgresql/data
+      ports:
+        - 5433:5432
+  
