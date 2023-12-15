@@ -1,41 +1,41 @@
 import logging
 
-from triton_serve.database.models import Service
+from triton_serve.database.models import Device, Service
 
 import pytest
 import requests
+from time import sleep
 
 LOG = logging.getLogger(pytest.__name__)
 
 
 @pytest.mark.order(after="model_test.py::test_create_model_success")
 @pytest.mark.parametrize(
-    "name, models",
+    "name, models, gpu_requested",
     [
-        ("trt-srv_test_svc1", ["model_cfg"]),
-        ("trt-srv_test_svc2", ["model"]),
-        ("trt-srv_test_svc3", ["model_cfg", "model"]),
+        ("trt-srv_test_svc1", ["model_cfg"], True),
+        ("trt-srv_test_svc2", ["model"], False),
+        ("trt-srv_test_svc3", ["model_cfg", "model"], False),
     ],
 )
-def test_create_service(test_client, test_docker, name, models):
-    response = test_client.post("/services", json={"name": name, "models": models})
+def test_create_service(test_client, test_docker, test_db_connection, name, models, gpu_requested):
+    response = test_client.post("/services", json={"name": name, "models": models, "gpu": gpu_requested})
     assert response.status_code == 201, f"Cannot create service: {response.json()}"
     # check if container is running
     container = test_docker.containers.get(name)
     assert container.status == "running", f"Container {name} is not created"
 
-
-@pytest.mark.order(after="test_create_service")
-@pytest.mark.parametrize(
-    "name, device", [("trt-srv_test_svc1", None), ("trt-srv_test_svc2", None), ("trt-srv_test_svc3", None)]
-)
-def test_create_service_db(test_db_connection, name, device):
+    # check if service is in db
+    devices = test_db_connection.query(Device).all()
+    # get only the uuids
+    devices = [d.uuid for d in devices]
     service = test_db_connection.query(Service).filter(Service.service_name == name).first()
     assert service.service_name == name
-    assert service.assigned_device == device
+    LOG.debug(f"assigned device: {service.assigned_device}")
+    assert service.assigned_device in devices if gpu_requested else service.assigned_device is None
 
 
-@pytest.mark.order(after="test_create_service_db")
+@pytest.mark.order(after="test_create_service")
 @pytest.mark.parametrize(
     "name, models, expected_status_code",
     [
@@ -52,9 +52,13 @@ def test_create_service_wrong_inputs(test_client, name, models, expected_status_
 
 @pytest.mark.order(after="test_create_service_wrong_inputs")
 @pytest.mark.parametrize("name, expected_status_code", [("trt-srv_test_svc1", 204), ("not_existing_service", 404)])
-def test_delete_service(test_client, name, expected_status_code):
+def test_delete_service(test_client, test_db_connection, name, expected_status_code):
     response = test_client.delete(f"/services/{name}")
     assert response.status_code == expected_status_code
+
+    # check if service is not in DB anymore
+    service = test_db_connection.query(Service).filter(Service.service_name == name).first()
+    assert service is None
 
 
 # =================================
