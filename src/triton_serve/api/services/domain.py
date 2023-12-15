@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import List
 
 from docker import DockerClient
 from docker.errors import APIError
@@ -6,13 +7,14 @@ from fastapi import HTTPException
 
 from triton_serve.config.traefik import TraefikConfigManager
 
-from triton_serve.database.queries.services import create_service as create_service_db
-
 from time import time
 
 import docker
 from psycopg2 import extras
-from triton_serve.database.connection import get_connection, rollback
+from sqlalchemy.orm import Session
+from triton_serve.database.models import Device, Service
+
+from triton_serve.database.schemas import ServiceCreate
 
 
 def spawn_worker_container(
@@ -80,6 +82,39 @@ def spawn_worker_container(
         raise HTTPException(status_code=e.status_code, detail=f"Error creating container: {e}")
 
 
+def save_service_on_db(
+    service_name: str,
+    models: List[str],
+    created_at: str,
+    db: Session,
+    gpu_requested: bool = False,
+):
+    if gpu_requested:
+        # get the devices that are not assigned to any service
+        free_gpus = (
+            db.query(Device)
+            .filter(Device.uuid.not_in(db.query(Service.assigned_device).filter(Service.assigned_device.isnot(None))))
+            .all()
+        )
+        if len(free_gpus) == 0:
+            raise ValueError("No free GPUs available")
+        # take the first free gpu
+        gpu_id, gpu_index = free_gpus[0].uuid, free_gpus[0].index
+    else:
+        gpu_id = None
+        gpu_index = None
+    service = ServiceCreate(
+        service_name=service_name,
+        models=models,
+        created_at=created_at,
+        assigned_device=gpu_id,
+    )
+
+    db_service = Service(**service.model_dump())
+    db.add(db_service)
+    return gpu_index
+
+
 def create_service(
     client: DockerClient,
     traefik: TraefikConfigManager,
@@ -92,6 +127,7 @@ def create_service(
     models: list[str],
     repository_path: Path,
     gpu_requested: bool,
+    db: Session,
 ):
     """Creates a triton docker container loading the models specified in the models list.
 
@@ -119,16 +155,7 @@ def create_service(
             raise HTTPException(status_code=409, detail=f"Model {model} does not exist")
     # create service in database
     try:
-        connection = get_connection()
-        cursor = connection.cursor(cursor_factory=extras.RealDictCursor)
-        gpu_index = create_service_db(
-            service_name=service_name,
-            models=models,
-            created_at=int(time()),
-            gpu_requested=gpu_requested,
-            cursor=cursor,
-        )
-
+        gpu_index = save_service_on_db(service_name, models, int(time()), db, gpu_requested)
         spawn_worker_container(
             client=client,
             image_name=image_name,
@@ -141,17 +168,15 @@ def create_service(
         )
         traefik.add(service_prefix=service_url_prefix, service_name=service_name)
 
-        connection.commit()
-        cursor.close()
-        connection.close()
+        db.commit()
     except ValueError as e:
-        rollback(connection, cursor)
+        db.rollback()
         raise HTTPException(status_code=409, detail=f"Error creating service: {e}")
     except APIError as e:
-        rollback(connection, cursor)
+        db.rollback()
         raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}")
     except Exception as e:
-        rollback(connection, cursor)
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating service")
 
 

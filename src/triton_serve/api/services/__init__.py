@@ -9,7 +9,12 @@ from triton_serve.config import (
     get_settings,
     get_traefik,
 )
+from triton_serve.database.session import SessionLocal
 from triton_serve.extensions import docker_client
+
+from triton_serve.extensions import get_db
+from sqlalchemy.orm import Session
+
 
 router = APIRouter()
 
@@ -20,6 +25,7 @@ async def post_service(
     docker_client: DockerClient = Depends(docker_client),
     settings: AppSettings = Depends(get_settings),
     traefik: TraefikConfigManager = Depends(get_traefik),
+    db: Session = Depends(get_db),
 ):
     """
     Creates a new service with the specified models.
@@ -42,6 +48,7 @@ async def post_service(
         models=service.models,
         repository_path=settings.repository_path,
         gpu_requested=service.gpu,
+        db=db,
     )
 
 

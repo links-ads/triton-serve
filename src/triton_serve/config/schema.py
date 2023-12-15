@@ -40,8 +40,19 @@ class AppSettings(BaseSettings):
     app_secret: str = Field(...)
 
     # database
-    db_user: str = Field(...)
-    db_password: str = Field(...)
-    db_host: str = "serve-database"
-    db_port: int = 5432
-    db_name: str = "devices_db"
+    database_user: str = Field(...)
+    database_pass: str = Field(...)
+    database_host: str = "serve-database"
+    database_port: int = 5432
+    database_name: str = "triton_serve_db"
+
+    database_default: str = "postgres"
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
+
+    @property
+    def database_url(self):
+        return (
+            f"postgresql://{self.database_user}:{self.database_pass}@"
+            f"{self.database_host}:{self.database_port}/{self.database_name}"
+        )

@@ -7,17 +7,9 @@ from triton_serve import __version__
 from triton_serve.api import models, services
 from triton_serve.config import AppSettings
 from triton_serve.security import api_key_auth
-from triton_serve.database.initialization.checks import check_resources
+from triton_serve.extensions import lifespan
 
 log = logging.getLogger(uvicorn.__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    assert (
-        check_resources()
-    ), "Saved resources in DB do not match current resources, are you using a different machine?"
-    yield
 
 
 def create_app(settings: AppSettings) -> FastAPI:
