@@ -42,11 +42,10 @@ class AppSettings(BaseSettings):
     # database
     database_user: str = Field(...)
     database_pass: str = Field(...)
-    database_host: str = "serve-database"
+    database_host: str
     database_port: int = 5432
-    database_name: str = "triton_serve_db"
+    database_name: str
 
-    database_default: str = "postgres"
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
 

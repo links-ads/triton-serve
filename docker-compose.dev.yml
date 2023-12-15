@@ -11,8 +11,7 @@ services:
       ports:
         - 7510:5000
       command: uvicorn triton_serve.wsgi:app --root-path ${API_ROOT_PATH:-/} --host 0.0.0.0 --port 5000 --use-colors
-      depends_on:
-        - database
+
 
   traefik:
     ports:

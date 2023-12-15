@@ -1,5 +1,7 @@
 import logging
 
+from triton_serve.database.models import Service
+
 import pytest
 import requests
 
@@ -24,6 +26,16 @@ def test_create_service(test_client, test_docker, name, models):
 
 
 @pytest.mark.order(after="test_create_service")
+@pytest.mark.parametrize(
+    "name, device", [("trt-srv_test_svc1", None), ("trt-srv_test_svc2", None), ("trt-srv_test_svc3", None)]
+)
+def test_create_service_db(test_db_connection, name, device):
+    service = test_db_connection.query(Service).filter(Service.service_name == name).first()
+    assert service.service_name == name
+    assert service.assigned_device == device
+
+
+@pytest.mark.order(after="test_create_service_db")
 @pytest.mark.parametrize(
     "name, models, expected_status_code",
     [
