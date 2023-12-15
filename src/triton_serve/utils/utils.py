@@ -1,12 +1,9 @@
-from typing import List
 import subprocess
 import csv
 import io
 import psutil
-from triton_serve.database.dto import GPU, Machine
-from triton_serve.database.queries.machines import get_machine_resources
-from triton_serve.database.queries.devices import get_devices
-from triton_serve.database.connection import get_connection
+from typing import List
+from triton_serve.database.models import Device, Machine
 
 
 def get_gpu_info(executable: str, fields: List[str], field_format: str):
@@ -19,7 +16,12 @@ def get_gpu_info(executable: str, fields: List[str], field_format: str):
         reader = csv.DictReader(io.StringIO(gpus_info), fieldnames=fields, skipinitialspace=True)
         gpus = []
         for line in reader:
-            gpu = GPU(line["uuid"], line["name"], int(line["memory.total"]), int(line["index"]))
+            gpu = {
+                "uuid": line["uuid"],
+                "name": line["name"],
+                "memory": int(line["memory.total"]),
+                "index": int(line["index"]),
+            }
             gpus.append(gpu)
         return gpus
     except Exception as e:
@@ -40,26 +42,3 @@ def list_gpus():
     gpu_format: str = "csv,noheader,nounits"
     gpu_fields: List[str] = ["index", "uuid", "memory.total", "name"]
     return get_gpu_info(gpu_executable, gpu_fields, gpu_format)
-
-
-def check_resources():
-    connection = get_connection()
-
-    # get the number of cpus and total memory
-    num_cpus, total_mem = get_machine_info()
-    # get the list of GPUs
-    gpus = list_gpus()
-    # create a Resources object
-    current_resources = Machine(num_cpus, total_mem, gpus)
-
-    saved_machine = get_machine_resources()
-    host_id = saved_machine["host_id"]
-    num_cpus = saved_machine["num_cpus"]
-    total_mem = saved_machine["total_memory"]
-
-    saved_gpus = get_devices(host_id)
-    saved_resources = Machine(num_cpus, total_mem, saved_gpus)
-
-    connection.close()
-
-    return current_resources == saved_resources
