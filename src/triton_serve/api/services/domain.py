@@ -180,11 +180,7 @@ def create_service(
         raise HTTPException(status_code=500, detail=f"Error creating service")
 
 
-def delete_service(
-    client: DockerClient,
-    traefik: TraefikConfigManager,
-    service_name: str,
-):
+def delete_service(client: DockerClient, traefik: TraefikConfigManager, service_name: str, db: Session):
     """Deletes a triton docker container and the traefik config for the service.
 
     Args:
@@ -207,6 +203,17 @@ def delete_service(
         container = client.containers.get(service_name)
         container.stop()
         container.remove()
+
+        # delete the service from the database
+        service = db.query(Service).filter(Service.service_name == service_name).first()
+        db.delete(service)
+        db.commit()
+
+        traefik.delete(service_name=service_name)
+
     except APIError as e:
+        db.rollback()
         raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}")
-    traefik.delete(service_name=service_name)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}")

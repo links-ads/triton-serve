@@ -58,6 +58,7 @@ async def delete_service(
     docker_client: DockerClient = Depends(docker_client),
     settings: AppSettings = Depends(get_settings),
     traefik: TraefikConfigManager = Depends(get_traefik),
+    db: Session = Depends(get_db),
 ):
     """
     Deletes a service with the specified name.
@@ -72,4 +73,5 @@ async def delete_service(
         client=docker_client,
         traefik=traefik,
         service_name=name,
+        db=db,
     )
