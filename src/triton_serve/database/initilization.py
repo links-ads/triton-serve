@@ -4,11 +4,16 @@ from triton_serve.database.schemas import DeviceCreate, MachineCreate
 from triton_serve.database.models import Device, Machine
 from triton_serve.utils.utils import get_machine_info, list_gpus
 
+from triton_serve.database import models
+from triton_serve.database.session import SessionLocal, engine
+
+from triton_serve.config import get_settings
+from triton_serve.extensions import get_db
+
 
 def create_db(config, drop_db=False):
     # establishing the connection
     conn = psycopg2.connect(
-        database="postgres",
         user=config.POSTGRES_USER,
         password=config.POSTGRES_PASSWORD,
         host=config.database_host,
@@ -33,6 +38,8 @@ def create_db(config, drop_db=False):
     else:
         print(f"Database {config.database_name} already exists, skipping creation")
 
+    # create the tables
+    models.Base.metadata.create_all(bind=engine)
     # Closing the connection
     conn.commit()
     cursor.close()
@@ -66,6 +73,11 @@ def populate_db(db):
 
 
 def initialize_db(config, db):
-    # TODO resolve problem for which it doesn't see the DB after creation
-    create_db(config, drop_db=True)
+    create_db(config, drop_db=False)
     populate_db(db)
+
+
+if __name__ == "__main__":
+    config = get_settings()
+    db = next(get_db())
+    initialize_db(config, get_db())

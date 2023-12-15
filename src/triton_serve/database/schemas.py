@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # MACHINES
@@ -13,10 +13,8 @@ class MachineCreate(MachineBase):
 
 
 class Machine(MachineBase):
+    model_config = ConfigDict(from_attributes=True)
     host_id: int
-
-    class Config:
-        orm_mode = True
 
 
 # DEVICES
@@ -32,10 +30,8 @@ class DeviceCreate(DeviceBase):
 
 
 class Device(DeviceBase):
+    model_config = ConfigDict(from_attributes=True)
     host_id: int
-
-    class Config:
-        orm_mode = True
 
 
 # SERVICES
@@ -51,7 +47,5 @@ class ServiceCreate(ServiceBase):
 
 
 class Service(ServiceBase):
+    model_config = ConfigDict(from_attributes=True)
     service_id: str
-
-    class Config:
-        orm_mode = True

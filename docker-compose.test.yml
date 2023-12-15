@@ -29,6 +29,7 @@ services:
     container_name: serve-sablier_test
 
   database:
+      container_name: serve-database_test
       volumes:
         - test_psgdata:/var/lib/postgresql/data
       ports:

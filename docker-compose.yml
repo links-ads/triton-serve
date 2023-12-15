@@ -17,6 +17,7 @@ services:
       depends_on:
         - traefik
         - sablier
+        - database
       labels:
         - traefik.enable=true
         - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
