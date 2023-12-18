@@ -1,4 +1,5 @@
 import psycopg2
+from triton_serve.config.schema import AppSettings
 
 from triton_serve.database.schemas import DeviceCreate, MachineCreate
 from triton_serve.database.models import Device, Machine
@@ -11,7 +12,15 @@ from triton_serve.config import get_settings
 from triton_serve.extensions import get_db
 
 
-def create_db(config, drop_db=False):
+def create_db(config: AppSettings, drop_db=False):
+    """
+    Create the database and tables
+
+    :param config: the config object
+    :param drop_db: whether to drop the database before creating it
+
+    :return: None
+    """
     # establishing the connection
     conn = psycopg2.connect(
         user=config.POSTGRES_USER,
@@ -46,7 +55,13 @@ def create_db(config, drop_db=False):
     conn.close()
 
 
-def populate_db(db):
+def populate_db(db: SessionLocal):
+    """
+    Populate the database with the machine and gpu devices information
+
+    :param db: the database session
+    :return: None
+    """
     num_cpus, total_mem = get_machine_info()
     machine = MachineCreate(host_name="loki", num_cpus=num_cpus, total_memory=total_mem)
     machine_db = Machine(**machine.model_dump())
@@ -72,7 +87,14 @@ def populate_db(db):
         db.refresh(gpu_db)
 
 
-def initialize_db(config, db):
+def initialize_db(config: AppSettings, db: SessionLocal):
+    """
+    Initialize the database
+
+    :param config: the config object
+    :param db: the database session
+    :return: None
+    """
     create_db(config, drop_db=False)
     populate_db(db)
 

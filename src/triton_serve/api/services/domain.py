@@ -61,25 +61,20 @@ def spawn_worker_container(
         else None
     )
 
-    try:
-        container = client.containers.run(
-            detach=True,
-            image=image_name,
-            name=worker_name,
-            command=command,
-            network=worker_network,
-            volumes=volumes,
-            environment=environment,
-            labels=labels,
-            restart_policy={"Name": "unless-stopped"},
-            runtime="nvidia" if gpu_index is not None else None,
-            device_requests=devices,
-        )
-        return container.id
-    except docker.errors.DockerException as e:
-        raise HTTPException(status_code=500, detail=f"Error creating container")
-    except APIError as e:
-        raise HTTPException(status_code=e.status_code, detail=f"Error creating container: {e}")
+    container = client.containers.run(
+        detach=True,
+        image=image_name,
+        name=worker_name,
+        command=command,
+        network=worker_network,
+        volumes=volumes,
+        environment=environment,
+        labels=labels,
+        restart_policy={"Name": "unless-stopped"},
+        runtime="nvidia" if gpu_index is not None else None,
+        device_requests=devices,
+    )
+    return container.id
 
 
 def save_service_on_db(
@@ -89,6 +84,23 @@ def save_service_on_db(
     db: Session,
     gpu_requested: bool = False,
 ):
+    """
+    Save the service on the database
+
+    Args:
+        service_name (str): the name of the service to save
+        models list(str): the list of models to load in the service
+        created_at (int): the timestamp of the creation of the service
+        db (Session): the database session object
+        gpu_requested (bool): if the service requires a gpu or not. If not, the service will use the cpu and the gpu index will be None in the db
+
+    Returns:
+        int: the index of the gpu assigned to the service
+
+    Raises:
+        ValueError: if no gpu is available
+
+    """
     if gpu_requested:
         # get the devices that are not assigned to any service
         free_gpus = (
@@ -101,6 +113,7 @@ def save_service_on_db(
         # take the first free gpu
         gpu_id, gpu_index = free_gpus[0].uuid, free_gpus[0].index
     else:
+        # if no gpu is requested, the service will use the cpu
         gpu_id = None
         gpu_index = None
     service = ServiceCreate(
@@ -142,6 +155,8 @@ def create_service(
         service_models_volume (Path): The path to the model repository, or a volume name.
         models (list[str]): The list of models to load.
         configs_path (Path): The path to the traefik configs.
+        gpu_requested (bool): If the service requires a gpu or not.
+        db (Session): The database session.
 
     Returns:
         `service` (`ServiceCreateSchema`): The created service.
@@ -175,6 +190,9 @@ def create_service(
     except APIError as e:
         db.rollback()
         raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}")
+    except docker.errors.DockerException as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating container")
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating service")
@@ -189,6 +207,7 @@ def delete_service(client: DockerClient, traefik: TraefikConfigManager, service_
         traefik (TraefikConfigManager): The traefik config manager.
         service_name (str): The name of the service.
         configs_path (Path): The path to the traefik configs.
+        db (Session): The database session.
 
     Returns:
         `None`

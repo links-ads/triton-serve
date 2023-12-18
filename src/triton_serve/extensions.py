@@ -57,8 +57,14 @@ def check_resources():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # create db tables if they do not exist
-    models.Base.metadata.create_all(bind=engine)
+    """
+    Context manager that handles the app lifespan events.
+    Used to check if the resources saved in the database match the current resources.
+
+    :param app: the app
+    :return: None
+
+    """
     # assert that the resources saved in the db match the current resources, if not, crash
     assert check_resources(), "The resources saved in the database do not match the current resources"
     yield
