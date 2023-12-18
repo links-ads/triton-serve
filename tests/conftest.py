@@ -30,12 +30,24 @@ TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
 
 @pytest.fixture(scope="function")
 def test_db_connection():
+    """
+    Get the database connection
+
+    :return: the database connection
+
+    """
     db = next(get_db())
     yield db
 
 
 @pytest.fixture(autouse=True, scope="session")
 def test_create_db():
+    """
+    Create the database and populate it with the machine and gpu devices information
+
+    :return: None
+
+    """
     LOG.debug("Initializing database...")
     # here I don't use the get_db() function because I need to create the database and it can go in conflict
     db = SessionLocal()
@@ -47,17 +59,31 @@ def test_create_db():
 
 @pytest.fixture(scope="session")
 def test_settings():
+    """
+    Get the settings
+    """
     settings = get_settings()
     yield settings
 
 
 @pytest.fixture(scope="session")
 def test_dir():
+    """
+    Get the test directory
+
+    :return: the test directory
+    """
+
     return TEST_DIR
 
 
 @pytest.fixture(scope="session")
 def test_app():
+    """
+    Get the uvicorn test app
+
+    :return: the test app
+    """
     LOG.info("Initializing webserver...")
     app = create_app(settings=get_settings())
     yield app
@@ -65,6 +91,9 @@ def test_app():
 
 @pytest.fixture(scope="session")
 def test_client(test_app, test_settings):
+    """
+    Get the test client to call the endpoints of the webserver
+    """
     LOG.debug("Initializing test client...")
     client = TestClient(app=test_app)
     client.headers.update({"X-API-Key": test_settings.app_secret})
@@ -73,6 +102,9 @@ def test_client(test_app, test_settings):
 
 @pytest.fixture(scope="session")
 def test_docker():
+    """
+    Get the docker client to create and delete containers
+    """
     client = docker.from_env()
     try:
         yield client
