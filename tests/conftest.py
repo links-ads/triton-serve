@@ -13,12 +13,7 @@ from fastapi.testclient import TestClient
 
 from src.triton_serve.config import get_settings
 from src.triton_serve.factory import create_app
-
-from src.triton_serve.database.initilization import initialize_db
-
 from triton_serve.extensions import get_db
-from triton_serve.database.session import SessionLocal
-
 
 logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -29,7 +24,7 @@ TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
 
 
 @pytest.fixture(scope="function")
-def test_db_connection():
+def test_db():
     """
     Get the database connection
 
@@ -40,23 +35,6 @@ def test_db_connection():
     yield db
 
 
-@pytest.fixture(autouse=True, scope="session")
-def test_create_db():
-    """
-    Create the database and populate it with the machine and gpu devices information
-
-    :return: None
-
-    """
-    LOG.debug("Initializing database...")
-    # here I don't use the get_db() function because I need to create the database and it can go in conflict
-    db = SessionLocal()
-    # need to create the database and populate the tables
-    initialize_db(config=get_settings(), db=db)
-    db.close()
-    yield
-
-
 @pytest.fixture(scope="session")
 def test_settings():
     """
@@ -64,17 +42,6 @@ def test_settings():
     """
     settings = get_settings()
     yield settings
-
-
-@pytest.fixture(scope="session")
-def test_dir():
-    """
-    Get the test directory
-
-    :return: the test directory
-    """
-
-    return TEST_DIR
 
 
 @pytest.fixture(scope="session")

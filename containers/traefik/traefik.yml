@@ -9,6 +9,7 @@ log:
   level: ERROR
   format: common
 accessLog: {}
+ping: {}
 
 # -- (Optional) Enable API and Dashboard here, don't do in production
 api:

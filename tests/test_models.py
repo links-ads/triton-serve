@@ -5,6 +5,16 @@ import pytest
 LOG = logging.getLogger(pytest.__name__)
 
 
+def test_get_models_empty(test_client):
+    """
+    Test with empty models repository.
+    """
+    response = test_client.get("/models")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.order(after="test_get_models_empty")
 @pytest.mark.parametrize("name, version", [("model_cfg", 1), ("model", 1), ("model_cfg", 2)])
 def test_create_model(test_client, test_settings, make_zip, name, version):
     """
@@ -77,24 +87,54 @@ def test_create_model_already_existing(test_client, make_zip, name, version):
             "model_cfg",
             None,
             [
-                {"name": "model_cfg", "version": 1},
-                {"name": "model_cfg", "version": 2},
+                {
+                    "model_name": "model_cfg",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model_cfg/1",
+                    "description": None,
+                },
+                {
+                    "model_name": "model_cfg",
+                    "model_version": 2,
+                    "model_uri": "/var/serve/models/model_cfg/2",
+                    "description": None,
+                },
             ],
         ),
         (
             "model",
             1,
             [
-                {"name": "model", "version": 1},
+                {
+                    "model_name": "model",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model/1",
+                    "description": None,
+                }
             ],
         ),
         (
             None,
             None,
             [
-                {"name": "model_cfg", "version": 1},
-                {"name": "model", "version": 1},
-                {"name": "model_cfg", "version": 2},
+                {
+                    "model_name": "model_cfg",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model_cfg/1",
+                    "description": None,
+                },
+                {
+                    "model_name": "model",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model/1",
+                    "description": None,
+                },
+                {
+                    "model_name": "model_cfg",
+                    "model_version": 2,
+                    "model_uri": "/var/serve/models/model_cfg/2",
+                    "description": None,
+                },
             ],
         ),
         ("not_existent", None, []),
@@ -102,8 +142,18 @@ def test_create_model_already_existing(test_client, make_zip, name, version):
             None,
             1,
             [
-                {"name": "model_cfg", "version": 1},
-                {"name": "model", "version": 1},
+                {
+                    "model_name": "model_cfg",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model_cfg/1",
+                    "description": None,
+                },
+                {
+                    "model_name": "model",
+                    "model_version": 1,
+                    "model_uri": "/var/serve/models/model/1",
+                    "description": None,
+                },
             ],
         ),
     ],
@@ -122,7 +172,9 @@ def test_get_models(test_client, name, version, expected_json):
     LOG.debug(f"Params: {query_params}")
     LOG.debug(f"Response: {data}")
     assert len(data) == len(expected_json)
-    assert all(model in expected_json for model in data)
+    for expected, actual in zip(expected_json, data):
+        for key, value in expected.items():
+            assert actual[key] == value
 
 
 @pytest.mark.order(after="test_create_model_already_existing")
@@ -139,11 +191,13 @@ def test_get_models_wrong_params(test_client, name, version):
 
 
 @pytest.mark.order(after="test_create_model_already_existing")
-@pytest.mark.parametrize("name, version", [("model_cfg", 1)])
+@pytest.mark.parametrize("name, version", [("model_cfg", 1), ("model", 1)])
 def test_get_model(test_client, name, version):
     response = test_client.get(f"/models/{name}/{version}")
-    assert response.status_code == 200, f"Cannot get model: {response.json()}"
-    assert response.json() == {"name": name, "version": version}
+    assert response.status_code == 200
+    data = response.json()
+    assert data["model_name"] == name
+    assert data["model_version"] == version
 
 
 @pytest.mark.order(after="test_get_model")
@@ -159,7 +213,7 @@ def test_get_model(test_client, name, version):
 )
 def test_get_model_wrong_params(test_client, name, expected_code, version):
     response = test_client.get(f"/models/{name}/{version}")
-    assert response.status_code == expected_code, f"This modelo should not exist: {response.json()}"
+    assert response.status_code == expected_code
 
 
 @pytest.mark.order(after="test_get_model_wrong_params")

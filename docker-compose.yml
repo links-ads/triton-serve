@@ -1,8 +1,57 @@
 version: '3'
 
+
+volumes:
+  psgdata:
+    driver: local
+
 services:
+  database:
+      container_name: serve-database
+      image: postgres:16.1-alpine3.18
+      environment:
+        POSTGRES_USER: ${DATABASE_USER:-postgres}
+        POSTGRES_PASSWORD: ${DATABASE_PASS:-postgres}
+        POSTGRES_DB: ${POSTGRES_DB:-serve_db}
+      env_file:
+        - .env
+      volumes:
+        - psgdata:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U $${DATABASE_USER:-postgres} -d $${POSTGRES_DB:-serve_db}"]
+        interval: 10s
+        timeout: 10s
+        retries: 5
+
+  traefik:
+    build:
+      context: containers/traefik
+      dockerfile: Dockerfile
+      args:
+        - TARGET=${TARGET:-dev}
+    image: links/serve-traefik:${VERSION:-latest}
+    command: --api.insecure=true --providers.docker
+    container_name: serve-traefik
+    volumes:
+    # dynamic configuration
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: wget --no-check-certificate --spider localhost:8080/ping || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+  
+  sablier:
+    image: acouvreur/sablier:1.4.0
+    container_name: serve-sablier
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "10000"
+    labels:
+      - traefik.enable=true
+
   backend:
-      runtime: nvidia
       build:
         context: .
         dockerfile: containers/backend/Dockerfile
@@ -14,42 +63,16 @@ services:
         - /var/run/docker.sock:/var/run/docker.sock
       env_file:
         - .env
-      depends_on:
-        - traefik
-        - sablier
-        - database
       labels:
         - traefik.enable=true
         - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
         - traefik.http.routers.serve-backend.entrypoints=http
         - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
         - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/serve
-
-  traefik:
-    build: 
-      context: containers/traefik
-      dockerfile: Dockerfile
-      args:
-        - TARGET=${TARGET:-dev}
-    image: links/serve-traefik:${VERSION:-latest}
-    command: --api.insecure=true --providers.docker
-    container_name: serve-traefik
-    volumes:
-    # dynamic configuration
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-  
-  sablier:
-    image: acouvreur/sablier:1.4.0
-    container_name: serve-sablier
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    ports:
-      - 10000:10000
-    labels:
-      - traefik.enable=true
-  
-  database:
-      container_name: serve-database
-      image: postgres:16.1-alpine3.18
-      env_file:
-        - .env
+      depends_on:
+        database:
+          condition: service_healthy
+        traefik:
+          condition: service_healthy
+        sablier:
+          condition: service_started

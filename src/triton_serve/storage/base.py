@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from triton_serve.api.schema import ModelSchema
+from triton_serve.database.schema import ModelSchema
 
 
 class ModelStorage(ABC):
@@ -21,7 +21,7 @@ class ModelStorage(ABC):
         :return: path to the artifact files
         :rtype: str
         """
-        return self.base_path / model.name / str(model.version)
+        return self.base_path / model.model_name / str(model.model_version)
 
     @abstractmethod
     def check_format(self, filename: str) -> None:
@@ -42,6 +42,18 @@ class ModelStorage(ABC):
 
         Returns:
             Path: local path to a model.
+        """
+        ...
+
+    @abstractmethod
+    def exists(self, model: ModelSchema) -> bool:
+        """Checks whether the given model exists.
+
+        Args:
+            model (ModelSchema): model name and version
+
+        Returns:
+            bool: True if the model exists, False otherwise.
         """
         ...
 
