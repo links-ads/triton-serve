@@ -22,7 +22,7 @@ The backend represents the main entry point of the tool. This service provides s
 - CRUD endpoints to manage services (create, update, delete Triton services)
 
 This service aims to simplify the model deployment phase for every user, even without prior knowledge about Docker or best practices for model deployment in general.
-In fact, the backend internally handles that part by taking the list of models to deploy, and by doing the necessary actions to make them available through an NVIDIA Triton Inference Server instance.
+The backend internally handles that part by taking the list of models to deploy, and by doing the necessary actions to make them available through an NVIDIA Triton Inference Server instance.
 
 ### Proxy
 

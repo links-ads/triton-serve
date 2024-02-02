@@ -1,0 +1,28 @@
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+.venv/
+
+# Ignore Git related files
+.gitignore
+.github/
+
+# Ignore project directories
+data/
+docker/
+envs/
+.env
+
+# Ignore build artifacts and caches
+dist/
+build/
+out/
+__pycache__/
+*.egg-info/
+
+# Ignore log files
+*.log
+*.tmp
+*.temp

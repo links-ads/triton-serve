@@ -1,7 +1,6 @@
 from enum import Enum
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,22 +31,19 @@ class AppSettings(BaseSettings):
 
     service_image: str = "nvcr.io/nvidia/tritonserver:23.07-py3"
     service_command: str = "tritonserver --model-repository=/models --model-control-mode=explicit"
-    service_network: str | None = None
+    service_network: str = "triton-serve_default"
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
 
     # security
-    app_secret: str = Field(...)
+    app_secret: str
 
     # database
-    database_user: str = Field(...)
-    database_pass: str = Field(...)
+    database_user: str
+    database_pass: str
     database_host: str
     database_port: int = 5432
-    database_name: str
-
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
+    database_name: str = "serve_db"
 
     @property
     def database_url(self):

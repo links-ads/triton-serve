@@ -97,12 +97,12 @@ build:	check-target		## Build the compose project.
 	@echo "Building images with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) build $${ARGS}
 
-
 .PHONY: up
 up: check-target			## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
-	@$(DOCKER_COMPOSE) up --build -d $${ARGS}
+	@$(DOCKER_COMPOSE) up $${ARGS}
 
+.PHONY: stop
 stop: check-target			## Stop the project.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stop $${ARGS}
@@ -112,22 +112,17 @@ down: check-target			## Stop the project eliminating containers, use ARGS="-v" t
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
 
-.PHONY: restart
-restart: check-target		## Restart the project.
-	@echo "Restarting containers with target: $${TARGET}"
-	stop up
-
 .PHONY: test
 test:				## Run tests.
 	@echo "Setting up test environment..."
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
 	@export TARGET=test
-	@docker compose -p triton-serve \
+	@docker compose -p serve-test \
         -f docker-compose.yml \
-        -f docker-compose.test.yml up \
-        --build --abort-on-container-exit --exit-code-from backend
+        -f docker-compose.test.yml up --build \
+        --abort-on-container-exit --exit-code-from backend
 	@echo "Tearing everything down..."
-	@docker compose -p triton-serve \
+	@docker compose -p serve-test \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v

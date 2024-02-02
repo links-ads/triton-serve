@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 from fastapi import UploadFile
 
-from triton_serve.api.schema import ModelSchema
+from triton_serve.database.schema import ModelSchema
 from triton_serve.storage import ModelStorage
 
 
@@ -79,6 +79,9 @@ class LocalModelStorage(ModelStorage):
     def load(self, model: ModelSchema) -> str:
         return self.location(model)
 
+    def exists(self, model: ModelSchema) -> bool:
+        return Path(self.location(model)).exists()
+
     def save(self, model: ModelSchema, package: UploadFile) -> str:
         self.check_format(filename=package.filename)
         model_path = self.location(model)
@@ -101,7 +104,7 @@ class LocalModelStorage(ModelStorage):
                     assert any(f.name.endswith(".onnx") for f in filenames), "ONNX file not found"
                     assert len(filenames) == 2, "Too many files in the archive"
                     # extract the config file
-                    archive.extract("config.pbtxt", path=self.base_path / model.name)
+                    archive.extract("config.pbtxt", path=self.base_path / model.model_name)
                 else:
                     # check that the file is called model.onnx
                     assert filenames[0].name == "model.onnx", "Missing 'model.onnx' file: either rename it "

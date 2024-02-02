@@ -1,10 +1,11 @@
 import logging
-
-from triton_serve.database.models import Device, Service
+import time
 
 import pytest
 import requests
-from time import sleep
+from docker.errors import NotFound
+
+from triton_serve.database.model import Device, Service
 
 LOG = logging.getLogger(pytest.__name__)
 
@@ -13,36 +14,74 @@ LOG = logging.getLogger(pytest.__name__)
 @pytest.mark.parametrize(
     "name, models, gpu_requested",
     [
-        ("trt-srv_test_svc1", ["model_cfg"], True),
-        ("trt-srv_test_svc2", ["model"], False),
-        ("trt-srv_test_svc3", ["model_cfg", "model"], False),
+        ("trt-srv_test_svc1", [{"name": "model_cfg", "version": 2}], True),
+        ("trt-srv_test_svc3", [{"name": "model_cfg", "version": 2}], False),
+        ("trt-srv_test_svc2", [{"name": "model", "version": 1}], False),
     ],
 )
-def test_create_service(test_client, test_docker, test_db_connection, name, models, gpu_requested):
-    response = test_client.post("/services", json={"name": name, "models": models, "gpu": gpu_requested})
-    assert response.status_code == 201, f"Cannot create service: {response.json()}"
-    # check if container is running
-    container = test_docker.containers.get(name)
-    assert container.status == "running", f"Container {name} is not created"
+def test_create_service(test_client, test_docker, test_db, name, models, gpu_requested):
+    # get the devices to also check creation when no GPU is available
+    devices = set(test_db.query(Device.uuid).all())
 
-    # check if service is in db
-    devices = test_db_connection.query(Device).all()
-    # get only the uuids
-    devices = [d.uuid for d in devices]
-    service = test_db_connection.query(Service).filter(Service.service_name == name).first()
-    assert service.service_name == name
-    LOG.debug(f"assigned device: {service.assigned_device}")
-    assert service.assigned_device in devices if gpu_requested else service.assigned_device is None
+    response = test_client.post("/services", json={"name": name, "models": models, "gpu": gpu_requested})
+    if gpu_requested and not devices:
+        assert response.status_code == 409
+    else:
+        assert response.status_code == 201
+        data = response.json()
+        assert data["service_name"] == name
+        assert data["created_at"] is not None
+        # check if container is running
+        container = test_docker.containers.get(name)
+        assert container.status == "running", f"Container {name} is not created"
+
+        # check if service is in db
+        service = test_db.get(Service, ident=data["service_id"])
+        assert service.service_name == name
+        LOG.debug(f"assigned device: {service.device_id}")
+        if gpu_requested:
+            assert service.device_id is not None
+            assert service.device_id in devices
+        else:
+            assert service.device_id is None
 
 
 @pytest.mark.order(after="test_create_service")
+@pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
+def test_triton_ping(name):
+    url = f"http://traefik/{name}/v2/health/ready"
+    # try three times to get a response, with a timeout of 60 seconds
+    for _ in range(3):
+        response = requests.get(url, timeout=60)
+        if response.status_code == 200:
+            break
+        else:
+            time.sleep(5)
+    assert response.status_code == 200
+
+
+@pytest.mark.order(after="test_triton_ping")
+@pytest.mark.parametrize("name, model", [("trt-srv_test_svc3", "model_cfg"), ("trt-srv_test_svc2", "model")])
+def test_triton_models_ready(name, model):
+    url = f"http://traefik/{name}/v2/models/{model}/ready"
+    # try three times to get a response, with a timeout of 60 seconds
+    for _ in range(3):
+        response = requests.get(url, timeout=60)
+        if response.status_code == 200:
+            break
+        else:
+            time.sleep(5)
+    assert response.status_code == 200
+
+
+@pytest.mark.order(after="test_triton_models_ready")
 @pytest.mark.parametrize(
     "name, models, expected_status_code",
     [
         ("", ["model_cfg"], 422),
-        ("trt-srv_test_svc3", ["nonexistent"], 409),
-        ("trt-srv_test_svc4", ["nonexistent"], 409),
-        ("trt-srv_test_svc5", ["model_cfg", "nonexistent"], 409),
+        ("trt-srv_test_svc3", [{"name": "nonexistent", "version": 1}], 409),
+        ("trt-srv_test_svc4", [{"name": "nonexistent", "version": 1}], 409),
+        ("trt-srv_test_svc5", [{"name": "nonexistent", "version": 1}], 409),
     ],
 )
 def test_create_service_wrong_inputs(test_client, name, models, expected_status_code):
@@ -51,33 +90,16 @@ def test_create_service_wrong_inputs(test_client, name, models, expected_status_
 
 
 @pytest.mark.order(after="test_create_service_wrong_inputs")
-@pytest.mark.parametrize("name, expected_status_code", [("trt-srv_test_svc1", 204), ("not_existing_service", 404)])
-def test_delete_service(test_client, test_db_connection, name, expected_status_code):
-    response = test_client.delete(f"/services/{name}")
-    assert response.status_code == expected_status_code
-
-    # check if service is not in DB anymore
-    service = test_db_connection.query(Service).filter(Service.service_name == name).first()
-    assert service is None
-
-
-# =================================
-# Test on triton service endpoints
-# =================================
-
-
-@pytest.mark.order(after="test_delete_service")
-@pytest.mark.parametrize("name", [("trt-srv_test_svc2")])
-def test_triton_ping(name):
-    url = f"http://serve-traefik_test/{name}/v2/health/ready"
-    response = requests.get(url)
-    assert response.status_code == 200
-
-
-@pytest.mark.order(after="test_triton_ping")
-@pytest.mark.parametrize("name, models", [("trt-srv_test_svc3", ["model_cfg", "model"])])
-def test_models_ready(name, models):
-    for model in models:
-        url = f"http://serve-traefik_test/{name}/v2/models/{model}/ready"
-        response = requests.get(url)
-        assert response.status_code == 200
+def test_delete_services(test_client, test_docker, test_db):
+    # get all services
+    services = test_db.query(Service).all()
+    for service in services:
+        query_params = {"delete_container": True}
+        response = test_client.delete(f"/services/{service.service_id}", params=query_params)
+        data = response.json()
+        assert response.status_code == 202
+        assert data["service_id"] == service.service_id
+        assert data["deleted_at"] is not None
+        # check if container has been deleted
+        with pytest.raises(NotFound):
+            test_docker.containers.get(service.container_id)

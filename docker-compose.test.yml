@@ -3,7 +3,6 @@ version: '3'
 volumes:
   configs:
   models:
-  test_psgdata:
 
 services:
   backend:
@@ -11,27 +10,19 @@ services:
     volumes:
       - configs:/var/serve/configs
       - models:/var/serve/models
-    ports:
-      - 7510:5000
-    command: pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
+    command: test
     tty: true
 
   traefik:
     container_name: serve-traefik_test
-    ports:
-      # The HTTP port
-      - 7500:80
     volumes:
-    # dynamic configurations
       - configs:/etc/traefik/configs
+    ports:
+      - 7500:80
+      - 7510:8080
 
   sablier:
     container_name: serve-sablier_test
 
   database:
       container_name: serve-database_test
-      volumes:
-        - test_psgdata:/var/lib/postgresql/data
-      ports:
-        - 5433:5432
-  

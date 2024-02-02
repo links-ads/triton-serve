@@ -5,6 +5,9 @@ LABEL author="LINKS Foundation"
 LABEL maintainer="LINKS Foundation"
 ARG TARGET
 
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
 # install additional packages such as gcc
 RUN apt-get update && apt-get install -y gcc \
     && apt-get clean \
@@ -12,10 +15,14 @@ RUN apt-get update && apt-get install -y gcc \
 
 WORKDIR /app
 
-COPY src/ src/
-COPY pyproject.toml .
+# copy source, alembic dirs,pyproject.toml and other files
+COPY . ./
 # install dependencies (no extras)
 RUN pip install -e .
+
+# copy the entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 FROM base AS branch-dev
 RUN echo "Building development branch"
@@ -32,3 +39,4 @@ COPY tests/ tests/
 FROM branch-${TARGET}
 
 EXPOSE 5000
+ENTRYPOINT [ "/docker-entrypoint.sh" ]
