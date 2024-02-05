@@ -5,15 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      triton_version:
-        description: 'Triton version'
-        required: true
-        default: '21.08-py3-sdk'
 
 env:
   TARGET: test
+  TRITON_VERSION: 23.07-py3
 
 jobs:
   build:
@@ -41,7 +36,7 @@ jobs:
           echo "${{ secrets.environment }}" > .env
       - name: Pull Triton image
         run: |
-          docker pull nvcr.io/nvidia/tritonserver:$${{ github.event.inputs.triton_version }}
+          docker pull "nvcr.io/nvidia/tritonserver:$TRITON_VERSION"
       - name: Run tests
         uses: isbang/compose-action@v1.5.1
         with:
