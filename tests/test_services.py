@@ -24,6 +24,7 @@ def test_create_service(test_client, test_docker, test_db, name, models, gpu_req
     devices = set(test_db.query(Device.uuid).all())
 
     response = test_client.post("/services", json={"name": name, "models": models, "gpu": gpu_requested})
+    LOG.debug(f"response: {response.text}")
     if gpu_requested and not devices:
         assert response.status_code == 409
     else:
@@ -53,6 +54,7 @@ def test_triton_ping(name):
     # try three times to get a response, with a timeout of 60 seconds
     for _ in range(3):
         response = requests.get(url, timeout=60)
+        LOG.debug(f"response: {response.text}")
         if response.status_code == 200:
             break
         else:
