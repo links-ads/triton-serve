@@ -61,8 +61,8 @@ class ServiceBaseSchema(BaseModel):
     container_status: ServiceStatus = ServiceStatus.STARTING
     created_at: datetime
     deleted_at: datetime | None = None
-    device_id: str | None = None
     models: list[ModelSchema] = []
+    devices: list[DeviceSchema] = []
 
 
 class ServiceCreateSchema(ServiceBaseSchema):
@@ -71,5 +71,4 @@ class ServiceCreateSchema(ServiceBaseSchema):
 
 class ServiceSchema(ServiceBaseSchema):
     model_config = ConfigDict(from_attributes=True)
-    service_id: int
     service_id: int

@@ -31,6 +31,14 @@ model_mapping = Table(
         ondelete="CASCADE",
     ),
 )
+
+device_mapping = Table(
+    "device_mapping",
+    Base.metadata,
+    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), primary_key=True),
+    Column("device_id", String, ForeignKey("devices.uuid", ondelete="CASCADE"), nullable=False),
+)
+
 utcnow = partial(datetime.now, tz=timezone.utc)
 
 
@@ -83,7 +91,7 @@ class Service(Base):
     container_status = Column(Enum(ServiceStatus), nullable=False, default=ServiceStatus.STARTING)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True, default=None)
-    device_id = Column(String, ForeignKey("devices.uuid", ondelete="SET NULL"), nullable=True)
     models = relationship("Model", secondary=model_mapping, backref="services")
+    devices = relationship("Device", secondary=device_mapping, backref="services")
 
     __table_args__ = (Index("service_name_idx", "service_name", unique=True, postgresql_where=(deleted_at.is_(None))),)

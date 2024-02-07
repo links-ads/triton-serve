@@ -9,13 +9,16 @@ from sqlalchemy.orm import Session
 
 from triton_serve.api.models.domain import get_model
 from triton_serve.config.traefik import TraefikConfigManager
-from triton_serve.database.model import Device, Service, ServiceStatus
+from triton_serve.database.model import Device, Service, ServiceStatus, device_mapping
 from triton_serve.database.schema import ServiceCreateSchema
 from triton_serve.storage import ModelStorage
 
 
 def list_services(
-    db: Session, docker_client: DockerClient, names: list[str] = None, statuses: list[ServiceStatus] = None
+    db: Session,
+    docker_client: DockerClient,
+    names: list[str] = None,
+    statuses: list[ServiceStatus] = None,
 ):
     """Returns a list of all services.
 
@@ -83,7 +86,7 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
     except APIError as e:
         service.status = ServiceStatus.ERROR
         db.commit()
-        raise HTTPException(status_code=e.status_code, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 def spawn_worker_container(
@@ -94,7 +97,7 @@ def spawn_worker_container(
     worker_network: str,
     worker_volume: str,
     models: list,
-    gpu_index: int = None,
+    devices: list = None,
     environment: dict[str, str] = None,
 ):
     """Spawns a triton worker container.
@@ -106,8 +109,9 @@ def spawn_worker_container(
         worker_name (str): The name of the worker container.
         worker_command (str): The command to run the docker image.
         worker_network (str): The name of the docker network to use.
+        worker_volume (str): The path to the model repository, or a volume name.
         models (list[str]): The list of models to load.
-        model_repository (str): The path to the model repository, or a volume name.
+        devices (list[str], optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
 
     Returns:
@@ -125,12 +129,12 @@ def spawn_worker_container(
     volumes = {str(worker_volume): {"bind": "/models", "mode": "ro"}}
 
     environment = environment or {}
-    if gpu_index is not None:
+    gpus, runtime = None, None
+    if devices:
         runtime = "nvidia"
-        devices = [DeviceRequest(device_ids=[str(gpu_index)], capabilities=[["gpu", "nvidia", "compute"]])]
-    else:
-        runtime = None
-        devices = None
+        gpus = [
+            DeviceRequest(device_ids=[str(gpu.uuid)], capabilities=[["gpu", "nvidia", "compute"]]) for gpu in devices
+        ]
 
     container = client.containers.run(
         detach=True,
@@ -144,26 +148,25 @@ def spawn_worker_container(
         labels=labels,
         restart_policy={"Name": "unless-stopped"},
         runtime=runtime,
-        device_requests=devices,
+        device_requests=gpus,
     )
     return container.id
 
 
-def get_free_gpus(db: Session, first: bool = False):
-    """Returns a list of the available GPUs.
+def get_free_devices(db: Session, count: int) -> list[Device]:
+    """Returns a list of available devices, depending on availability.
+    A device is available if it is not assigned to any service in the `device_mapping` table.
 
     Args:
         db (Session): The database session.
+        count (int): The number of GPUs to return.
 
     Returns:
         list[Device]: The list of available GPUs.
     """
-    statement = db.query(Device).filter(
-        Device.uuid.not_in(db.query(Service.device_id).filter(Service.device_id.isnot(None)))
-    )
-    if first:
-        return statement.first()
-    return statement.all()
+    statement = db.query(Device).outerjoin(device_mapping).filter(device_mapping.c.device_id.is_(None))
+    devices = statement.limit(count).all()
+    return devices
 
 
 def persist_service(
@@ -171,21 +174,21 @@ def persist_service(
     service_name: str,
     service_image: str,
     models: list,
+    devices: list,
     created_at: str,
-    gpu_id: str,
-):
+) -> Service:
     """
     Save the service on the database
 
     Args:
         service_name (str): the name of the service to save
         models list(str): the list of models to load in the service
+        devices list(str): the list of devices to use in the service
         created_at (int): the timestamp of the creation of the service
         db (Session): the database session object
-        gpu_requested (bool): if the service requires a gpu or not: defaults to False (cpu)
 
     Returns:
-        int: the index of the gpu assigned to the service
+        Service: the created service
 
     Raises:
         ValueError: if no gpu is available
@@ -196,10 +199,10 @@ def persist_service(
         service_name=service_name,
         service_image=service_image,
         created_at=created_at,
-        device_id=gpu_id,
     )
     db_service = Service(**service.model_dump())
     db_service.models.extend(models)
+    db_service.devices.extend(devices)
     db.add(db_service)
     return db_service
 
@@ -213,10 +216,11 @@ def create_service(
     image_name: str,
     base_command: str,
     service_network: str,
-    service_url_prefix: str,
     service_models_volume: Path,
+    service_url_prefix: str,
+    service_environment: dict[str, str],
     model_infos: list,
-    gpu_requested: bool,
+    gpu_count: int,
 ) -> Service:
     """Creates a triton docker container loading the models specified in the models list.
 
@@ -228,11 +232,11 @@ def create_service(
         image_name (str): The name of the docker image to use.
         base_command (str): The base command to run the docker image.
         service_network (str): The name of the docker network to use.
-        service_url_prefix (str): The url prefix to use for the service.
         service_models_volume (Path): The path to the model repository, or a volume name.
-        models (list[str]): The list of models to load.
-        repository_path (Path): The path to the model repository.
-        gpu_requested (bool): If the service requires a gpu or not.
+        service_url_prefix (str): The url prefix to use for the service.
+        service_environment (dict[str, str]): The environment variables to pass to the container (if any).
+        model_infos (list[str]): The list of models to load.
+        gpu_count (int): how many gpus to use, defaults to 0.
 
     Returns:
         `service` (`ServiceCreateSchema`): The created service.
@@ -243,8 +247,8 @@ def create_service(
     # assert that the docker image exists
     try:
         client.images.get(image_name)
-    except ImageNotFound:
-        raise HTTPException(status_code=404, detail=f"Docker image {image_name} does not exist")
+    except ImageNotFound as e:
+        raise HTTPException(status_code=412, detail=f"Docker image {image_name} does not exist") from e
     # check if the models specified exist
     model_instances = []
     for model_info in model_infos:
@@ -259,13 +263,12 @@ def create_service(
         model_instances.append(model)
 
     try:
-        # retrieve the first available gpu, if requested
-        if gpu_requested:
-            gpu = get_free_gpus(db, first=True)
-            assert gpu is not None, "No GPU available"
-            gpu_index, gpu_id = gpu.index, gpu.uuid
-        else:
-            gpu_index, gpu_id = None, None
+        # retrieve the required amount of available gpus, if requested
+        device_infos = []
+        if gpu_count > 0:
+            device_infos = get_free_devices(db, count=gpu_count)
+            assert device_infos, "No GPU available"
+            assert len(device_infos) == gpu_count, f"Not enough GPUs available: {len(device_infos)}"
         timestamp = datetime.now(tz=timezone.utc)
         # persist the service on the database (do not comit yet to avoid inconsistencies)
         service = persist_service(
@@ -273,8 +276,8 @@ def create_service(
             service_name=service_name,
             service_image=image_name,
             models=model_instances,
+            devices=device_infos,
             created_at=timestamp,
-            gpu_id=gpu_id,
         )
         # spawn the worker container, and save the container id on the database
         container_id = spawn_worker_container(
@@ -284,8 +287,9 @@ def create_service(
             worker_command=base_command,
             worker_network=service_network,
             models=model_infos,
+            devices=device_infos,
             worker_volume=service_models_volume,
-            gpu_index=gpu_index,
+            environment=service_environment,
         )
         # update the service, and the traefik config, then commit
         service.container_id = container_id
@@ -294,9 +298,9 @@ def create_service(
         db.refresh(service)
         return service
     except AssertionError as e:
-        raise HTTPException(status_code=409, detail=f"Error creating service: {e}")
+        raise HTTPException(status_code=409, detail=f"Error creating service: {e}") from e
     except APIError as e:
-        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}")
+        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}") from e
 
 
 def delete_service(
@@ -334,7 +338,7 @@ def delete_service(
     except APIError as e:
         service.deleted_at = datetime.now(tz=timezone.utc)
         db.commit()  # commit the deletion of the service, regardless of the container
-        raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}")
+        raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}") from e
 
     service.deleted_at = datetime.now(tz=timezone.utc)
     traefik.delete(service_name=service.service_name)

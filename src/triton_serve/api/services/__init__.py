@@ -24,7 +24,7 @@ def get_services(
     names: list[str] = Query(None),
     statuses: list[ServiceStatus] = Query(None),
     db: Session = Depends(get_db),
-    docker_client: DockerClient = Depends(docker_client),
+    docker: DockerClient = Depends(docker_client),
 ):
     """
     Retrieves a list of services.
@@ -38,7 +38,7 @@ def get_services(
     """
     services = domain.list_services(
         db=db,
-        docker_client=docker_client,
+        docker_client=docker,
         names=names,
         statuses=statuses,
     )
@@ -49,7 +49,7 @@ def get_services(
 def get_service(
     service_id: int,
     db: Session = Depends(get_db),
-    docker_client: DockerClient = Depends(docker_client),
+    docker: DockerClient = Depends(docker_client),
 ):
     """
     Retrieves a specific service by name, if present.
@@ -62,7 +62,7 @@ def get_service(
     """
     service = domain.get_service(
         db=db,
-        docker_client=docker_client,
+        docker_client=docker,
         service_id=service_id,
     )
     if service is None:
@@ -71,10 +71,10 @@ def get_service(
 
 
 @router.post("/services", status_code=201, tags=["services"], response_model=ServiceSchema)
-def post_service(
+def create_service(
     service_params: ServiceCreateBody,
     settings: AppSettings = Depends(get_settings),
-    docker_client: DockerClient = Depends(docker_client),
+    docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     storage: ModelStorage = Depends(get_storage),
     db: Session = Depends(get_db),
@@ -85,14 +85,14 @@ def post_service(
     **Arguments:**
     - `name` (`string`): The name of the service to be created.
     - `models` (`list[Model]`): The models to be served by the service.
-    - `gpu` (`bool`): Whether to use GPU or not.
+    - `gpus` (`int`): The number of GPUs to be allocated to the service. Defaults to `0`.
 
     **Returns:**
     - `Service` (`ServiceCreateSchema`): Information about the created service.
     """
     docker_image = service_params.docker_image or settings.service_image
     return domain.create_service(
-        client=docker_client,
+        client=docker,
         traefik=traefik,
         storage=storage,
         service_name=service_params.name,
@@ -101,8 +101,9 @@ def post_service(
         service_network=settings.service_network,
         service_url_prefix=settings.service_prefix,
         service_models_volume=settings.service_volume,
+        service_environment=service_params.environment,
         model_infos=service_params.models,
-        gpu_requested=service_params.gpu,
+        gpu_count=service_params.gpus,
         db=db,
     )
 
@@ -111,7 +112,7 @@ def post_service(
 def delete_service(
     service_id: int,
     delete_container: bool = Query(False),
-    docker_client: DockerClient = Depends(docker_client),
+    docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
 ):
@@ -127,7 +128,7 @@ def delete_service(
     """
     return domain.delete_service(
         db=db,
-        client=docker_client,
+        client=docker,
         traefik=traefik,
         service_id=service_id,
         delete_container=delete_container,
