@@ -24,7 +24,7 @@ def get_gpu_info(
         list[DeviceCreateSchema]: list of GPUs of this node.
     """
     fields = fields or ["index", "uuid", "memory.total", "name"]
-    command = f"{executable} --query-gpu={','.join(fields)} --format={field_format}".split(" ")
+    command = [executable, "--query-gpu", ",".join(fields), "--format", field_format]
 
     out = subprocess.run(command, capture_output=True, check=True)
     gpus_info = out.stdout.decode(encoding="utf-8")
