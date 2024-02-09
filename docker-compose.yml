@@ -29,7 +29,7 @@ services:
       dockerfile: Dockerfile
       args:
         - TARGET=${TARGET:-dev}
-    image: links/serve-traefik:${VERSION:-latest}
+    image: links/serve-traefik:${DOCKER_VERSION_TRAEFIK:-latest}
     command: --api.insecure=true --providers.docker
     container_name: serve-traefik
     volumes:
@@ -57,9 +57,10 @@ services:
         dockerfile: containers/backend/Dockerfile
         args:
         - TARGET=${TARGET:-dev}
-      image: links/serve-backend:${VERSION:-latest}
+      image: links/serve-backend:${DOCKER_VERSION_BACKEND:-latest}
       container_name: serve-backend
-      volumes: 
+      runtime: ${DOCKER_RUNTIME:-runc}
+      volumes:
         - /var/run/docker.sock:/var/run/docker.sock
       env_file:
         - .env
