@@ -34,9 +34,9 @@ def check_resources(session: Session):
 
     device_dict = {device.uuid: device for device in host_devices}
     for device in saved_devices:
-        host_device = device_dict.get(device["uuid"])
+        host_device = device_dict.get(device.uuid)
         assert host_device is not None, f"Device {device['uuid']} not found on the node"
-        assert host_device.name == device["name"], f"Device {device['uuid']} name does not match"
-        assert host_device.memory == device["memory"], f"Device {device['uuid']} memory does not match"
-        assert host_device.index == device["index"], f"Device {device['uuid']} index does not match"
-        assert host_device.index == device["index"], f"Device {device['uuid']} index does not match"
+        assert host_device.name == device.name, f"Device {device['uuid']} name does not match"
+        assert host_device.memory == device.memory, f"Device {device['uuid']} memory does not match"
+        assert host_device.index == device.index, f"Device {device['uuid']} index does not match"
+        assert host_device.index == device.index, f"Device {device['uuid']} index does not match"

@@ -1,17 +1,23 @@
 version: '3'
 
+x-override: &override
+  container_name: serve-backend_test
+  volumes:
+    - configs:/var/serve/configs
+    - models:/var/serve/models
+  command: test
+  tty: true
+
 volumes:
   configs:
   models:
 
 services:
   backend:
-    container_name: serve-backend_test
-    volumes:
-      - configs:/var/serve/configs
-      - models:/var/serve/models
-    command: test
-    tty: true
+    <<: *override
+
+  backend-cpu:
+    <<: *override
 
   traefik:
     container_name: serve-traefik_test

@@ -1,5 +1,42 @@
 version: '3'
 
+x-backend-base: &backend-base
+    build:
+      context: .
+      dockerfile: containers/backend/Dockerfile
+      args:
+      - TARGET=${TARGET:-dev}
+      - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-525.125.06}
+      - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
+      - PYTHON_VERSION=${PYTHON_VERSION:-3.10.12}
+    image: links/serve-backend:${DOCKER_VERSION_BACKEND:-latest}
+    hostname: backend
+    container_name: serve-backend
+    runtime: ${DOCKER_RUNTIME:-runc}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+              driver: nvidia
+              count: all
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - .env
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
+      - traefik.http.routers.serve-backend.entrypoints=http
+      - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
+      - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/serve
+    depends_on:
+      database:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+      sablier:
+        condition: service_started
 
 volumes:
   psgdata:
@@ -33,7 +70,6 @@ services:
     command: --api.insecure=true --providers.docker
     container_name: serve-traefik
     volumes:
-    # dynamic configuration
       - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       test: wget --no-check-certificate --spider localhost:8080/ping || exit 1
@@ -52,28 +88,10 @@ services:
       - traefik.enable=true
 
   backend:
-      build:
-        context: .
-        dockerfile: containers/backend/Dockerfile
-        args:
-        - TARGET=${TARGET:-dev}
-      image: links/serve-backend:${DOCKER_VERSION_BACKEND:-latest}
-      container_name: serve-backend
-      runtime: ${DOCKER_RUNTIME:-runc}
-      volumes:
-        - /var/run/docker.sock:/var/run/docker.sock
-      env_file:
-        - .env
-      labels:
-        - traefik.enable=true
-        - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
-        - traefik.http.routers.serve-backend.entrypoints=http
-        - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
-        - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/serve
-      depends_on:
-        database:
-          condition: service_healthy
-        traefik:
-          condition: service_healthy
-        sablier:
-          condition: service_started
+    <<: *backend-base
+    profiles: ["gpu"]
+  
+  backend-cpu:
+    <<: *backend-base
+    deploy: {}
+    profiles: ["cpu"]

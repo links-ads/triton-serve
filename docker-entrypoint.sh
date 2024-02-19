@@ -36,11 +36,17 @@ run_tests() {
     exec pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
 }
 
+check_gpus() {
+    exec nvidia-smi
+}
+
 main() {
     if [ "$1" = "webserver" ]; then
         start_webserver
     elif [ "$1" = "test" ]; then
         run_tests
+    elif [ "$1" = "check" ]; then
+        check_gpus
     else
         echo "Invalid argument. Please specify 'webserver' or 'test'."
         exit 1
