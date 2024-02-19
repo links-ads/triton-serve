@@ -1,14 +1,19 @@
 version: '3'
 
+x-override: &override
+  volumes: 
+    - ./data/configs:/var/serve/configs
+    - ./data/models:/var/serve/models
+  ports:
+    - 7510:5000
+  command: webserver
+
 services:
   backend:
-      volumes: 
-        - ./data/configs:/var/serve/configs
-        - ./data/models:/var/serve/models
-      ports:
-        - 7510:5000
-      command: webserver
-
+    <<: *override
+  
+  backend-cpu:
+    <<: *override
 
   traefik:
     ports:
@@ -19,7 +24,6 @@ services:
     volumes:
     # dynamic configurations
       - ./data/configs:/etc/traefik/configs
-
 
   database:
       ports:

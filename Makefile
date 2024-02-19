@@ -2,9 +2,10 @@
 PY_ENV=.venv
 PY_BIN=$(shell python -c "print('$(PY_ENV)/bin') if __import__('pathlib').Path('$(PY_ENV)/bin/pip').exists() else print('')")
 
-# Define default target
+# Define default variables
 .DEFAULT_GOAL := help
-DOCKER_COMPOSE := docker compose -f docker-compose.yml -f docker-compose.$(TARGET).yml
+PROFILE := gpu
+DOCKER_COMPOSE := docker compose --profile $(PROFILE) -f docker-compose.yml -f docker-compose.$(TARGET).yml
 
 .PHONY: help
 help:				## This help screen
@@ -92,25 +93,36 @@ check-target:				## Check if TARGET variable is set.
 	@echo "Symlinking .env file to $${TARGET}.env"
 	@ln -sf ./envs/$${TARGET}.env .env
 
+
+check-profile:			    	## Check if profile is set, if not set it to "gpu", if set check if it's either "gpu" or "cpu".
+	@if [ -z "$(PROFILE)" ]; then echo "PROFILE is not set, launch it with either 'gpu' or 'cpu'"; exit 1; fi
+	@if [ "$(PROFILE)" != "gpu" ] && [ "$(PROFILE)" != "cpu" ]; then echo "PROFILE must be either 'gpu' or 'cpu'"; exit 1; fi
+
+
 .PHONY: build
-build:	check-target		## Build the compose project.
+build: check-target check-profile	## Build the compose project.
 	@echo "Building images with target: $${TARGET}"
+	echo "launching command $(DOCKER_COMPOSE)"
 	@$(DOCKER_COMPOSE) build $${ARGS}
 
-.PHONY: up
-up: check-target			## Start the project.
+
+.PHONY: run
+run: check-target check-profile		## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) up $${ARGS}
 
+
 .PHONY: stop
-stop: check-target			## Stop the project.
+stop: check-target check-profile	## Stop the project.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stop $${ARGS}
 
+
 .PHONY: down
-down: check-target			## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
+down: check-target check-profile	## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
+
 
 .PHONY: test
 test:				## Run tests.
@@ -118,11 +130,22 @@ test:				## Run tests.
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
 	@export TARGET=test
-	@docker compose -p serve-test \
-        -f docker-compose.yml \
-        -f docker-compose.test.yml up --build \
-        --abort-on-container-exit --exit-code-from backend
+	@echo "Running on: $(PROFILE)"
+	# if profile is cpu, set the container name to backend-cpu, otherwise backend
+	@if [ "$(PROFILE)" = "cpu" ]; then \
+	docker compose -p serve-test \
+		--profile cpu \
+		-f docker-compose.yml \
+		-f docker-compose.test.yml up --build \
+		--abort-on-container-exit --exit-code-from backend-cpu; \
+	else \
+		docker compose -p serve-test \
+		--profile gpu \
+		-f docker-compose.yml \
+		-f docker-compose.test.yml up --build \
+		--abort-on-container-exit --exit-code-from backend; fi
 	@echo "Tearing everything down..."
 	@docker compose -p serve-test \
+		--profile $(PROFILE) \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
