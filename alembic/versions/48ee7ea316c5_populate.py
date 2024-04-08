@@ -38,7 +38,7 @@ def upgrade() -> None:
         log.warning(f"Failed to get GPU info: {e}")
         gpus = []
     for gpu in gpus:
-        op.execute(sa.insert(Device).values(host_id=1, **gpu))
+        op.execute(sa.insert(Device).values(host_id=1, **gpu.model_dump()))
 
 
 def downgrade() -> None:

@@ -40,9 +40,15 @@ In practice, Triton services are nothing more than a vanilla Triton container, p
 The framework uses `docker-compose`, and it can be run through the provided makefile with a few commands.
 
 ```console
-$ make run TARGET=dev|prod
+$ make run TARGET=dev|prod [ARGS="-d --build..."]
 ```
 
+It is also possible to run on cpu-only mode (thus removing the GPU capabilities) by adding the optional `PROFILE` parameter.
+For instance:
+
+```console
+$ make run TARGET=dev PROFILE=cpu
+```
 
 
 ## Development
