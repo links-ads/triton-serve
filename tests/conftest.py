@@ -10,9 +10,9 @@ import multipart
 import pytest
 import urllib3
 from fastapi.testclient import TestClient
+
 from src.triton_serve.config import get_settings
 from src.triton_serve.factory import create_app
-
 from triton_serve.extensions import get_db
 
 logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
