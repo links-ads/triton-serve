@@ -1,9 +1,52 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from fastapi import UploadFile
-
 from triton_serve.database.schema import ModelSchema
+
+
+class BaseExtractor(ABC):
+    """Base class for extracting files from an archive."""
+
+    def __init__(self, file: Path):
+        self.file = file
+
+    @abstractmethod
+    def __enter__(self, mode: str = "r"):
+        ...
+
+    @abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        ...
+
+    @abstractmethod
+    def __iter__(self):
+        ...
+
+    @abstractmethod
+    def extract(self, member: str, path: Path):
+        ...
+
+
+class ModelSource(ABC):
+    """Generic class to represent a source of models."""
+
+    @abstractmethod
+    def origin(self) -> str:
+        """Returns the origin of the models (filename, URL, etc.)
+
+        Returns:
+            str: origin of the models.
+        """
+        ...
+
+    @abstractmethod
+    def extract(self) -> Path:
+        """Extracts the models from the source.
+
+        Returns:
+            Path: local path to the folder with the extracted models.
+        """
+        ...
 
 
 class ModelStorage(ABC):
@@ -22,15 +65,6 @@ class ModelStorage(ABC):
         :rtype: str
         """
         return self.base_path / model.model_name / str(model.model_version)
-
-    @abstractmethod
-    def check_format(self, filename: str) -> None:
-        """Checks whether the given filename respects the expected format.
-
-        Args:
-            filename (str): file name
-        """
-        ...
 
     @abstractmethod
     def load(self, model: ModelSchema) -> Path:
@@ -58,30 +92,30 @@ class ModelStorage(ABC):
         ...
 
     @abstractmethod
-    def save(self, model: ModelSchema, package: UploadFile) -> Path:
-        """Required to store the UploadFile into the storage implementation (locally, blog storage, etc.).
+    def save(model: ModelSchema, origin: Path) -> tuple[Path, list[Path]]:
+        """Required to store the given data into the storage implementation (locally, blog storage, etc.).
         This is the complement of the load method.
 
         Args:
             model (ModelSchema): model name and version.
-            package (UploadFile): file or package to be uploaded.
+            origin (Path): local path to the model root.
 
         Returns:
-            Path: local or remote path to the model.
+            tuple[Path, list[Path]]: local path to the model root, and list of files extracted.
         """
         ...
 
     @abstractmethod
-    def update(self, previous: ModelSchema, updated: ModelSchema) -> Path:
+    def update(self, updated: ModelSchema, current_uri: Path) -> Path:
         """Required to update a given URI and move files around.
         Generates a new URI for the updated model.
 
         Args:
-            previous (ModelSchema): previous model name and version.
             updated (ModelSchema): current model name and version.
+            origin (Path): old path to the model root, to be updated.
 
         Returns:
-            Path: local or remote path to the model.
+            Path: updated local or remote path to the model.
         """
         raise NotImplementedError()
 

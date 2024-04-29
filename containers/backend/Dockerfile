@@ -39,16 +39,32 @@ ENV PYTHONUNBUFFERED=1 \
     LD_LIBRARY_PATH="/usr/local/python/lib:${LD_LIBRARY_PATH}" \
     PYTHONPATH="/usr/local/python/bin:${PYTHONPATH}"
 
+# Soft link python3 and pip3 to python and pip
 RUN cd /usr/local/python/bin && \
     ln -s /usr/local/python/bin/python3 /usr/local/python/bin/python && \
     ln -s /usr/local/python/bin/pip3 /usr/local/python/bin/pip
 
+# Install git and SSH keys for private repositories
+COPY .ssh /root/.ssh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    openssh-client && \
+    chmod 600 /root/.ssh/id_rsa && \
+    ssh-keyscan github.com >> /root/.ssh/known_hosts && \
+    ssh-keyscan hf.co >> /root/.ssh/known_hosts
+
+# Change the working directory
 WORKDIR /app
+
+# copy requirements and install runtime dependencies
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # copy source, alembic dirs, pyproject.toml and other files
 COPY . ./
-# install dependencies (no extras)
-RUN pip install --no-cache -e .
+# install dependencies: don't use cache to save space,
+# don't install dependencies since they are already installed (this saves build time)
+RUN pip install --no-cache --no-deps -e .
 
 # copy the entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh

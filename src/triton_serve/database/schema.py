@@ -1,8 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
 
-from triton_serve.database.model import ServiceStatus
+from triton_serve.database.model import ModelType, ServiceStatus
+
+
+def timezone_aware_now():
+    return datetime.now(tz=timezone.utc)
 
 
 class MachineBaseSchema(BaseModel):
@@ -25,9 +29,11 @@ class ModelBaseSchema(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     model_version: int
+    model_type: ModelType
     model_uri: str
-    created_at: datetime
-    description: str | None
+    created_at: datetime = timezone_aware_now()
+    updated_at: datetime = timezone_aware_now()
+    source: str | None
 
 
 class ModelCreateSchema(ModelBaseSchema):

@@ -10,13 +10,13 @@ from triton_serve.database.model import Device, Service
 LOG = logging.getLogger(pytest.__name__)
 
 
-@pytest.mark.order(after="model_test.py::test_create_model_success")
+@pytest.mark.order(after="model_test.py::test_create_models_from_zip")
 @pytest.mark.parametrize(
     "name, models, gpu_requested",
     [
-        ("trt-srv_test_svc1", [{"name": "model_cfg", "version": 2}], 1),
-        ("trt-srv_test_svc3", [{"name": "model_cfg", "version": 2}], 0),
-        ("trt-srv_test_svc2", [{"name": "model", "version": 1}], 0),
+        ("trt-srv_test_svc1", [{"name": "ensemble", "version": 2}], 1),
+        ("trt-srv_test_svc3", [{"name": "ensemble", "version": 2}], 0),
+        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], 0),
     ],
 )
 def test_create_service(test_client, test_docker, test_db, name, models, gpu_requested):
@@ -62,7 +62,7 @@ def test_triton_ping(name):
 
 
 @pytest.mark.order(after="test_triton_ping")
-@pytest.mark.parametrize("name, model", [("trt-srv_test_svc3", "model_cfg"), ("trt-srv_test_svc2", "model")])
+@pytest.mark.parametrize("name, model", [("trt-srv_test_svc2", "onnx")])
 def test_triton_models_ready(name, model):
     url = f"http://traefik/{name}/v2/models/{model}/ready"
     # try three times to get a response, with a timeout of 60 seconds
@@ -79,7 +79,7 @@ def test_triton_models_ready(name, model):
 @pytest.mark.parametrize(
     "name, models, expected_status_code",
     [
-        ("", ["model_cfg"], 422),
+        ("", ["ensemble"], 422),
         ("trt-srv_test_svc3", [{"name": "nonexistent", "version": 1}], 409),
         ("trt-srv_test_svc4", [{"name": "nonexistent", "version": 1}], 409),
         ("trt-srv_test_svc5", [{"name": "nonexistent", "version": 1}], 409),

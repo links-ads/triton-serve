@@ -1,18 +1,17 @@
 """init
 
-Revision ID: 915f97395c0d
+Revision ID: e6a4d97fbbb8
 Revises: 
-Create Date: 2024-02-07 09:56:46.766472
+Create Date: 2024-04-23 12:19:41.939219
 
 """
-
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "915f97395c0d"
+revision: str = "e6a4d97fbbb8"
 down_revision: str | None = None
 branch_labels: str | (Sequence[str] | None) = None
 depends_on: str | (Sequence[str] | None) = None
@@ -33,8 +32,25 @@ def upgrade() -> None:
         sa.Column("model_name", sa.String(), nullable=False),
         sa.Column("model_version", sa.Integer(), nullable=False),
         sa.Column("model_uri", sa.String(), nullable=False),
+        sa.Column(
+            "model_type",
+            sa.Enum(
+                "UNK",
+                "TENSORRT",
+                "ONNX",
+                "TORCHSCRIPT",
+                "TENSORFLOW",
+                "OPENVINO",
+                "PYTHON",
+                "DALI",
+                "ENSEMBLE",
+                name="modeltype",
+            ),
+            nullable=False,
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("description", sa.String(), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("source", sa.String(), nullable=True),
         sa.CheckConstraint("model_version > 0", name="model_version_positive"),
         sa.PrimaryKeyConstraint("model_name", "model_version", name="model_name_version"),
     )

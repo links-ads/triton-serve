@@ -34,6 +34,10 @@ jobs:
       - name: 'Create env file'
         run: |
           echo "${{ secrets.environment }}" > .env
+      - name: 'Create SSH key'
+        run: |
+          mkdir -p .ssh
+          echo "${{ secrets.ssh_key }}" > .ssh/id_rsa
       - name: Pull Triton image
         run: |
           docker pull "nvcr.io/nvidia/tritonserver:$TRITON_VERSION"

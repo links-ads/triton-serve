@@ -16,37 +16,13 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
 ]
-# Main dependencies, use this to include everything that the project needs to run in production.
-# Depending on the use case, you can adopt a strict or loose versioning policy.
-# e.g.:
-# using strict versioning
-# "requests == 2.25.0",
-# using loose versioning
-# "requests >= 2.25.0, < 3.0.0",
-# using extras
-# "uvicorn[standard] >= 0.15.0, < 0.16.0",
-# using specific urls
-# "torch @ https://download.pytorch.org/whl/cu117/torch-2.0.1%2Bcu117-cp310-cp310-linux_x86_64.whl",
-# "torchvision @ https://download.pytorch.org/whl/cu117/torchvision-0.15.2%2Bcu117-cp310-cp310-linux_x86_64.whl",
-dependencies = [
-    "alembic >= 1.13.0, < 2.0.0",
-    "docker >= 6.1.3, < 7.0.0",
-    "fastapi >= 0.104.0, < 1.0.0",
-    "uvicorn[standard] >= 0.15.0, < 0.16.0",
-    "pydantic-settings >= 2.1.0, < 3.0.0",
-    "python-multipart >= 0.0.6, < 1.0.0",
-    "psycopg2-binary >= 2.9.9, < 3.0.0",
-    "psutil >= 5.9.6, < 6.0.0",
-    "sqlalchemy >= 2.0.23, < 3.0.0",
-]
 
 # Dynamic metadata allow to assign the version number to the package at build time.
-# The location of the version number is specified in the [tool.setuptools.dynamic] section.
-dynamic = ["version"]
+# The location of the version and the dependecies is specified in the [tool.setuptools.dynamic] section.
+dynamic = ["version", "dependencies"]
 
 # Optional dependencies, use this to include everything that the project needs to run in development.
 # These can be installed by specifying for instance `pip install -e .[dev|docs|test]`
-# Here the loose versioning policy is usually preferred.
 [project.optional-dependencies]
 # Add development dependencies here
 dev = [
@@ -82,6 +58,7 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.dynamic]
 version = {attr = "triton_serve.__version__"}
+dependencies = {file = "requirements.txt"}
 
 [tool.black]
 line-length = 119
