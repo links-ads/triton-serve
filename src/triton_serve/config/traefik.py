@@ -22,14 +22,14 @@ class TraefikConfigManager:
         if yaml_file_name.exists():
             yaml_file_name.unlink()
 
-    def add(self, service_prefix: str, service_name: str):
+    def add(self, service_prefix: str, service_name: str, api_keys: list[str]):
         """
         Updates the traefik config with the specified service.
 
         Args:
             service_prefix (str): The url prefix to use for the service.
             service_name (str): The name of the service.
-            configs_path (Path): The path to the traefik configs.
+            api_keys (list[str]): The list of api keys to use for the service.
 
         Returns:
             `None`
@@ -58,12 +58,25 @@ class TraefikConfigManager:
                         }
                     },
                     f"{service_name}_stripprefix": {"stripPrefix": {"prefixes": [prefix_name]}},
+                    f"{service_name}_auth": {
+                        "plugin": {
+                            "traefik-api-key-middleware": {
+                                "authenticationHeader": True,
+                                "authenticationheaderName": "X-API-Key",
+                                "keys": api_keys,
+                            }
+                        }
+                    },
                 },
                 "routers": {
                     service_name: {
                         "rule": path_prefix,
                         "entryPoints": ["http"],
-                        "middlewares": [f"{service_name}_sablier@file", f"{service_name}_stripprefix@file"],
+                        "middlewares": [
+                            f"{service_name}_auth@file",
+                            f"{service_name}_sablier@file",
+                            f"{service_name}_stripprefix@file",
+                        ],
                         "service": service_name,
                     }
                 },

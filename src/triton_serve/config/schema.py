@@ -24,6 +24,7 @@ class AppSettings(BaseSettings):
     api_title: str = "Triton Serve"
     api_description: str = "Triton Serve API"
     api_root_path: str = "/"
+    api_keys: list[str] = []
 
     repository_dirname: str = "model_repository"
     repository_path: Path = Path("/var/serve/models")
@@ -35,9 +36,6 @@ class AppSettings(BaseSettings):
     service_network: str = "triton-serve_default"
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
-
-    # security
-    app_secret: str
 
     # database
     database_user: str

@@ -14,6 +14,8 @@ data/
 docker/
 envs/
 .env
+.*cache/
+.git/
 
 # Ignore build artifacts and caches
 dist/

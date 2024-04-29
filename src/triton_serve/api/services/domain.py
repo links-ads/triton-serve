@@ -219,6 +219,7 @@ def create_service(
     service_models_volume: Path,
     service_url_prefix: str,
     service_environment: dict[str, str],
+    service_api_keys: list[str],
     model_infos: list,
     gpu_count: int,
 ) -> Service:
@@ -235,6 +236,7 @@ def create_service(
         service_models_volume (Path): The path to the model repository, or a volume name.
         service_url_prefix (str): The url prefix to use for the service.
         service_environment (dict[str, str]): The environment variables to pass to the container (if any).
+        service_api_keys (list[str]): The list of api keys to use for the service.
         model_infos (list[str]): The list of models to load.
         gpu_count (int): how many gpus to use, defaults to 0.
 
@@ -247,8 +249,8 @@ def create_service(
     # assert that the docker image exists
     try:
         client.images.get(image_name)
-    except ImageNotFound as e:
-        raise HTTPException(status_code=412, detail=f"Docker image {image_name} does not exist") from e
+    except (ImageNotFound, APIError) as e:
+        raise HTTPException(status_code=412, detail=f"Docker image {image_name} not found") from e
     # check if the models specified exist
     model_instances = []
     for model_info in model_infos:
@@ -293,14 +295,18 @@ def create_service(
         )
         # update the service, and the traefik config, then commit
         service.container_id = container_id
-        traefik.add(service_prefix=service_url_prefix, service_name=service_name)
+        traefik.add(
+            service_prefix=service_url_prefix,
+            service_name=service_name,
+            api_keys=service_api_keys,
+        )
         db.commit()
         db.refresh(service)
         return service
     except AssertionError as e:
-        raise HTTPException(status_code=409, detail=f"Error creating service: {e}") from e
+        raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
     except APIError as e:
-        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {e}") from e
+        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {str(e)}") from e
 
 
 def delete_service(
