@@ -20,8 +20,10 @@ start_webserver() {
         # otherwise, run the server in development mode using uvicorn
         exec uvicorn triton_serve.wsgi:app \
             --root-path ${API_ROOT_PATH:-/} \
+            --log-level=${LOG_LEVEL:-info} \
             --host 0.0.0.0 \
-            --port 5000
+            --port 5000 \
+            --reload
     fi
 }
 
