@@ -1,9 +1,10 @@
-version: '3'
+name: serve-dev
 
 x-override: &override
   volumes: 
     - ./data/configs:/var/serve/configs
     - ./data/models:/var/serve/models
+    - ./src/:/app/src:ro
   ports:
     - 7510:5000
   command: webserver

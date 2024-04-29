@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+from time import sleep
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
@@ -12,6 +13,7 @@ settings = get_settings()
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 target_metadata = Base.metadata
+
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -55,17 +57,27 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    for i in range(3):
+        try:
+            connectable = engine_from_config(
+                config.get_section(config.config_ini_section, {}),
+                prefix="sqlalchemy.",
+                poolclass=pool.NullPool,
+            )
+            with connectable.connect() as connection:
+                context.configure(connection=connection, target_metadata=target_metadata)
 
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
-
-        with context.begin_transaction():
-            context.run_migrations()
+                with context.begin_transaction():
+                    context.run_migrations()
+            break
+        except Exception as e:
+            # sleep an increasing amount of time
+            print(f"Failed to connect to database: {e}")
+            print(f"Retrying connection... Attempt {i + 1} of 3")
+            seconds = 2**i
+            sleep(seconds)
+        else:
+            raise
 
 
 if context.is_offline_mode():

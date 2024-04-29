@@ -156,6 +156,7 @@ cython_debug/
 # IDE and editors
 .idea/
 .vscode/
+.ssh/
 
 # Other
 *.zip

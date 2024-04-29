@@ -32,14 +32,14 @@ install: check-venv		## Install the project in dev mode.
 
 .PHONY: fmt
 fmt: check-venv			## Format code using black & isort.
-	$(PY_BIN)/isort -v --src src/ tests/ --virtual-env $(PY_ENV)
-	$(PY_BIN)/black src/ tests/
+	$(PY_BIN)/isort -v --src src/ tests/ alembic/ --virtual-env $(PY_ENV)
+	$(PY_BIN)/black src/ tests/ alembic/
 
 
 .PHONY: lint
 lint: check-venv		## Run ruff, black, mypy (optional).
-	@$(PY_BIN)/ruff check src/
-	@$(PY_BIN)/black --check src/ tests/
+	@$(PY_BIN)/ruff check src/  tests/ alembic/
+	@$(PY_BIN)/black --check src/ tests/ alembic/
 	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
 
 
@@ -89,8 +89,9 @@ release:			## Create a new tag for release.
 
 check-target:				## Check if TARGET variable is set.
 	@if [ -z "$(TARGET)" ]; then echo "TARGET is not set, launch the command setting TARGET=dev|prod"; exit 1; fi
-	@if [ "$(TARGET)" != "dev" ] && [ "$(TARGET)" != "prod" ]; then echo "TARGET must be either dev or prod"; exit 1; fi
+	@if [ "$(TARGET)" != "dev" ] && [ "$(TARGET)" != "prod" ]; then echo "TARGET must be either 'dev' or 'prod'"; exit 1; fi
 	@echo "Symlinking .env file to $${TARGET}.env"
+	@if [ ! -f ./envs/$${TARGET}.env ]; then echo "File ./envs/$${TARGET}.env does not exist, please create it"; exit 1; fi
 	@ln -sf ./envs/$${TARGET}.env .env
 
 
@@ -122,6 +123,17 @@ stop: check-target check-profile	## Stop the project.
 down: check-target check-profile	## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
+
+
+.PHONY: migrate
+migrate: check-venv					## Generate migrations.
+	@echo "Symlinking .env file to local.env"
+	@if [ ! -f ./envs/local.env ]; then echo "File ./envs/local.env does not exist, please create it"; exit 1; fi
+	@ln -sf ./envs/local.env .env
+	@docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d $${ARGS} database
+	@echo "Waiting for database to start..."
+	@echo "Generating migrations..."
+	@$(PY_BIN)/alembic revision --autogenerate -m "$${MSG}"
 
 
 .PHONY: test

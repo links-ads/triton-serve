@@ -25,6 +25,7 @@ class AppSettings(BaseSettings):
     api_description: str = "Triton Serve API"
     api_root_path: str = "/"
 
+    repository_dirname: str = "model_repository"
     repository_path: Path = Path("/var/serve/models")
     configs_path: Path = Path("/var/serve/configs")
     storage_type: StorageType = StorageType.local

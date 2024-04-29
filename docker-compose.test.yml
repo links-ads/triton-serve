@@ -1,4 +1,4 @@
-version: '3'
+name: serve-test
 
 x-override: &override
   container_name: serve-backend_test

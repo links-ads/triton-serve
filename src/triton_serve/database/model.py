@@ -51,13 +51,27 @@ class Machine(Base):
     devices = relationship("Device", back_populates="machine")
 
 
+class ModelType(enum.Enum):
+    UNK = "unknown"
+    TENSORRT = "tensorrt"
+    ONNX = "onnx"
+    TORCHSCRIPT = "torchscript"
+    TENSORFLOW = "tensorflow"
+    OPENVINO = "openvino"
+    PYTHON = "python"
+    DALI = "dali"
+    ENSEMBLE = "ensemble"
+
+
 class Model(Base):
     __tablename__ = "models"
     model_name = Column(String, nullable=False)
     model_version = Column(Integer, nullable=False)
     model_uri = Column(String, nullable=False)
+    model_type = Column(Enum(ModelType), nullable=False, default=ModelType.UNK)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
-    description = Column(String, nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    source = Column(String, nullable=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("model_name", "model_version", name="model_name_version"),
