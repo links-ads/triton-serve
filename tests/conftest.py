@@ -10,9 +10,9 @@ import multipart
 import pytest
 import urllib3
 from fastapi.testclient import TestClient
-
 from src.triton_serve.config import get_settings
 from src.triton_serve.factory import create_app
+
 from triton_serve.extensions import get_db
 
 logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
@@ -21,6 +21,17 @@ logging.getLogger(urllib3.__name__).setLevel(logging.WARNING)
 LOG = logging.getLogger(pytest.__name__)
 
 TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
+TEST_GIT_REPO = os.getenv("TEST_GIT_REPO")
+
+
+@pytest.fixture(scope="session")
+def test_repository():
+    """
+    Test if the repository is set, then yield the repository url
+    """
+    if not TEST_GIT_REPO:
+        pytest.skip("No test repository provided")
+    yield TEST_GIT_REPO
 
 
 @pytest.fixture(scope="function")
@@ -89,25 +100,42 @@ def test_docker():
 def make_zip():
     @contextmanager
     def _create_zip(
-        model_name: str = "model.onnx",
-        add_model: bool = True,
-        add_config: bool = False,
+        archive_name: str = "repository.zip",
+        include_models: list[str] = None,
+        exclude_models: list[str] = None,
+        include_files: list[str] = None,
+        exclude_files: list[str] = None,
     ):
-        """Utility function to create a zip file with the given files.
+        """Utility function to create a zip file with the given models/files.
 
         Args:
             archive_name (str): name of the archive
-            config_file (bool, optional): whether to include a config file. Defaults to False.
+            include_models (list[str], optional): list of models to include. Defaults to None.
+            exclude_models (list[str], optional): list of models to exclude. Defaults to None.
+            include_files (list[str], optional): list of files to include. Defaults to None.
+            exclude_files (list[str], optional): list of files to exclude. Defaults to None.
         """
         archive = io.BytesIO()
-        archive.name = "package.zip"
+        archive.name = archive_name
         data_dir = TEST_DIR / "data"
+        repository_dir = data_dir / "model_repository"
+        model_dirs = [d for d in repository_dir.iterdir() if d.is_dir()]
+
         try:
             with ZipFile(archive, "w") as f:
-                if add_model:
-                    f.write(data_dir / "model.onnx", arcname=Path(model_name))
-                if add_config:
-                    f.write(data_dir / "config.pbtxt", arcname=Path("config.pbtxt"))
+                if include_models is not None:
+                    model_dirs = [d for d in model_dirs if d.name in include_models]
+                if exclude_models is not None:
+                    model_dirs = [d for d in model_dirs if d.name not in exclude_models]
+                # on each model, recursively gather each file or directory
+                for model_dir in model_dirs:
+                    model_files = list(model_dir.rglob("*"))
+                    if include_files is not None:
+                        model_files = [f for f in model_files if f.name in include_files]
+                    if exclude_files is not None:
+                        model_files = [f for f in model_files if f.name not in exclude_files]
+                    for model_file in model_files:
+                        f.write(model_file, arcname=model_file.relative_to(data_dir))
             archive.seek(0)
             yield archive
         finally:
