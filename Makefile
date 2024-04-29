@@ -32,14 +32,14 @@ install: check-venv		## Install the project in dev mode.
 
 .PHONY: fmt
 fmt: check-venv			## Format code using black & isort.
-	$(PY_BIN)/isort -v --src src/ tests/ --virtual-env $(PY_ENV)
-	$(PY_BIN)/black src/ tests/
+	$(PY_BIN)/isort -v --src src/ tests/ alembic/ --virtual-env $(PY_ENV)
+	$(PY_BIN)/black src/ tests/ alembic/
 
 
 .PHONY: lint
 lint: check-venv		## Run ruff, black, mypy (optional).
-	@$(PY_BIN)/ruff check src/
-	@$(PY_BIN)/black --check src/ tests/
+	@$(PY_BIN)/ruff check src/  tests/ alembic/
+	@$(PY_BIN)/black --check src/ tests/ alembic/
 	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
 
 

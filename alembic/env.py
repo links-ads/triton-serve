@@ -2,7 +2,6 @@ from logging.config import fileConfig
 from time import sleep
 
 from alembic import context
-from psycopg2 import OperationalError
 from sqlalchemy import engine_from_config, pool
 
 from triton_serve.config import get_settings
