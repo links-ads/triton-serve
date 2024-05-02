@@ -10,7 +10,7 @@ from triton_serve.database.model import Device, Service
 LOG = logging.getLogger(pytest.__name__)
 
 
-@pytest.mark.order(after="model_test.py::test_create_models_from_zip")
+@pytest.mark.order(after="test_api_key.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, gpu_requested",
     [
@@ -48,11 +48,31 @@ def test_create_service(test_client, test_docker, test_db, name, models, gpu_req
 
 @pytest.mark.order(after="test_create_service")
 @pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
-def test_triton_ping(name):
+def test_triton_ping_unathorized(name):
     url = f"http://traefik/{name}/v2/health/ready"
+    response = requests.get(url)
     # try three times to get a response, with a timeout of 60 seconds
     for _ in range(3):
         response = requests.get(url, timeout=60)
+        LOG.debug(f"response: {response.text}")
+        if response.status_code != 404:
+            break
+        else:
+            time.sleep(5)
+
+    assert response.status_code == 403
+    data = response.json()
+    assert "Invalid API Key" in data["message"]
+
+
+@pytest.mark.order(after="test_triton_ping_unathorized")
+@pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
+def test_triton_ping(name, test_settings):
+    url = f"http://traefik/{name}/v2/health/ready"
+    headers = {"X-API-Key": test_settings.api_keys[0]}
+    # try three times to get a response, with a timeout of 60 seconds
+    for _ in range(3):
+        response = requests.get(url, timeout=60, headers=headers)
         LOG.debug(f"response: {response.text}")
         if response.status_code == 200:
             break
@@ -63,11 +83,13 @@ def test_triton_ping(name):
 
 @pytest.mark.order(after="test_triton_ping")
 @pytest.mark.parametrize("name, model", [("trt-srv_test_svc2", "onnx")])
-def test_triton_models_ready(name, model):
+def test_triton_models_ready(name, model, test_settings):
     url = f"http://traefik/{name}/v2/models/{model}/ready"
+    headers = {"X-API-Key": test_settings.api_keys[0]}
+
     # try three times to get a response, with a timeout of 60 seconds
     for _ in range(3):
-        response = requests.get(url, timeout=60)
+        response = requests.get(url, timeout=60, headers=headers)
         if response.status_code == 200:
             break
         else:

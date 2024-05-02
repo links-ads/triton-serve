@@ -11,9 +11,9 @@ import pytest
 import urllib3
 from fastapi.testclient import TestClient
 
-from src.triton_serve.config import get_settings
-from src.triton_serve.factory import create_app
+from triton_serve.config import get_settings
 from triton_serve.extensions import get_db
+from triton_serve.factory import create_app
 
 logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -74,7 +74,7 @@ def test_client(test_app, test_settings):
     """
     LOG.debug("Initializing test client...")
     client = TestClient(app=test_app)
-    client.headers.update({"X-API-Key": test_settings.app_secret})
+    client.headers.update({"X-API-Key": test_settings.api_keys[0]})
     yield client
 
 

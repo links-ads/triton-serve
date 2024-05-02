@@ -102,6 +102,7 @@ def create_service(
         service_url_prefix=settings.service_prefix,
         service_models_volume=settings.service_volume,
         service_environment=service_params.environment,
+        service_api_keys=settings.api_keys,
         model_infos=service_params.models,
         gpu_count=service_params.gpus,
         db=db,
