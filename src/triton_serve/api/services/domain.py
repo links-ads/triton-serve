@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 
 from docker import DockerClient
@@ -9,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from triton_serve.api.models.domain import get_model
 from triton_serve.config.traefik import TraefikConfigManager
-from triton_serve.database.model import Device, Service, ServiceStatus, device_mapping
+from triton_serve.database.model import (
+    Device,
+    Model,
+    Service,
+    ServiceStatus,
+    device_mapping,
+)
 from triton_serve.database.schema import ServiceCreateSchema
 from triton_serve.storage import ModelStorage
 
@@ -32,7 +39,7 @@ def list_services(
     if names:
         statement = statement.filter(Service.name.in_(names))
     if statuses:
-        statement = statement.filter(Service.status.in_(statuses))
+        statement = statement.filter(Service.container_status.in_(statuses))
     services = statement.all()
     return [check_service_status(db=db, docker_client=docker_client, service=service) for service in services]
 
@@ -51,6 +58,45 @@ def get_service(db: Session, docker_client: DockerClient, service_id: int):
     if docker_client is not None:
         return check_service_status(db=db, docker_client=docker_client, service=service)
     return service
+
+
+def get_free_devices(db: Session, count: int) -> list[Device]:
+    """Returns a list of available devices, depending on availability.
+    A device is available if it is not assigned to any service in the `device_mapping` table.
+
+    Args:
+        db (Session): The database session.
+        count (int): The number of GPUs to return.
+
+    Returns:
+        list[Device]: The list of available GPUs.
+    """
+    statement = db.query(Device).outerjoin(device_mapping).filter(device_mapping.c.device_id.is_(None))
+    devices = statement.limit(count).all()
+    return devices
+
+
+def get_service_image(docker_client: DockerClient, image_name: str):
+    """Returns the image id of a docker image.
+    If it does not exist, it tries to pull it from the registry, otherwise raises
+    an HTTPException with code 412, and the message "Image not found".
+
+    Args:
+        docker_client (DockerClient): The docker client.
+        image_name (str): The name of the image.
+
+    Returns:
+        str: The image id.
+    """
+    try:
+        try:
+            image = docker_client.images.get(image_name)
+            return image.id
+        except ImageNotFound:
+            image = docker_client.images.pull(image_name)
+            return image.id
+    except APIError as e:
+        raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
 
 
 def check_service_status(db: Session, docker_client: DockerClient, service: Service):
@@ -89,14 +135,13 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
-def spawn_worker_container(
+def spawn_service_container(
     client: DockerClient,
-    image_name: str,
+    image_id: str,
     worker_name: str,
-    worker_command: str,
     worker_network: str,
     worker_volume: str,
-    models: list,
+    models: list[Model],
     devices: list = None,
     environment: dict[str, str] = None,
 ):
@@ -105,7 +150,7 @@ def spawn_worker_container(
     Args:
 
         client (DockerClient): The docker client.
-        image_name (str): The name of the docker image to use.
+        image_id (str): The identifier of the docker image to use.
         worker_name (str): The name of the worker container.
         worker_command (str): The command to run the docker image.
         worker_network (str): The name of the docker network to use.
@@ -123,12 +168,20 @@ def spawn_worker_container(
     # check if container with the same name already exists
     if worker_name in [container.name for container in client.containers.list()]:
         raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
-    models_string = " ".join([f"--load-model={model.name}" for model in models])
-    command = f"{worker_command} {models_string}"
+
+    # prepare the requirements, if any
+    environment = environment or {}
+    dependencies_list = list(chain.from_iterable([model.dependencies for model in models]))
+    environment["WORKER_REQUIREMENTS"] = " ".join(dependencies_list) if dependencies_list else ""
+    print(f"Spawning container {worker_name} with requirements {environment['WORKER_REQUIREMENTS']}")
+
+    # prepare the list of models to load
+    triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
+
+    # prepare the labels and volumes for the container
     labels = {"sablier.enable": "true", "sablier.group": "serve-workers"}
     volumes = {str(worker_volume): {"bind": "/models", "mode": "ro"}}
 
-    environment = environment or {}
     gpus, runtime = None, None
     if devices:
         runtime = "nvidia"
@@ -139,9 +192,9 @@ def spawn_worker_container(
     container = client.containers.run(
         detach=True,
         remove=False,
-        image=image_name,
+        image=image_id,
         name=worker_name,
-        command=command,
+        command=triton_args,
         network=worker_network,
         volumes=volumes,
         environment=environment,
@@ -151,22 +204,6 @@ def spawn_worker_container(
         device_requests=gpus,
     )
     return container.id
-
-
-def get_free_devices(db: Session, count: int) -> list[Device]:
-    """Returns a list of available devices, depending on availability.
-    A device is available if it is not assigned to any service in the `device_mapping` table.
-
-    Args:
-        db (Session): The database session.
-        count (int): The number of GPUs to return.
-
-    Returns:
-        list[Device]: The list of available GPUs.
-    """
-    statement = db.query(Device).outerjoin(device_mapping).filter(device_mapping.c.device_id.is_(None))
-    devices = statement.limit(count).all()
-    return devices
 
 
 def persist_service(
@@ -214,7 +251,6 @@ def create_service(
     storage: ModelStorage,
     service_name: str,
     image_name: str,
-    base_command: str,
     service_network: str,
     service_models_volume: Path,
     service_url_prefix: str,
@@ -231,7 +267,6 @@ def create_service(
         traefik (TraefikConfigManager): The traefik config manager.
         service_name (str): The name of the service.
         image_name (str): The name of the docker image to use.
-        base_command (str): The base command to run the docker image.
         service_network (str): The name of the docker network to use.
         service_models_volume (Path): The path to the model repository, or a volume name.
         service_url_prefix (str): The url prefix to use for the service.
@@ -246,11 +281,11 @@ def create_service(
     Raises:
         HTTPException: If the container could not be created.
     """
-    # assert that the docker image exists
-    try:
-        client.images.get(image_name)
-    except (ImageNotFound, APIError) as e:
-        raise HTTPException(status_code=412, detail=f"Docker image {image_name} not found") from e
+    # assert that the docker image exists, or it can be pulled
+    assert image_name, "No image specified"
+    print(f"Creating service {service_name} with image {image_name}")
+    image_id = get_service_image(client, image_name)
+
     # check if the models specified exist
     model_instances = []
     for model_info in model_infos:
@@ -276,19 +311,18 @@ def create_service(
         service = persist_service(
             db=db,
             service_name=service_name,
-            service_image=image_name,
+            service_image=image_name,  # for readability
             models=model_instances,
             devices=device_infos,
             created_at=timestamp,
         )
         # spawn the worker container, and save the container id on the database
-        container_id = spawn_worker_container(
+        container_id = spawn_service_container(
             client=client,
-            image_name=image_name,
+            image_id=image_id,
             worker_name=service_name,
-            worker_command=base_command,
             worker_network=service_network,
-            models=model_infos,
+            models=model_instances,
             devices=device_infos,
             worker_volume=service_models_volume,
             environment=service_environment,

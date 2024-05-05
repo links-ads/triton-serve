@@ -31,8 +31,7 @@ class AppSettings(BaseSettings):
     configs_path: Path = Path("/var/serve/configs")
     storage_type: StorageType = StorageType.local
 
-    service_image: str = "nvcr.io/nvidia/tritonserver:23.07-py3"
-    service_command: str = "tritonserver --model-repository=/models --model-control-mode=explicit"
+    service_default_image: str = "ghcr.io/links-ads/serve-triton:23.07-py3"
     service_network: str = "triton-serve_default"
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""

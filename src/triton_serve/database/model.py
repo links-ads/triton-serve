@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Table,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship
 
 from triton_serve.database.manage import Base
@@ -72,6 +73,7 @@ class Model(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     source = Column(String, nullable=True)
+    dependencies = Column(ARRAY(String), nullable=True, default=None)
 
     __table_args__ = (
         PrimaryKeyConstraint("model_name", "model_version", name="model_name_version"),

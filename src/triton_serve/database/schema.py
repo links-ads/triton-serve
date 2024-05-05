@@ -34,6 +34,7 @@ class ModelBaseSchema(BaseModel):
     created_at: datetime = timezone_aware_now()
     updated_at: datetime = timezone_aware_now()
     source: str | None
+    dependencies: list[str] | None = None
 
 
 class ModelCreateSchema(ModelBaseSchema):

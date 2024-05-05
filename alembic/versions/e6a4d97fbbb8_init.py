@@ -2,13 +2,14 @@
 
 Revision ID: e6a4d97fbbb8
 Revises: 
-Create Date: 2024-04-23 12:19:41.939219
+Create Date: 2024-05-02 23:00:36.850164
 
 """
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "e6a4d97fbbb8"
@@ -51,6 +52,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("source", sa.String(), nullable=True),
+        sa.Column("dependencies", postgresql.ARRAY(sa.String()), nullable=True),
         sa.CheckConstraint("model_version > 0", name="model_version_positive"),
         sa.PrimaryKeyConstraint("model_name", "model_version", name="model_name_version"),
     )
