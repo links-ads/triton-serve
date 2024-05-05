@@ -78,8 +78,14 @@ def validate_models(repository_path: Path) -> list[ModelSchema]:
         list[ModelSchema]: list of validated models
     """
     models = []
+    #  list all directories in the repository
     model_dirs = [d for d in repository_path.iterdir() if d.is_dir()]
     assert model_dirs, "Empty repository"
+    # check for requirements, if present
+    requirements = []
+    requirements_file = repository_path / "requirements.txt"
+    if requirements_file.exists() and requirements_file.is_file():
+        requirements = requirements_file.read_text().splitlines()
 
     for model_dir in model_dirs:
         model_name = model_dir.name
@@ -114,6 +120,7 @@ def validate_models(repository_path: Path) -> list[ModelSchema]:
                     model_type=model_type,
                     model_uri=str(version_dir),
                     source=None,
+                    dependencies=requirements,
                 )
             )
     return models
