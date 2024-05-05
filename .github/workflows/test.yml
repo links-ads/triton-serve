@@ -40,7 +40,7 @@ jobs:
           echo "${{ secrets.ssh_key }}" > .ssh/id_rsa
       - name: Pull Triton image
         run: |
-          docker pull "nvcr.io/nvidia/tritonserver:$TRITON_VERSION"
+          docker pull "ghcr.io/links-ads/serve-triton:$TRITON_VERSION"
       - name: Run tests
         uses: isbang/compose-action@v1.5.1
         with:
