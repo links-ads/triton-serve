@@ -90,14 +90,13 @@ def create_service(
     **Returns:**
     - `Service` (`ServiceCreateSchema`): Information about the created service.
     """
-    docker_image = service_params.docker_image or settings.service_image
+    docker_image = service_params.docker_image or settings.service_default_image
     return domain.create_service(
         client=docker,
         traefik=traefik,
         storage=storage,
         service_name=service_params.name,
         image_name=docker_image,
-        base_command=settings.service_command,
         service_network=settings.service_network,
         service_url_prefix=settings.service_prefix,
         service_models_volume=settings.service_volume,
