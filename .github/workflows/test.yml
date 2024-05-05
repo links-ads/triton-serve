@@ -9,6 +9,7 @@ on:
 env:
   TARGET: test
   TRITON_VERSION: 23.07-py3
+  TRITON_IMAGE_NAME: serve-triton
 
 jobs:
   build:
@@ -40,7 +41,8 @@ jobs:
           echo "${{ secrets.ssh_key }}" > .ssh/id_rsa
       - name: Pull Triton image
         run: |
-          docker pull "ghcr.io/links-ads/serve-triton:$TRITON_VERSION"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull "ghcr.io/${{ github.repository_owner }}/$TRITON_IMAGE_NAME:$TRITON_VERSION"
       - name: Run tests
         uses: isbang/compose-action@v1.5.1
         with:
