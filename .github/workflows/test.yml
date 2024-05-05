@@ -33,15 +33,18 @@ jobs:
           python -m isort --check .
           python -m ruff check .
       - name: 'Create env file'
-        run: |
-          echo "${{ secrets.environment }}" > .env
+        run: echo "${{ secrets.environment }}" > .env
       - name: 'Create SSH key'
         run: |
           mkdir -p .ssh
           echo "${{ secrets.ssh_key }}" > .ssh/id_rsa
+      - name: Log in to registry
+        run: |
+          echo "Logging in to ghcr.io..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Pull Triton image
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "Pulling ghcr.io/${{ github.repository_owner }}/$TRITON_IMAGE_NAME:$TRITON_VERSION..."
           docker pull "ghcr.io/${{ github.repository_owner }}/$TRITON_IMAGE_NAME:$TRITON_VERSION"
       - name: Run tests
         uses: isbang/compose-action@v1.5.1
