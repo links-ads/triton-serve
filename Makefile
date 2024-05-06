@@ -71,8 +71,7 @@ release:			## Create a new tag for release.
 	@VER_FILE=$$(find src -maxdepth 2 -type f -name 'version.py' | head -n 1)
 	@echo "Updating version file :\n $${VER_FILE}"
 	@echo __version__ = \""$${TAG}"\" > $${VER_FILE}
-	@$(PY_BIN)/gitchangelog > HISTORY.md
-	@git add $${VER_FILE} HISTORY.md
+	@git add .
 	@git commit -m "release: version v$${TAG} 🚀"
 	@echo "creating git tag : v$${TAG}"
 	@git tag v$${TAG}
