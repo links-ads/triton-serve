@@ -94,19 +94,21 @@ check-profile:			    	## Check if PROFILE is set, if not set it to "gpu", if set
 .PHONY: config
 config: check-target check-profile	## Build the compose project.
 	@echo "Printing config for target: $${TARGET} - profile: $(PROFILE)"
+	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
 	@$(DOCKER_COMPOSE) config $${ARGS}
 
 
 .PHONY: build
 build: check-target check-profile	## Print the compose configuration.
 	@echo "Building images with target: $${TARGET}"
-	echo "launching command $(DOCKER_COMPOSE)"
+	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
 	@$(DOCKER_COMPOSE) build $${ARGS}
 
 
 .PHONY: run
 run: check-target check-profile		## Start the project.
 	@echo "Starting containers with target: $${TARGET}"
+	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
 	@$(DOCKER_COMPOSE) up $${ARGS}
 
 
