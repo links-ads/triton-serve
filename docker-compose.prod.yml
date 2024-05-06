@@ -20,9 +20,9 @@ services:
   traefik:
     ports:
       # The HTTP port
-      - 7500:80
+      - 127.0.0.1:7500:80
       # The Web UI (enabled by --api.insecure=true)
-      - 7520:8080
+      - 127.0.0.1:7520:8080
     volumes:
     # dynamic configurations
       - configs:/etc/traefik/configs
