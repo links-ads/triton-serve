@@ -1,0 +1,28 @@
+name: triton-serve
+
+volumes:
+  configs:
+  models:
+
+x-override: &override
+  volumes:
+    - configs:/var/serve/configs
+    - models:/var/serve/models
+  command: webserver
+
+services:
+  backend:
+    <<: *override
+  
+  backend-cpu:
+    <<: *override
+
+  traefik:
+    ports:
+      # The HTTP port
+      - 7500:80
+      # The Web UI (enabled by --api.insecure=true)
+      - 7520:8080
+    volumes:
+    # dynamic configurations
+      - configs:/etc/traefik/configs
