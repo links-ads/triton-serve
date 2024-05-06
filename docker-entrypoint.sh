@@ -11,7 +11,6 @@ start_webserver() {
     # if TARGET is set and equal to "prod", run the server in production mode using gunicorn
     if [ "$TARGET" = "prod" ]; then
         exec gunicorn -k uvicorn.workers.UvicornWorker \
-            --env SCRIPT_NAME=${API_ROOT_PATH:-/} \
             --log-level=${LOG_LEVEL:-info} \
             --bind "0.0.0.0:5000" \
             --workers ${API_WORKERS:-4} \
@@ -19,7 +18,6 @@ start_webserver() {
     else
         # otherwise, run the server in development mode using uvicorn
         exec uvicorn triton_serve.wsgi:app \
-            --root-path ${API_ROOT_PATH:-/} \
             --log-level=${LOG_LEVEL:-info} \
             --host 0.0.0.0 \
             --port 5000 \

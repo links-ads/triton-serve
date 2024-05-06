@@ -40,6 +40,7 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
         title=settings.api_title,
         version=__version__,
         description=settings.api_description,
+        root_path=settings.api_root_path,
         lifespan=lifespan,
     )
 
