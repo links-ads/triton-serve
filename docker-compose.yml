@@ -7,7 +7,7 @@ x-backend-base: &backend-base
       - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-525.125.06}
       - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
       - PYTHON_VERSION=${PYTHON_VERSION:-3.10.12}
-    image: links/serve-backend:${DOCKER_VERSION_BACKEND:-latest}
+    image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
     hostname: backend
     container_name: serve-backend
     runtime: ${DOCKER_RUNTIME:-runc}
@@ -64,7 +64,7 @@ services:
       dockerfile: Dockerfile
       args:
         - TARGET=${TARGET:-dev}
-    image: links/serve-traefik:${DOCKER_VERSION_TRAEFIK:-latest}
+    image: ghcr.io/links-ads/serve-traefik:${PROJECT_VERSION:-latest}
     command: --api.insecure=true --providers.docker
     container_name: serve-traefik
     volumes:
