@@ -68,7 +68,7 @@ def get_model(
     return model
 
 
-@router.post("/", status_code=201, response_model=list[ModelSchema], tags=["models"])
+@router.post("/", status_code=201, response_model=list[ModelSchema], tags=["models"], operation_id="ModelsFromArchive")
 def create_models_from_archive(
     package: UploadFile = File(...),
     update: bool = Form(False),

@@ -12,14 +12,6 @@ help:				## This help screen
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
 
-.PHONY: show
-show:				## Show the current environment.
-	@echo "Current environment:"
-	@echo "Running using $(PY_BIN)"
-	@$(PY_BIN)/python -V
-	@$(PY_BIN)/python -m site
-
-
 .PHONY: check-venv
 check-venv:			## Check if the virtualenv exists.
 	@if [ "$(PY_BIN)" = "" ]; then echo "No virtualenv detected, create one using 'make virtualenv'"; exit 1; fi
@@ -95,13 +87,19 @@ check-target:				## Check if TARGET variable is set.
 	@ln -sf ./envs/$${TARGET}.env .env
 
 
-check-profile:			    	## Check if profile is set, if not set it to "gpu", if set check if it's either "gpu" or "cpu".
+check-profile:			    	## Check if PROFILE is set, if not set it to "gpu", if set check if it's either "gpu" or "cpu".
 	@if [ -z "$(PROFILE)" ]; then echo "PROFILE is not set, launch it with either 'gpu' or 'cpu'"; exit 1; fi
 	@if [ "$(PROFILE)" != "gpu" ] && [ "$(PROFILE)" != "cpu" ]; then echo "PROFILE must be either 'gpu' or 'cpu'"; exit 1; fi
 
 
+.PHONY: config
+config: check-target check-profile	## Build the compose project.
+	@echo "Printing config for target: $${TARGET} - profile: $(PROFILE)"
+	@$(DOCKER_COMPOSE) config $${ARGS}
+
+
 .PHONY: build
-build: check-target check-profile	## Build the compose project.
+build: check-target check-profile	## Print the compose configuration.
 	@echo "Building images with target: $${TARGET}"
 	echo "launching command $(DOCKER_COMPOSE)"
 	@$(DOCKER_COMPOSE) build $${ARGS}
@@ -118,15 +116,20 @@ stop: check-target check-profile	## Stop the project.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stop $${ARGS}
 
+.PHONY: stats
+stats: check-target check-profile	## Check runtime stats.
+	@echo "Checking stats with target: $${TARGET}"
+	@$(DOCKER_COMPOSE) stats $${ARGS}
+
 
 .PHONY: down
-down: check-target check-profile	## Stop the project eliminating containers, use ARGS="-v" to remove volumes.
+down: check-target check-profile	## Kill the project eliminating containers, use ARGS="-v" to remove volumes.
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
 
 
 .PHONY: migrate
-migrate: check-venv					## Generate migrations.
+migrate: check-venv			## Generate migrations.
 	@echo "Symlinking .env file to local.env"
 	@if [ ! -f ./envs/local.env ]; then echo "File ./envs/local.env does not exist, please create it"; exit 1; fi
 	@ln -sf ./envs/local.env .env
@@ -137,7 +140,7 @@ migrate: check-venv					## Generate migrations.
 
 
 .PHONY: test
-test:				## Run tests.
+test:					## Run tests.
 	@echo "Setting up test environment..."
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
