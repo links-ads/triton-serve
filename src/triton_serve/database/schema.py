@@ -68,6 +68,9 @@ class ServiceBaseSchema(BaseModel):
     container_status: ServiceStatus = ServiceStatus.STARTING
     created_at: datetime
     deleted_at: datetime | None = None
+    cpu_count: int
+    mem_size: int
+    shm_size: int
     models: list[ModelSchema] = []
     devices: list[DeviceSchema] = []
 

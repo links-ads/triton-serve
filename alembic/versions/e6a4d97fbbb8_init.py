@@ -2,7 +2,7 @@
 
 Revision ID: e6a4d97fbbb8
 Revises: 
-Create Date: 2024-05-02 23:00:36.850164
+Create Date: 2024-05-07 15:18:15.335736
 
 """
 from collections.abc import Sequence
@@ -63,10 +63,15 @@ def upgrade() -> None:
         sa.Column("service_image", sa.String(), nullable=False),
         sa.Column("container_id", sa.String(), nullable=True),
         sa.Column(
-            "container_status", sa.Enum("STARTING", "ACTIVE", "ERROR", "STOPPED", name="servicestatus"), nullable=False
+            "container_status",
+            sa.Enum("STARTING", "ACTIVE", "ERROR", "STOPPED", "DELETED", name="servicestatus"),
+            nullable=False,
         ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("cpu_count", sa.Integer(), nullable=False),
+        sa.Column("shm_size", sa.Integer(), nullable=False),
+        sa.Column("mem_size", sa.Integer(), nullable=False),
         sa.PrimaryKeyConstraint("service_id"),
     )
     op.create_index(
@@ -94,7 +99,7 @@ def upgrade() -> None:
             ["model_name", "model_version"], ["models.model_name", "models.model_version"], ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(["service_id"], ["services.service_id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("service_id"),
+        sa.PrimaryKeyConstraint("service_id", "model_name", "model_version", name="service_model"),
     )
     op.create_table(
         "device_mapping",
@@ -102,7 +107,7 @@ def upgrade() -> None:
         sa.Column("device_id", sa.String(), nullable=False),
         sa.ForeignKeyConstraint(["device_id"], ["devices.uuid"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["service_id"], ["services.service_id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("service_id"),
+        sa.PrimaryKeyConstraint("service_id", "device_id", name="service_device"),
     )
     # ### end Alembic commands ###
 

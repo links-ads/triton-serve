@@ -26,6 +26,7 @@ model_mapping = Table(
     Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), primary_key=True),
     Column("model_name", String, nullable=False),
     Column("model_version", Integer, nullable=False),
+    PrimaryKeyConstraint("service_id", "model_name", "model_version", name="service_model"),
     ForeignKeyConstraint(
         ["model_name", "model_version"],
         ["models.model_name", "models.model_version"],
@@ -36,8 +37,9 @@ model_mapping = Table(
 device_mapping = Table(
     "device_mapping",
     Base.metadata,
-    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), primary_key=True),
+    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), nullable=False),
     Column("device_id", String, ForeignKey("devices.uuid", ondelete="CASCADE"), nullable=False),
+    PrimaryKeyConstraint("service_id", "device_id", name="service_device"),
 )
 
 utcnow = partial(datetime.now, tz=timezone.utc)
@@ -96,6 +98,7 @@ class ServiceStatus(enum.Enum):
     ACTIVE = "active"
     ERROR = "error"
     STOPPED = "stopped"
+    DELETED = "deleted"
 
 
 class Service(Base):
@@ -107,6 +110,9 @@ class Service(Base):
     container_status = Column(Enum(ServiceStatus), nullable=False, default=ServiceStatus.STARTING)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True, default=None)
+    cpu_count = Column(Integer, nullable=False)
+    shm_size = Column(Integer, nullable=False)
+    mem_size = Column(Integer, nullable=False)
     models = relationship("Model", secondary=model_mapping, backref="services")
     devices = relationship("Device", secondary=device_mapping, backref="services")
 
