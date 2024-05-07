@@ -12,20 +12,20 @@ LOG = logging.getLogger(pytest.__name__)
 
 @pytest.mark.order(after="test_api_key.py::test_api_key_authorized")
 @pytest.mark.parametrize(
-    "name, models, gpu_requested",
+    "name, models, resources",
     [
-        ("trt-srv_test_svc1", [{"name": "ensemble", "version": 2}], 1),
-        ("trt-srv_test_svc3", [{"name": "ensemble", "version": 2}], 0),
-        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], 0),
+        ("trt-srv_test_svc1", [{"name": "ensemble", "version": 2}], {"gpus": 1, "shm_size": 256, "mem_size": 4096}),
+        ("trt-srv_test_svc3", [{"name": "ensemble", "version": 2}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}),
+        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}),
     ],
 )
-def test_create_service(test_client, test_docker, test_db, name, models, gpu_requested):
+def test_create_service(test_client, test_docker, test_db, name, models, resources):
     # get the devices to also check creation when no GPU is available
     devices = set(test_db.query(Device.uuid).all())
 
-    response = test_client.post("/services", json={"name": name, "models": models, "gpus": gpu_requested})
+    response = test_client.post("/services", json={"name": name, "models": models, "resources": resources})
     LOG.debug(f"response: {response.text}")
-    if gpu_requested and not devices:
+    if resources["gpus"] and not devices:
         assert response.status_code == 409
     else:
         assert response.status_code == 201
@@ -40,7 +40,7 @@ def test_create_service(test_client, test_docker, test_db, name, models, gpu_req
         service = test_db.get(Service, ident=data["service_id"])
         assert service.service_name == name
         LOG.debug(f"assigned device: {service.devices}")
-        if gpu_requested:
+        if resources["gpus"]:
             assert service.devices is not None
         else:
             assert not service.devices

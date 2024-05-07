@@ -23,7 +23,7 @@ from triton_serve.database.manage import Base
 model_mapping = Table(
     "model_mapping",
     Base.metadata,
-    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), primary_key=True),
+    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE")),
     Column("model_name", String, nullable=False),
     Column("model_version", Integer, nullable=False),
     PrimaryKeyConstraint("service_id", "model_name", "model_version", name="service_model"),
