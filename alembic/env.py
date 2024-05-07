@@ -74,10 +74,8 @@ def run_migrations_online() -> None:
             # sleep an increasing amount of time
             print(f"Failed to connect to database: {e}")
             print(f"Retrying connection... Attempt {i + 1} of 3")
-            seconds = 2**i
+            seconds = 2 ** (i + 1)
             sleep(seconds)
-        else:
-            raise
 
 
 if context.is_offline_mode():

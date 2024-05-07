@@ -8,6 +8,7 @@ from docker.types import DeviceRequest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from triton_serve.api.dto import ServiceResources
 from triton_serve.api.models.domain import get_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -142,6 +143,7 @@ def spawn_service_container(
     worker_network: str,
     worker_volume: str,
     models: list[Model],
+    resources: ServiceResources,
     devices: list = None,
     environment: dict[str, str] = None,
 ):
@@ -156,6 +158,7 @@ def spawn_service_container(
         worker_network (str): The name of the docker network to use.
         worker_volume (str): The path to the model repository, or a volume name.
         models (list[str]): The list of models to load.
+        resources (ServiceResources): The resources to use for the container.
         devices (list[str], optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
 
@@ -202,6 +205,9 @@ def spawn_service_container(
         restart_policy={"Name": "unless-stopped"},
         runtime=runtime,
         device_requests=gpus,
+        nano_cpus=int(resources.cpu_count * 1e9),
+        mem_limit=f"{resources.mem_size}m",
+        shm_size=f"{resources.shm_size}m",
     )
     return container.id
 
@@ -213,15 +219,22 @@ def persist_service(
     models: list,
     devices: list,
     created_at: str,
+    cpu_count: int,
+    mem_size: int,
+    shm_size: int,
 ) -> Service:
     """
     Save the service on the database
 
     Args:
         service_name (str): the name of the service to save
+        service_image (str): the image of the service
         models list(str): the list of models to load in the service
         devices list(str): the list of devices to use in the service
         created_at (int): the timestamp of the creation of the service
+        cpu_count (int): the number of cpus to use
+        mem_size (int): the memory size to use in MB
+        shm_size (int): the shared memory size to use in MB
         db (Session): the database session object
 
     Returns:
@@ -236,6 +249,9 @@ def persist_service(
         service_name=service_name,
         service_image=service_image,
         created_at=created_at,
+        cpu_count=cpu_count,
+        mem_size=mem_size,
+        shm_size=shm_size,
     )
     db_service = Service(**service.model_dump())
     db_service.models.extend(models)
@@ -255,9 +271,9 @@ def create_service(
     service_models_volume: Path,
     service_url_prefix: str,
     service_environment: dict[str, str],
+    service_resources: ServiceResources,
     service_api_keys: list[str],
     model_infos: list,
-    gpu_count: int,
 ) -> Service:
     """Creates a triton docker container loading the models specified in the models list.
 
@@ -302,10 +318,10 @@ def create_service(
     try:
         # retrieve the required amount of available gpus, if requested
         device_infos = []
-        if gpu_count > 0:
-            device_infos = get_free_devices(db, count=gpu_count)
+        if service_resources.gpus > 0:
+            device_infos = get_free_devices(db, count=service_resources.gpus)
             assert device_infos, "No GPU available"
-            assert len(device_infos) == gpu_count, f"Not enough GPUs available: {len(device_infos)}"
+            assert len(device_infos) == service_resources.gpus, f"Not enough GPUs available: {len(device_infos)}"
         timestamp = datetime.now(tz=timezone.utc)
         # persist the service on the database (do not comit yet to avoid inconsistencies)
         service = persist_service(
@@ -315,6 +331,9 @@ def create_service(
             models=model_instances,
             devices=device_infos,
             created_at=timestamp,
+            cpu_count=service_resources.cpu_count,
+            mem_size=service_resources.mem_size,
+            shm_size=service_resources.shm_size,
         )
         # spawn the worker container, and save the container id on the database
         container_id = spawn_service_container(
@@ -324,6 +343,7 @@ def create_service(
             worker_network=service_network,
             models=model_instances,
             devices=device_infos,
+            resources=service_resources,
             worker_volume=service_models_volume,
             environment=service_environment,
         )
@@ -381,6 +401,7 @@ def delete_service(
         raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}") from e
 
     service.deleted_at = datetime.now(tz=timezone.utc)
+    service.container_status = ServiceStatus.DELETED
     traefik.delete(service_name=service.service_name)
     db.commit()
     db.refresh(service)
