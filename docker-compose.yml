@@ -24,10 +24,10 @@ x-backend-base: &backend-base
       - .env
     labels:
       - traefik.enable=true
-      - traefik.http.routers.serve-backend.rule=PathPrefix(`/serve`)
+      - traefik.http.routers.serve-backend.rule=PathPrefix(`/api`)
       - traefik.http.routers.serve-backend.entrypoints=http
       - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
-      - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/serve
+      - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/api
     depends_on:
       database:
         condition: service_healthy
@@ -74,7 +74,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 5
-  
+
   sablier:
     image: acouvreur/sablier:1.4.0
     container_name: serve-sablier
