@@ -38,7 +38,7 @@ def list_services(
     """
     statement = db.query(Service)
     if names:
-        statement = statement.filter(Service.name.in_(names))
+        statement = statement.filter(Service.service_name.in_(names))
     if statuses:
         statement = statement.filter(Service.container_status.in_(statuses))
     services = statement.all()
