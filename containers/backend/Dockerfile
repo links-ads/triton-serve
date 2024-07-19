@@ -47,8 +47,8 @@ RUN cd /usr/local/python/bin && \
 # Install git and SSH keys for private repositories
 COPY .ssh /root/.ssh
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    openssh-client && \
+    git git-lfs openssh-client && \
+    git lfs install && \
     chmod 600 /root/.ssh/id_rsa && \
     ssh-keyscan github.com >> /root/.ssh/known_hosts && \
     ssh-keyscan hf.co >> /root/.ssh/known_hosts
