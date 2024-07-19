@@ -111,7 +111,6 @@ def create_service(
 @router.delete("/services/{service_id}", status_code=202, tags=["services"], response_model=ServiceSchema)
 def delete_service(
     service_id: int,
-    delete_container: bool = Query(False),
     docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
@@ -121,7 +120,6 @@ def delete_service(
 
     **Arguments:**
     - `service_id` (`int`): The id of the service to be deleted.
-    - `delete_container` (`bool`, optional): Whether to delete the container or not. Defaults to `False`.
 
     **Returns:**
     - `None`
@@ -131,5 +129,4 @@ def delete_service(
         client=docker,
         traefik=traefik,
         service_id=service_id,
-        delete_container=delete_container,
     )
