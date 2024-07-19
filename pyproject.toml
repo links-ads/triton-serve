@@ -44,7 +44,7 @@ test = [
     "pytest-cov >= 4.1.0, < 5",
     "pytest-dependency >= 0.5.1, < 1",
     "pytest-order >= 1.2.0, < 2",
-    "requests >= 2.31.0, < 3",
+    "requests >= 2.32.0, < 3",
 ]
 
 # Uncomment this section if you intend to use the package as a CLI.
