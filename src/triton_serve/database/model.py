@@ -7,6 +7,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -32,14 +33,6 @@ model_mapping = Table(
         ["models.model_name", "models.model_version"],
         ondelete="CASCADE",
     ),
-)
-
-device_mapping = Table(
-    "device_mapping",
-    Base.metadata,
-    Column("service_id", Integer, ForeignKey("services.service_id", ondelete="CASCADE"), nullable=False),
-    Column("device_id", String, ForeignKey("devices.uuid", ondelete="CASCADE"), nullable=False),
-    PrimaryKeyConstraint("service_id", "device_id", name="service_device"),
 )
 
 utcnow = partial(datetime.now, tz=timezone.utc)
@@ -91,6 +84,20 @@ class Device(Base):
     index = Column(Integer, nullable=False)
     host_id = Column(Integer, ForeignKey("machines.host_id"), nullable=False)
     machine = relationship("Machine", back_populates="devices")
+    allocations = relationship("DeviceAllocation", back_populates="device")
+
+
+class DeviceAllocation(Base):
+    __tablename__ = "device_allocations"
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String, ForeignKey("devices.uuid"))
+    service_id = Column(Integer, ForeignKey("services.service_id"))
+    allocation_percentage = Column(Float, nullable=False)
+    allocated_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    deallocated_at = Column(DateTime(timezone=True), default=None, nullable=True)
+
+    device = relationship("Device", back_populates="allocations")
+    service = relationship("Service", back_populates="devices")
 
 
 class ServiceStatus(enum.Enum):
@@ -113,7 +120,8 @@ class Service(Base):
     cpu_count = Column(Integer, nullable=False)
     shm_size = Column(Integer, nullable=False)
     mem_size = Column(Integer, nullable=False)
+
     models = relationship("Model", secondary=model_mapping, backref="services")
-    devices = relationship("Device", secondary=device_mapping, backref="services")
+    devices = relationship("DeviceAllocation", back_populates="service")
 
     __table_args__ = (Index("service_name_idx", "service_name", unique=True, postgresql_where=(deleted_at.is_(None))),)

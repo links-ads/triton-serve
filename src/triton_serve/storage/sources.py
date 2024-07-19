@@ -69,28 +69,20 @@ class RepositoryModelSource(ModelSource):
         self.url = url
         self.target_dir = target_dir or "model_repository"
 
-    def _sparse_checkout(self, url: str, path: Path, subdirs: list[str]):
-        """Sparse checkout a git repository."""
-        subprocess.run(["git", "clone", "--no-checkout", url, str(path)], check=True)
-        for subdir in subdirs:
-            subprocess.run(["git", "sparse-checkout", "set", subdir], cwd=path, check=True)
-        subprocess.run(["git", "checkout"], cwd=path, check=True)
-        subprocess.run(["git", "reset", "--hard"], cwd=path, check=True)
-        subprocess.run(["git", "clean", "-fd"], cwd=path, check=True)
-        subprocess.run(["rm", "-rf", str(path / ".git")], check=True)
-
     def origin(self) -> str:
         return self.url
 
     def extract(self, path: Path) -> Path:
-        """Expects a git repository URL and extracts the model repository folder.
+        """Clones the git repository and pulls LFS files.
 
         Args:
-            path (Path): Path to the repository.
+            path (Path): Path where to clone the repository.
 
         Returns:
             Path: Path to the extracted model repository.
         """
-        temp_path = path / self.target_dir
-        self._sparse_checkout(self.url, path, [self.target_dir])
-        return temp_path
+        target_path = path / self.target_dir
+        subprocess.run(["git", "clone", self.url, str(path)], check=True)
+        subprocess.run(["git", "lfs", "pull"], cwd=path, check=True)
+        subprocess.run(["rm", "-rf", str(path / ".git")], check=True)
+        return target_path

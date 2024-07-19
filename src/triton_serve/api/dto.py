@@ -2,14 +2,24 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ModelInfo(BaseModel):
-    name: str
-    version: int
+    name: str = Field(min_length=1, max_length=255, description="Model name")
+    version: int = Field(ge=1, description="Model version")
 
 
 class ModelUpdateBody(BaseModel):
-    name: str | None = None
-    version: int | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    version: int | None = Field(default=None, ge=1)
     source: str | None = None
+
+    @classmethod
+    @field_validator("name")
+    def validate_name(cls, v):
+        if v is not None:
+            if not v.strip():
+                raise ValueError("Name cannot be empty or just whitespace")
+            if not v.isascii():
+                raise ValueError("Name must contain only ASCII characters")
+        return v
 
 
 class ServiceResources(BaseModel):
@@ -18,8 +28,8 @@ class ServiceResources(BaseModel):
     mem_size: int = Field(gt=0, le=65536, default=4096, description="Memory size in MB")
     cpu_count: int = Field(gt=0, default=2, description="Number of CPUs")
 
-    @field_validator("shm_size", "mem_size", mode="before")
     @classmethod
+    @field_validator("shm_size", "mem_size", mode="before")
     def validate_units(cls, value: int | str) -> int:
         if isinstance(value, str):
             value = value.upper()

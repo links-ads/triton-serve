@@ -1,7 +1,7 @@
 """populate
 
 Revision ID: 48ee7ea316c5
-Revises: e6a4d97fbbb8
+Revises: af7db8f0dc88
 Create Date: 2023-12-22 10:58:21.040444
 
 """
@@ -17,7 +17,7 @@ from triton_serve.database.model import Device, Machine
 
 # revision identifiers, used by Alembic.
 revision: str = "48ee7ea316c5"
-down_revision: str | None = "e6a4d97fbbb8"
+down_revision: str | None = "af7db8f0dc88"
 branch_labels: str | (Sequence[str] | None) = None
 depends_on: str | (Sequence[str] | None) = None
 log = logging.getLogger("uvicorn")

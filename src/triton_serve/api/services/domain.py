@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
@@ -6,6 +7,7 @@ from docker import DockerClient
 from docker.errors import APIError, ImageNotFound, NotFound
 from docker.types import DeviceRequest
 from fastapi import HTTPException
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceResources
@@ -13,13 +15,15 @@ from triton_serve.api.models.domain import get_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
     Device,
+    DeviceAllocation,
     Model,
     Service,
     ServiceStatus,
-    device_mapping,
 )
 from triton_serve.database.schema import ServiceCreateSchema
 from triton_serve.storage import ModelStorage
+
+LOG = logging.getLogger("uvicorn")
 
 
 def list_services(
@@ -61,20 +65,48 @@ def get_service(db: Session, docker_client: DockerClient, service_id: int):
     return service
 
 
-def get_free_devices(db: Session, count: int) -> list[Device]:
-    """Returns a list of available devices, depending on availability.
-    A device is available if it is not assigned to any service in the `device_mapping` table.
+def get_available_devices(db: Session, count: int, required_percentage: float = 100.0) -> list[Device]:
+    """
+    Returns a list of available devices, considering the allocation percentage.
 
     Args:
         db (Session): The database session.
-        count (int): The number of GPUs to return.
+        count (int): The number of devices to return.
+        required_percentage (float): The required percentage of allocation for each device.
+                                     Defaults to 100.0 (full allocation).
 
     Returns:
-        list[Device]: The list of available GPUs.
+        list[Device]: A list of available devices.
     """
-    statement = db.query(Device).outerjoin(device_mapping).filter(device_mapping.c.device_id.is_(None))
-    devices = statement.limit(count).all()
-    return devices
+    # Subquery to calculate the total allocation percentage for each device
+    alloc_subquery = (
+        select(
+            DeviceAllocation.device_id,
+            func.coalesce(func.sum(DeviceAllocation.allocation_percentage), 0).label("total_allocation"),
+        )
+        .where(DeviceAllocation.deallocated_at is None)
+        .group_by(DeviceAllocation.device_id)
+        .subquery()
+    )
+
+    # Main query to select available devices
+    query = (
+        select(Device)
+        .outerjoin(alloc_subquery, Device.uuid == alloc_subquery.c.device_id)
+        .where(
+            or_(
+                alloc_subquery.c.total_allocation is None,  # Devices with no allocations
+                (
+                    100 - alloc_subquery.c.total_allocation
+                    >= required_percentage  # Devices with enough free allocation
+                ),
+            )
+        )
+        .order_by(func.coalesce(alloc_subquery.c.total_allocation, 0))  # Order by least allocated first
+        .limit(count)
+    )
+
+    return db.scalars(query).all()
 
 
 def get_service_image(docker_client: DockerClient, image_name: str):
@@ -217,7 +249,6 @@ def persist_service(
     service_name: str,
     service_image: str,
     models: list,
-    devices: list,
     created_at: str,
     cpu_count: int,
     mem_size: int,
@@ -230,7 +261,6 @@ def persist_service(
         service_name (str): the name of the service to save
         service_image (str): the image of the service
         models list(str): the list of models to load in the service
-        devices list(str): the list of devices to use in the service
         created_at (int): the timestamp of the creation of the service
         cpu_count (int): the number of cpus to use
         mem_size (int): the memory size to use in MB
@@ -255,8 +285,8 @@ def persist_service(
     )
     db_service = Service(**service.model_dump())
     db_service.models.extend(models)
-    db_service.devices.extend(devices)
     db.add(db_service)
+    db.flush()  # flush to get the service_id
     return db_service
 
 
@@ -287,9 +317,9 @@ def create_service(
         service_models_volume (Path): The path to the model repository, or a volume name.
         service_url_prefix (str): The url prefix to use for the service.
         service_environment (dict[str, str]): The environment variables to pass to the container (if any).
+        service_resources (`ServiceResources`): The resources to use for the container.
         service_api_keys (list[str]): The list of api keys to use for the service.
         model_infos (list[str]): The list of models to load.
-        gpu_count (int): how many gpus to use, defaults to 0.
 
     Returns:
         `service` (`ServiceCreateSchema`): The created service.
@@ -299,7 +329,6 @@ def create_service(
     """
     # assert that the docker image exists, or it can be pulled
     assert image_name, "No image specified"
-    print(f"Creating service {service_name} with image {image_name}")
     image_id = get_service_image(client, image_name)
 
     # check if the models specified exist
@@ -319,22 +348,35 @@ def create_service(
         # retrieve the required amount of available gpus, if requested
         device_infos = []
         if service_resources.gpus > 0:
-            device_infos = get_free_devices(db, count=service_resources.gpus)
-            assert device_infos, "No GPU available"
-            assert len(device_infos) == service_resources.gpus, f"Not enough GPUs available: {len(device_infos)}"
-        timestamp = datetime.now(tz=timezone.utc)
+            device_infos = get_available_devices(db, count=service_resources.gpus)
+            if len(device_infos) < service_resources.gpus:
+                raise AssertionError(
+                    f"Not enough GPUs available. Requested: {service_resources.gpus}, Available: {len(device_infos)}"
+                )
+
+        curr_timestamp = datetime.now(tz=timezone.utc)
         # persist the service on the database (do not comit yet to avoid inconsistencies)
         service = persist_service(
             db=db,
             service_name=service_name,
             service_image=image_name,  # for readability
             models=model_instances,
-            devices=device_infos,
-            created_at=timestamp,
+            created_at=curr_timestamp,
             cpu_count=service_resources.cpu_count,
             mem_size=service_resources.mem_size,
             shm_size=service_resources.shm_size,
         )
+
+        # create allocation entries
+        for device in device_infos:
+            allocation = DeviceAllocation(
+                device_id=device.uuid,
+                service_id=service.service_id,
+                allocation_percentage=1.0,
+                allocated_at=curr_timestamp,
+            )
+            db.add(allocation)
+
         # spawn the worker container, and save the container id on the database
         container_id = spawn_service_container(
             client=client,
@@ -347,6 +389,7 @@ def create_service(
             worker_volume=service_models_volume,
             environment=service_environment,
         )
+
         # update the service, and the traefik config, then commit
         service.container_id = container_id
         traefik.add(
@@ -357,10 +400,16 @@ def create_service(
         db.commit()
         db.refresh(service)
         return service
+
     except AssertionError as e:
+        db.rollback()
         raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
     except APIError as e:
+        db.rollback()
         raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {str(e)}") from e
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Unexpected error creating service: {str(e)}") from e
 
 
 def delete_service(
@@ -368,41 +417,71 @@ def delete_service(
     client: DockerClient,
     traefik: TraefikConfigManager,
     service_id: int,
-    delete_container: bool = False,
 ) -> Service:
-    """Deletes a triton docker container and the traefik config for the service.
+    """
+    Deletes a triton docker container and the traefik config for the service.
+    Marks the service as deleted, deallocates associated devices, and removes the Docker container.
 
     Args:
         db (Session): The database session.
         client (DockerClient): The docker client.
         traefik (TraefikConfigManager): The traefik config manager.
         service_id (int): The ID of the service.
-        delete_container (bool, optional): Whether to delete the container or not. Defaults to False.
 
     Returns:
-        `None`
+        Service: The deleted service.
 
     Raises:
-        HTTPException: If the container could not be deleted.
+        HTTPException: If the service doesn't exist or if there's an error during deletion.
     """
-    # check if service exists
-    if (service := get_service(db=db, docker_client=client, service_id=service_id)) is None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
-    # check if the container exists, if not make sure to mark the service as deleted
     try:
-        if service.container_id is not None:
-            if container := client.containers.get(service.container_id):
-                container.stop()
-                if delete_container:
-                    container.remove()
-    except APIError as e:
-        service.deleted_at = datetime.now(tz=timezone.utc)
-        db.commit()  # commit the deletion of the service, regardless of the container
-        raise HTTPException(status_code=e.status_code, detail=f"Error deleting service: {e}") from e
+        # check if service exists
+        if (service := get_service(db=db, docker_client=client, service_id=service_id)) is None:
+            raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
 
-    service.deleted_at = datetime.now(tz=timezone.utc)
-    service.container_status = ServiceStatus.DELETED
-    traefik.delete(service_name=service.service_name)
-    db.commit()
-    db.refresh(service)
-    return service
+        current_time = datetime.now(tz=timezone.utc)
+
+        # Handle the Docker container
+        if service.container_id:
+            try:
+                container = client.containers.get(service.container_id)
+                container.remove(force=True)  # This stops and removes the container
+            except NotFound:
+                LOG.warning(f"Container for service {service_id} not found. It may have been already removed.")
+            except APIError as e:
+                LOG.error(f"Error removing Docker container for service {service_id}: {str(e)}")
+                # We'll continue with service deletion but include this info in the response
+                service.container_status = ServiceStatus.ERROR
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error removing Docker container: {str(e)}."
+                    "Service marked as deleted but container may still exist.",
+                )
+
+        # Update service status
+        service.deleted_at = current_time
+        service.container_status = ServiceStatus.DELETED
+        service.container_id = None  # Clear the container ID as it's been removed
+
+        # Mark device allocations as deallocated
+        for allocation in service.devices:
+            if allocation.deallocated_at is None:
+                allocation.deallocated_at = current_time
+
+        # Remove traefik config
+        try:
+            traefik.delete(service_name=service.service_name)
+        except Exception as e:
+            LOG.error(f"Error removing Traefik config for service {service_id}: {str(e)}")
+
+        # Commit the changes
+        db.commit()
+        db.refresh(service)
+        return service
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        LOG.exception(f"Unexpected error while deleting service {service_id}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error deleting service: {str(e)}")
