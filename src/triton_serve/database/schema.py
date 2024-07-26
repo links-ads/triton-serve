@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from triton_serve.database.model import ModelType, ServiceStatus
 
@@ -24,17 +24,32 @@ class MachineSchema(MachineBaseSchema):
     host_id: int
 
 
+class DeviceBaseSchema(BaseModel):
+    uuid: str
+    name: str
+    memory: int
+    index: int
+
+
+class DeviceCreateSchema(DeviceBaseSchema):
+    host_id: int
+
+
+class DeviceSchema(DeviceBaseSchema):
+    model_config = ConfigDict(from_attributes=True)
+    host_id: int
+
+
 class ModelBaseSchema(BaseModel):
-    # remove constraints on model_ variables
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
     model_version: int
     model_type: ModelType
     model_uri: str
-    created_at: datetime = timezone_aware_now()
-    updated_at: datetime = timezone_aware_now()
-    source: str | None
-    dependencies: list[str] | None = None
+    created_at: datetime = Field(default_factory=timezone_aware_now)
+    updated_at: datetime = Field(default_factory=timezone_aware_now)
+    source: str | None = None
+    dependencies: list | None = Field(default_factory=list)
 
 
 class ModelCreateSchema(ModelBaseSchema):
@@ -45,20 +60,16 @@ class ModelSchema(ModelBaseSchema):
     model_config = ConfigDict(from_attributes=True)
 
 
-class DeviceBaseSchema(BaseModel):
-    uuid: str
-    name: str
-    memory: int
-    index: int
+class ServiceResourcesSchema(BaseModel):
+    cpu_count: int = Field(gt=0)
+    shm_size: int = Field(gt=0)
+    mem_size: int = Field(gt=0)
+    environment_variables: dict | None = None
 
 
-class DeviceCreateSchema(DeviceBaseSchema):
-    pass
-
-
-class DeviceSchema(DeviceBaseSchema):
-    model_config = ConfigDict(from_attributes=True)
-    host_id: int
+class DeviceAllocationSchema(BaseModel):
+    device_id: str
+    allocation_percentage: float = Field(gt=0, le=100)
 
 
 class ServiceBaseSchema(BaseModel):
@@ -66,13 +77,14 @@ class ServiceBaseSchema(BaseModel):
     service_image: str
     container_id: str | None = None
     container_status: ServiceStatus = ServiceStatus.STARTING
-    created_at: datetime
+    created_at: datetime = Field(default_factory=timezone_aware_now)
     deleted_at: datetime | None = None
-    cpu_count: int
-    mem_size: int
-    shm_size: int
+    inactivity_timeout: int = Field(default=3600, ge=0)
+    priority: int = Field(default=0, ge=0)
+    last_active_time: datetime | None = None
+    resources: ServiceResourcesSchema
     models: list[ModelSchema] = []
-    devices: list[DeviceSchema] = []
+    device_allocations: list[DeviceAllocationSchema] = []
 
 
 class ServiceCreateSchema(ServiceBaseSchema):

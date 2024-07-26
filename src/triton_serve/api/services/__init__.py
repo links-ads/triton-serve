@@ -102,6 +102,8 @@ def create_service(
         service_models_volume=settings.service_volume,
         service_environment=service_params.environment,
         service_resources=service_params.resources,
+        service_timeout=service_params.timeout,
+        service_priority=service_params.priority,
         service_api_keys=settings.api_keys,
         model_infos=service_params.models,
         db=db,

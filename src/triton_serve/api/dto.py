@@ -22,7 +22,7 @@ class ModelUpdateBody(BaseModel):
         return v
 
 
-class ServiceResources(BaseModel):
+class ServiceCreateResources(BaseModel):
     gpus: int = Field(ge=0, default=0, description="Number of GPUs")
     shm_size: int = Field(gt=0, le=65536, default=256, description="Shared memory size in MB")
     mem_size: int = Field(gt=0, le=65536, default=4096, description="Memory size in MB")
@@ -46,7 +46,9 @@ class ServiceCreateBody(BaseModel):
     models: list[ModelInfo]
     docker_image: str | None = None
     environment: dict[str, str] | None = None
-    resources: ServiceResources = ServiceResources()
+    timeout: int | None = 3600  # in seconds
+    priority: int | None = 1  # higher number means higher priority
+    resources: ServiceCreateResources = ServiceCreateResources()
 
     @field_validator("name")
     @classmethod

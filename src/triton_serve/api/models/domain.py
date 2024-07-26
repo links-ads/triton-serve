@@ -27,7 +27,6 @@ def get_model(db: Session, storage: ModelStorage, model_name: str, model_version
     Returns:
         ModelSchema: Returns the requested ModelSchema instance if found, or None otherwise.
     """
-    LOG.debug(f"Retrieving model {model_name}:{model_version}")
     model = db.query(Model).filter(Model.model_name == model_name, Model.model_version == model_version).first()
     if model is not None:
         assert storage.exists(model), f"Model URI {model.model_uri} does not exist"

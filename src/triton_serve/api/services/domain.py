@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceResources
+from triton_serve.api.dto import ServiceCreateResources
 from triton_serve.api.models.domain import get_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -18,9 +18,9 @@ from triton_serve.database.model import (
     DeviceAllocation,
     Model,
     Service,
+    ServiceResources,
     ServiceStatus,
 )
-from triton_serve.database.schema import ServiceCreateSchema
 from triton_serve.storage import ModelStorage
 
 LOG = logging.getLogger("uvicorn")
@@ -84,7 +84,8 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
             DeviceAllocation.device_id,
             func.coalesce(func.sum(DeviceAllocation.allocation_percentage), 0).label("total_allocation"),
         )
-        .where(DeviceAllocation.deallocated_at is None)
+        .join(Service, DeviceAllocation.service_id == Service.service_id)
+        .where(Service.deleted_at.is_(None))
         .group_by(DeviceAllocation.device_id)
         .subquery()
     )
@@ -95,7 +96,7 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
         .outerjoin(alloc_subquery, Device.uuid == alloc_subquery.c.device_id)
         .where(
             or_(
-                alloc_subquery.c.total_allocation is None,  # Devices with no allocations
+                alloc_subquery.c.total_allocation.is_(None),  # Devices with no allocations
                 (
                     100 - alloc_subquery.c.total_allocation
                     >= required_percentage  # Devices with enough free allocation
@@ -140,8 +141,6 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
         docker_client (DockerClient): The docker client.
         service (Service): The service to check.
     """
-    if service is None:
-        return None
     try:
         container = docker_client.containers.get(service.container_id)
         if container.status == "exited" and service.container_status not in (
@@ -175,7 +174,7 @@ def spawn_service_container(
     worker_network: str,
     worker_volume: str,
     models: list[Model],
-    resources: ServiceResources,
+    resources: ServiceCreateResources,
     devices: list = None,
     environment: dict[str, str] = None,
 ):
@@ -190,7 +189,7 @@ def spawn_service_container(
         worker_network (str): The name of the docker network to use.
         worker_volume (str): The path to the model repository, or a volume name.
         models (list[str]): The list of models to load.
-        resources (ServiceResources): The resources to use for the container.
+        resources (ServiceCreateResources): The resources to use for the container.
         devices (list[str], optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
 
@@ -208,7 +207,6 @@ def spawn_service_container(
     environment = environment or {}
     dependencies_list = list(chain.from_iterable([model.dependencies for model in models]))
     environment["WORKER_REQUIREMENTS"] = " ".join(dependencies_list) if dependencies_list else ""
-    print(f"Spawning container {worker_name} with requirements {environment['WORKER_REQUIREMENTS']}")
 
     # prepare the list of models to load
     triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
@@ -244,50 +242,124 @@ def spawn_service_container(
     return container.id
 
 
-def persist_service(
-    db: Session,
-    service_name: str,
-    service_image: str,
-    models: list,
-    created_at: str,
-    cpu_count: int,
-    mem_size: int,
-    shm_size: int,
-) -> Service:
+def validate_models(db: Session, storage: ModelStorage, model_infos: list) -> list:
     """
-    Save the service on the database
+    Validates the existence of specified models in the database.
 
     Args:
-        service_name (str): the name of the service to save
-        service_image (str): the image of the service
-        models list(str): the list of models to load in the service
-        created_at (int): the timestamp of the creation of the service
-        cpu_count (int): the number of cpus to use
-        mem_size (int): the memory size to use in MB
-        shm_size (int): the shared memory size to use in MB
-        db (Session): the database session object
+        db (Session): The database session.
+        storage (ModelStorage): The model storage manager.
+        model_infos (list): List of model information to validate.
 
     Returns:
-        Service: the created service
+        list: List of validated model instances.
 
     Raises:
-        ValueError: if no gpu is available
-
+        HTTPException: If a specified model does not exist.
     """
+    model_instances = []
+    for model_info in model_infos:
+        model = get_model(
+            db=db,
+            model_name=model_info.name,
+            model_version=model_info.version,
+            storage=storage,
+        )
+        assert model is not None, f"Model <{model_info}> does not exist"
+        model_instances.append(model)
+    return model_instances
 
-    service = ServiceCreateSchema(
+
+def get_available_gpus(db: Session, required_gpus: int) -> list:
+    """
+    Retrieves available GPUs based on the required amount.
+
+    Args:
+        db (Session): The database session.
+        required_gpus (int): The number of GPUs required.
+
+    Returns:
+        list: List of available GPU devices.
+
+    Raises:
+        AssertionError: If not enough GPUs are available.
+    """
+    if required_gpus > 0:
+        device_infos = get_available_devices(db, count=required_gpus)
+        if len(device_infos) < required_gpus:
+            raise AssertionError(
+                f"Not enough GPUs available. Requested: {required_gpus}, Available: {len(device_infos)}"
+            )
+        return device_infos
+    return []
+
+
+def create_service_entry(
+    db: Session,
+    service_name: str,
+    image_name: str,
+    service_timeout: int,
+    service_priority: int,
+    service_resources: ServiceCreateResources,
+    service_environment: dict,
+    model_instances: list,
+) -> Service:
+    """
+    Creates a new service entry in the database.
+
+    Args:
+        db (Session): The database session.
+        service_name (str): The name of the service.
+        image_name (str): The name of the Docker image.
+        service_timeout (int): The timeout for the service.
+        service_priority (int): The priority for the service.
+        service_resources (ServiceResources): The resources allocated to the service.
+        service_environment (dict): The environment variables for the service.
+        model_instances (list): The list of model instances associated with the service.
+
+    Returns:
+        Service: The created service entry.
+    """
+    service = Service(
         service_name=service_name,
-        service_image=service_image,
-        created_at=created_at,
-        cpu_count=cpu_count,
-        mem_size=mem_size,
-        shm_size=shm_size,
+        service_image=image_name,
+        inactivity_timeout=service_timeout,
+        priority=service_priority,
+        container_status=ServiceStatus.STARTING,
+        created_at=datetime.now(tz=timezone.utc),
     )
-    db_service = Service(**service.model_dump())
-    db_service.models.extend(models)
-    db.add(db_service)
-    db.flush()  # flush to get the service_id
-    return db_service
+    service.models.extend(model_instances)
+
+    resources = ServiceResources(
+        cpu_count=service_resources.cpu_count,
+        mem_size=service_resources.mem_size,
+        shm_size=service_resources.shm_size,
+        environment_variables=service_environment,
+    )
+    service.resources = resources
+
+    db.add(service)
+    db.flush()
+    return service
+
+
+def create_device_allocations(db: Session, service_id: int, device_infos: list):
+    """
+    Creates device allocation entries for a service.
+
+    Args:
+        db (Session): The database session.
+        service_id (int): The ID of the service.
+        device_infos (list): List of device information to allocate.
+    """
+    for device in device_infos:
+        allocation = DeviceAllocation(
+            device_id=device.uuid,
+            service_id=service_id,
+            allocation_percentage=1.0,
+            allocated_at=datetime.now(tz=timezone.utc),
+        )
+        db.add(allocation)
 
 
 def create_service(
@@ -301,102 +373,82 @@ def create_service(
     service_models_volume: Path,
     service_url_prefix: str,
     service_environment: dict[str, str],
-    service_resources: ServiceResources,
+    service_resources: ServiceCreateResources,
+    service_timeout: int,
+    service_priority: int,
     service_api_keys: list[str],
     model_infos: list,
 ) -> Service:
-    """Creates a triton docker container loading the models specified in the models list.
+    """
+    Creates a Triton docker container loading the specified models.
 
     Args:
         db (Session): The database session.
-        client (DockerClient): The docker client.
-        traefik (TraefikConfigManager): The traefik config manager.
+        client (DockerClient): The Docker client.
+        traefik (TraefikConfigManager): The Traefik config manager.
+        storage (ModelStorage): The model storage manager.
         service_name (str): The name of the service.
-        image_name (str): The name of the docker image to use.
-        service_network (str): The name of the docker network to use.
-        service_models_volume (Path): The path to the model repository, or a volume name.
-        service_url_prefix (str): The url prefix to use for the service.
-        service_environment (dict[str, str]): The environment variables to pass to the container (if any).
-        service_resources (`ServiceResources`): The resources to use for the container.
-        service_api_keys (list[str]): The list of api keys to use for the service.
-        model_infos (list[str]): The list of models to load.
+        image_name (str): The name of the Docker image to use.
+        service_network (str): The name of the Docker network to use.
+        service_models_volume (Path): The path to the model repository or a volume name.
+        service_url_prefix (str): The URL prefix to use for the service.
+        service_environment (dict[str, str]): The environment variables to pass to the container.
+        service_resources (ServiceCreateResources): The resources to use for the container.
+        service_timeout (int): The timeout for the service.
+        service_priority (int): The priority for the service.
+        service_api_keys (list[str]): The list of API keys to use for the service.
+        model_infos (list): The list of models to load.
 
     Returns:
-        `service` (`ServiceCreateSchema`): The created service.
+        Service: The created service.
 
     Raises:
-        HTTPException: If the container could not be created.
+        HTTPException: If the service could not be created.
     """
-    # assert that the docker image exists, or it can be pulled
-    assert image_name, "No image specified"
-    image_id = get_service_image(client, image_name)
-
-    # check if the models specified exist
-    model_instances = []
-    for model_info in model_infos:
-        model = get_model(
-            db=db,
-            model_name=model_info.name,
-            model_version=model_info.version,
-            storage=storage,
-        )
-        if model is None:
-            raise HTTPException(status_code=409, detail=f"Model <{model_info}> does not exist")
-        model_instances.append(model)
-
     try:
-        # retrieve the required amount of available gpus, if requested
-        device_infos = []
-        if service_resources.gpus > 0:
-            device_infos = get_available_devices(db, count=service_resources.gpus)
-            if len(device_infos) < service_resources.gpus:
-                raise AssertionError(
-                    f"Not enough GPUs available. Requested: {service_resources.gpus}, Available: {len(device_infos)}"
-                )
-
-        curr_timestamp = datetime.now(tz=timezone.utc)
-        # persist the service on the database (do not comit yet to avoid inconsistencies)
-        service = persist_service(
+        # Validate image
+        assert image_name, "No image specified"
+        image_id = get_service_image(client, image_name)
+        model_instances = validate_models(db, storage, model_infos)
+        device_infos = get_available_gpus(db, service_resources.gpus)
+        # Create service entry in database
+        service = create_service_entry(
             db=db,
             service_name=service_name,
-            service_image=image_name,  # for readability
-            models=model_instances,
-            created_at=curr_timestamp,
-            cpu_count=service_resources.cpu_count,
-            mem_size=service_resources.mem_size,
-            shm_size=service_resources.shm_size,
+            image_name=image_name,
+            service_timeout=service_timeout,
+            service_priority=service_priority,
+            service_resources=service_resources,
+            service_environment=service_environment,
+            model_instances=model_instances,
         )
-
-        # create allocation entries
-        for device in device_infos:
-            allocation = DeviceAllocation(
-                device_id=device.uuid,
-                service_id=service.service_id,
-                allocation_percentage=1.0,
-                allocated_at=curr_timestamp,
-            )
-            db.add(allocation)
-
-        # spawn the worker container, and save the container id on the database
+        # Create device allocations
+        create_device_allocations(
+            db=db,
+            service_id=service.service_id,
+            device_infos=device_infos,
+        )
+        # Spawn docker container
         container_id = spawn_service_container(
             client=client,
             image_id=image_id,
             worker_name=service_name,
             worker_network=service_network,
+            worker_volume=service_models_volume,
             models=model_instances,
             devices=device_infos,
             resources=service_resources,
-            worker_volume=service_models_volume,
             environment=service_environment,
         )
 
-        # update the service, and the traefik config, then commit
+        # Update service with container ID and configure Traefik
         service.container_id = container_id
         traefik.add(
             service_prefix=service_url_prefix,
-            service_name=service_name,
+            service_name=service.service_name,
             api_keys=service_api_keys,
         )
+        # commit changes to be persisted
         db.commit()
         db.refresh(service)
         return service
@@ -450,23 +502,13 @@ def delete_service(
                 LOG.warning(f"Container for service {service_id} not found. It may have been already removed.")
             except APIError as e:
                 LOG.error(f"Error removing Docker container for service {service_id}: {str(e)}")
-                # We'll continue with service deletion but include this info in the response
                 service.container_status = ServiceStatus.ERROR
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error removing Docker container: {str(e)}."
-                    "Service marked as deleted but container may still exist.",
-                )
+                raise HTTPException(status_code=500, detail=f"Error removing Docker container: {str(e)}.")
 
         # Update service status
         service.deleted_at = current_time
         service.container_status = ServiceStatus.DELETED
         service.container_id = None  # Clear the container ID as it's been removed
-
-        # Mark device allocations as deallocated
-        for allocation in service.devices:
-            if allocation.deallocated_at is None:
-                allocation.deallocated_at = current_time
 
         # Remove traefik config
         try:

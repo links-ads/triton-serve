@@ -59,6 +59,7 @@ def run_migrations_online() -> None:
     """
     for i in range(3):
         try:
+            print(f"Attempting connection to {config.get_main_option('sqlalchemy.url')}")
             connectable = engine_from_config(
                 config.get_section(config.config_ini_section, {}),
                 prefix="sqlalchemy.",
@@ -74,7 +75,7 @@ def run_migrations_online() -> None:
             # sleep an increasing amount of time
             print(f"Failed to connect to database: {e}")
             print(f"Retrying connection... Attempt {i + 1} of 3")
-            seconds = 2 ** (i + 1)
+            seconds = 2 ** (i + 2)
             sleep(seconds)
 
 

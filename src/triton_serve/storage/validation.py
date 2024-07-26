@@ -31,6 +31,24 @@ def parse_config(config_file: Path) -> dict[str, str]:
     return result
 
 
+def parse_requirements(requirements_file: Path) -> list[str]:
+    """Parse requirements.txt file into a list of requirements.
+
+    Args:
+        requirements_file (Path): path to the requirements file
+
+    Returns:
+        list[str]: list containing the requirements as strings.
+    """
+    dependencies = []
+    if requirements_file.exists() and requirements_file.is_file():
+        for line in requirements_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                dependencies.append(line)
+    return dependencies
+
+
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
     """Infers the model type from the given list of files.
 
@@ -81,17 +99,14 @@ def validate_models(repository_path: Path) -> list[ModelSchema]:
     #  list all directories in the repository
     model_dirs = [d for d in repository_path.iterdir() if d.is_dir()]
     assert model_dirs, "Empty repository"
-    # check for requirements, if present
-    requirements = []
-    requirements_file = repository_path / "requirements.txt"
-    if requirements_file.exists() and requirements_file.is_file():
-        requirements = requirements_file.read_text().splitlines()
+
+    # Parse requirements.txt if present
+    requirements = parse_requirements(repository_path / "requirements.txt")
 
     for model_dir in model_dirs:
         model_name = model_dir.name
         config_file = model_dir / "config.pbtxt"
-        assert config_file.exists(), f"Missing config file in {model_name}"
-        assert config_file.is_file(), f"Invalid config file in {model_name}"
+        assert config_file.exists() and config_file.is_file(), f"Missing or invalid config file in {model_name}"
 
         # check for version folders
         version_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
