@@ -38,12 +38,15 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
         # check if service is in db
         service = test_db.get(Service, ident=data["service_id"])
+        assert service.resources is not None
+        assert service.resources.shm_size == resources["shm_size"]
+        assert service.resources.mem_size == resources["mem_size"]
         assert service.service_name == name
-        LOG.debug(f"assigned device: {service.devices}")
+        LOG.debug(f"assigned device: {service.device_allocations}")
         if resources["gpus"]:
-            assert service.devices is not None
+            assert service.device_allocations is not None
         else:
-            assert not service.devices
+            assert not service.device_allocations
 
 
 @pytest.mark.order(after="test_create_service")
