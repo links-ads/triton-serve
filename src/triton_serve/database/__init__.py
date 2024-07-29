@@ -1,3 +1,3 @@
-from triton_serve.database.manage import Base, database_manager
+from triton_serve.database.manage import DatabaseManager
 
-__all__ = ["Base", "database_manager"]
+database_manager = DatabaseManager()

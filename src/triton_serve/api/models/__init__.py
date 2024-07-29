@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
@@ -6,18 +8,25 @@ from triton_serve.api.models import domain
 from triton_serve.config import AppSettings, get_settings, get_storage
 from triton_serve.database.schema import ModelSchema
 from triton_serve.extensions import get_db
+from triton_serve.security import require_admin, require_elevated
 from triton_serve.storage import ModelStorage
 from triton_serve.storage.sources import ArchiveModelSource, RepositoryModelSource
 
 router = APIRouter(prefix="/models")
 
 
-@router.get("/", response_model=list[ModelSchema], status_code=200, tags=["models"])
+@router.get(
+    "/",
+    response_model=list[ModelSchema],
+    status_code=200,
+    tags=["models"],
+)
 def get_models(
     model_name: str | None = None,
     version: int | None = None,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
+    _: Any = Depends(require_elevated),
 ):
     """
     Retrieves a list of models, allowing filtering by `name` and `versions`.
@@ -40,12 +49,18 @@ def get_models(
     return models
 
 
-@router.get("/{model_name}/{model_version}", response_model=ModelSchema, status_code=200, tags=["models"])
+@router.get(
+    "/{model_name}/{model_version}",
+    response_model=ModelSchema,
+    status_code=200,
+    tags=["models"],
+)
 def get_model(
     model_name: str,
     model_version: int,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
+    _: Any = Depends(require_elevated),
 ):
     """
     Retrieves a specific model by id, if present.
@@ -68,13 +83,20 @@ def get_model(
     return model
 
 
-@router.post("/", status_code=201, response_model=list[ModelSchema], tags=["models"], operation_id="ModelsFromArchive")
+@router.post(
+    "/",
+    status_code=201,
+    response_model=list[ModelSchema],
+    tags=["models"],
+    operation_id="ModelsFromArchive",
+)
 def create_models_from_archive(
     package: UploadFile = File(...),
     update: bool = Form(False),
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
     settings: AppSettings = Depends(get_settings),
+    _: Any = Depends(require_elevated),
 ):
     """
     Creates a new set of models, based on the provided compressed archive.
@@ -95,13 +117,19 @@ def create_models_from_archive(
     return stored_models
 
 
-@router.post("/repository", status_code=201, tags=["models"])
+@router.post(
+    "/repository",
+    response_model=list[ModelSchema],
+    status_code=201,
+    tags=["models"],
+)
 def create_models_from_repository(
     repository_url: str,
     update: bool = False,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
     settings: AppSettings = Depends(get_settings),
+    _: Any = Depends(require_elevated),
 ):
     """
     Creates models from a repository.
@@ -122,13 +150,18 @@ def create_models_from_repository(
     return stored_models
 
 
-@router.put("/{model_name}/{model_version}", response_model=ModelSchema, tags=["models"])
+@router.put(
+    "/{model_name}/{model_version}",
+    response_model=ModelSchema,
+    tags=["models"],
+)
 def edit_model_info(
     model_name: str,
     model_version: int,
     model_info: ModelUpdateBody,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
+    _: Any = Depends(require_elevated),
 ):
     """
     Updates a model by name and version.
@@ -153,12 +186,17 @@ def edit_model_info(
     return model
 
 
-@router.delete("/{model_name}/{model_version}", status_code=204, tags=["models"])
+@router.delete(
+    "/{model_name}/{model_version}",
+    status_code=204,
+    tags=["models"],
+)
 def delete_model(
     model_name: str,
     model_version: int,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
+    _: Any = Depends(require_admin),
 ):
     """
     Deletes a model by name and version.

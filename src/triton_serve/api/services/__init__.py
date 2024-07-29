@@ -1,5 +1,7 @@
+from typing import Any
+
 from docker import DockerClient
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody
@@ -14,17 +16,24 @@ from triton_serve.config import (
 from triton_serve.database.model import ServiceStatus
 from triton_serve.database.schema import ServiceSchema
 from triton_serve.extensions import docker_client, get_db
+from triton_serve.security import require_admin, require_elevated, require_service
 from triton_serve.storage import ModelStorage
 
 router = APIRouter()
 
 
-@router.get("/services", status_code=200, tags=["services"], response_model=list[ServiceSchema])
+@router.get(
+    "/services",
+    status_code=200,
+    tags=["services"],
+    response_model=list[ServiceSchema],
+)
 def get_services(
     names: list[str] = Query(None),
     statuses: list[ServiceStatus] = Query(None),
     db: Session = Depends(get_db),
     docker: DockerClient = Depends(docker_client),
+    _: Any = Depends(require_elevated),
 ):
     """
     Retrieves a list of services.
@@ -45,11 +54,17 @@ def get_services(
     return services
 
 
-@router.get("/services/{service_id}", status_code=200, tags=["services"], response_model=ServiceSchema)
+@router.get(
+    "/services/{service_id}",
+    status_code=200,
+    tags=["services"],
+    response_model=ServiceSchema,
+)
 def get_service(
     service_id: int,
     db: Session = Depends(get_db),
     docker: DockerClient = Depends(docker_client),
+    _: Any = Depends(require_elevated),
 ):
     """
     Retrieves a specific service by name, if present.
@@ -70,7 +85,12 @@ def get_service(
     return service
 
 
-@router.post("/services", status_code=201, tags=["services"], response_model=ServiceSchema)
+@router.post(
+    "/services",
+    status_code=201,
+    tags=["services"],
+    response_model=ServiceSchema,
+)
 def create_service(
     service_params: ServiceCreateBody,
     settings: AppSettings = Depends(get_settings),
@@ -78,6 +98,7 @@ def create_service(
     traefik: TraefikConfigManager = Depends(get_traefik),
     storage: ModelStorage = Depends(get_storage),
     db: Session = Depends(get_db),
+    _: Any = Depends(require_admin),
 ):
     """
     Creates a new service with the specified models.
@@ -110,12 +131,18 @@ def create_service(
     )
 
 
-@router.delete("/services/{service_id}", status_code=202, tags=["services"], response_model=ServiceSchema)
+@router.delete(
+    "/services/{service_id}",
+    status_code=202,
+    tags=["services"],
+    response_model=ServiceSchema,
+)
 def delete_service(
     service_id: int,
     docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
+    _: Any = Depends(require_admin),
 ):
     """
     Deletes a service with the specified name.
@@ -132,3 +159,28 @@ def delete_service(
         traefik=traefik,
         service_id=service_id,
     )
+
+
+@router.get(
+    "/services/status",
+    status_code=200,
+    tags=["status"],
+)
+def check_service_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    docker: DockerClient = Depends(docker_client),
+    _: Any = Depends(require_service),
+):
+    """
+    Checks the status of a service, turning it on if it is stopped.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to be checked.
+
+    **Returns:**
+    - `200` if the service is running,
+    - `202` if the service is starting,
+    - `503` if the service is cannot be started.
+    """
+    print(request.headers)

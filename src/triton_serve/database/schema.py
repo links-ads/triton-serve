@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from triton_serve.database.model import ModelType, ServiceStatus
+from triton_serve.database.model import KeyType, ModelType, ServiceStatus
 
 
 def timezone_aware_now():
@@ -94,3 +94,22 @@ class ServiceCreateSchema(ServiceBaseSchema):
 class ServiceSchema(ServiceBaseSchema):
     model_config = ConfigDict(from_attributes=True)
     service_id: int
+
+
+class APIKeyBaseSchema(BaseModel):
+    key_type: KeyType
+    value: str
+    project: str
+    notes: str | None = None
+    created_at: datetime = Field(default_factory=timezone_aware_now)
+    expires_at: datetime | None = None
+    services: list[ServiceSchema] = []
+
+
+class APIKeyCreateSchema(APIKeyBaseSchema):
+    pass
+
+
+class APIKeySchema(APIKeyBaseSchema):
+    model_config = ConfigDict(from_attributes=True)
+    key_id: int
