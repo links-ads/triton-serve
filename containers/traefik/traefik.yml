@@ -33,9 +33,6 @@ providers:
 
 experimental:
   plugins:
-    sablier:
-      moduleName: "github.com/acouvreur/sablier"
-      version: "v1.4.0"
     traefik-api-key-middleware:
       moduleName: "github.com/dtomlinson91/traefik-api-key-middleware"
       version: "v0.1.2"

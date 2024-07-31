@@ -44,19 +44,6 @@ class TraefikConfigManager:
             "http": {
                 "services": {service_name: {"loadBalancer": {"servers": [{"url": service_url}]}}},
                 "middlewares": {
-                    f"{service_name}_sablier": {
-                        "plugin": {
-                            "sablier": {
-                                "group": "serve-workers",
-                                "names": service_name,
-                                "sablierUrl": "http://sablier:10000",
-                                "sessionDuration": "1m",
-                                "blocking": {
-                                    "timeout": "30s",
-                                },
-                            }
-                        }
-                    },
                     f"{service_name}_stripprefix": {"stripPrefix": {"prefixes": [prefix_name]}},
                     f"{service_name}_auth": {
                         "plugin": {
@@ -74,7 +61,6 @@ class TraefikConfigManager:
                         "entryPoints": ["http"],
                         "middlewares": [
                             f"{service_name}_auth@file",
-                            f"{service_name}_sablier@file",
                             f"{service_name}_stripprefix@file",
                         ],
                         "service": service_name,

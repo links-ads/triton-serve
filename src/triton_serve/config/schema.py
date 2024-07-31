@@ -49,3 +49,15 @@ class AppSettings(BaseSettings):
             f"postgresql://{self.database_user}:{self.database_pass}@"
             f"{self.database_host}:{self.database_port}/{self.database_name}"
         )
+
+    # celery sentinel
+    @property
+    def celery_broker_url(self):
+        return f"sqla+{self.database_url}"
+
+    sentinel_poll_interval_s: int = 60
+    sentinel_api_key: str
+
+    # backend
+    backend_host: str
+    backend_port: int

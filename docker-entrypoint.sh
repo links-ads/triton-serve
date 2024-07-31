@@ -40,6 +40,15 @@ check_gpus() {
     exec nvidia-smi
 }
 
+start_celery_sentinel() {
+    echo "Starting Celery Sentinel..."
+    if [ "$TARGET" = "test" ]; then
+        exec celery -A triton_serve.tasks worker
+    else    
+        exec celery -A triton_serve.tasks worker -B
+    fi
+}
+
 main() {
     if [ "$1" = "webserver" ]; then
         start_webserver
@@ -47,8 +56,10 @@ main() {
         run_tests
     elif [ "$1" = "check" ]; then
         check_gpus
+    elif [ "$1" = "sentinel" ]; then
+        start_celery_sentinel
     else
-        echo "Invalid argument. Please specify 'webserver' or 'test'."
+        echo "Invalid argument. Please specify 'webserver', 'test' or 'sentinel'."
         exit 1
     fi
 }

@@ -5,25 +5,44 @@ import pytest
 import requests
 from docker.errors import NotFound
 
-from triton_serve.database.model import Device, Service
+from triton_serve.database.model import Device, Service, ServiceStatus
+from triton_serve.tasks import check_and_update_container_task
 
 LOG = logging.getLogger(pytest.__name__)
 
 
 @pytest.mark.order(after="test_api_key.py::test_api_key_authorized")
 @pytest.mark.parametrize(
-    "name, models, resources",
+    "name, models, resources, timeout",
     [
-        ("trt-srv_test_svc1", [{"name": "ensemble", "version": 2}], {"gpus": 1, "shm_size": 256, "mem_size": 4096}),
-        ("trt-srv_test_svc3", [{"name": "ensemble", "version": 2}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}),
-        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}),
+        (
+            "trt-srv_test_svc1",
+            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            {"gpus": 1, "shm_size": 256, "mem_size": 4096},
+            3600,
+        ),
+        (
+            "trt-srv_test_svc4",
+            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            {"gpus": 0, "shm_size": 256, "mem_size": 4096},
+            5,
+        ),
+        (
+            "trt-srv_test_svc3",
+            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            {"gpus": 0, "shm_size": 256, "mem_size": 4096},
+            3600,
+        ),
+        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}, 3600),
     ],
 )
-def test_create_service(test_client, test_docker, test_db, name, models, resources):
+def test_create_service(test_client, test_docker, test_db, name, models, resources, timeout):
     # get the devices to also check creation when no GPU is available
     devices = set(test_db.query(Device.uuid).all())
 
-    response = test_client.post("/services", json={"name": name, "models": models, "resources": resources})
+    response = test_client.post(
+        "/services", json={"name": name, "models": models, "resources": resources, "timeout": timeout}
+    )
     LOG.debug(f"response: {response.text}")
     if resources["gpus"] and not devices:
         assert response.status_code == 409
@@ -50,6 +69,28 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
 
 @pytest.mark.order(after="test_create_service")
+@pytest.mark.parametrize(
+    "name, service_container_status, db_service_status",
+    [("trt-srv_test_svc4", "exited", ServiceStatus.STOPPED), ("trt-srv_test_svc2", "running", ServiceStatus.ACTIVE)],
+)
+def test_stop_service(test_client, test_docker, test_db, name, service_container_status, db_service_status):
+    # wait 5 seconds to be sure that the service has surpassed the time limit
+    time.sleep(5)
+    initial_status = test_docker.containers.get(name).status
+    assert initial_status == "running", f"Container {name} is not running, but {initial_status}"
+    # using apply and executing the task in the same process. Only for testing purposes.
+    check_and_update_container_task.apply(kwargs={"client": test_client})
+    assert (
+        test_docker.containers.get(name).status == service_container_status
+    ), f"Container {name} is not {service_container_status}, but {test_docker.containers.get(name).status}"
+    # check if service is in db has been updated
+    service = test_db.query(Service).filter(Service.service_name == name).first()
+    assert (
+        service.container_status == db_service_status
+    ), f"Service {name} is not {db_service_status}, but {service.container_status}"
+
+
+@pytest.mark.order(after="test_stop_service")
 @pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
 def test_triton_ping_unathorized(name):
     url = f"http://traefik/{name}/v2/health/ready"
@@ -105,9 +146,9 @@ def test_triton_models_ready(name, model, test_settings):
     "name, models, expected_status_code",
     [
         ("", ["ensemble"], 422),
-        ("trt-srv_test_svc3", [{"name": "nonexistent", "version": 1}], 409),
         ("trt-srv_test_svc4", [{"name": "nonexistent", "version": 1}], 409),
         ("trt-srv_test_svc5", [{"name": "nonexistent", "version": 1}], 409),
+        ("trt-srv_test_svc6", [{"name": "nonexistent", "version": 1}], 409),
     ],
 )
 def test_create_service_wrong_inputs(test_client, name, models, expected_status_code):

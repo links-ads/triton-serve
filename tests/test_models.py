@@ -30,7 +30,7 @@ def test_create_models_from_zip_wrong_content(test_client, make_zip, model):
 
 
 @pytest.mark.order(after="test_get_models_empty")
-@pytest.mark.parametrize("model", ["ensemble", "onnx", "python"])
+@pytest.mark.parametrize("model", ["ensemble", "ensemble_py_step", "onnx", "python"])
 def test_create_models_from_zip(test_client, test_settings, make_zip, model):
     """
     Test with successful model creation using both onnx and config and only the onnx file.
@@ -145,9 +145,9 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
     [
         ("ensemble", None, 2),
         ("onnx", 1, 1),
-        (None, None, 5),
+        (None, None, 6),
         ("non_existent", None, 0),
-        (None, 1, 4),
+        (None, 1, 5),
     ],
 )
 def test_get_models(test_client, name, version, count):
