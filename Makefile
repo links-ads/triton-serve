@@ -31,7 +31,7 @@ fmt: check-venv			## Format code using black & isort.
 .PHONY: lint
 lint: check-venv		## Run ruff, black, mypy (optional).
 	@$(PY_BIN)/ruff check src/  tests/ alembic/
-	@$(PY_BIN)/black --check src/ tests/ alembic/
+	@$(PY_BIN)/black --check .
 	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
 
 

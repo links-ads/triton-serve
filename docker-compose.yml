@@ -33,8 +33,6 @@ x-backend-base: &backend-base
         condition: service_healthy
       traefik:
         condition: service_healthy
-      sablier:
-        condition: service_started
 
 volumes:
   psgdata:
@@ -75,15 +73,24 @@ services:
       timeout: 10s
       retries: 5
 
-  sablier:
-    image: acouvreur/sablier:1.4.0
-    container_name: serve-sablier
+  sentinel:
+    build:
+      context: .
+      dockerfile: containers/sentinel/Dockerfile
+      args:
+      - TARGET=${TARGET:-dev}
+    image: ghcr.io/links/triton-serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    expose:
-      - "10000"
-    labels:
-      - traefik.enable=true
+      - ./src:/app/src
+    container_name: serve-sentinel
+    env_file:
+      - .env
+    depends_on:
+      database:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    command: sentinel
 
   backend:
     <<: *backend-base

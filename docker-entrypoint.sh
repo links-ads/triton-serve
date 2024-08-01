@@ -40,6 +40,15 @@ check_gpus() {
     exec nvidia-smi
 }
 
+start_sentinel() {
+    echo "Starting Sentinel..."
+    local worker_args=("--loglevel=${LOG_LEVEL:-info}")
+    if [ "$TARGET" != "test" ]; then
+        worker_args+=("--beat")
+    fi
+    exec celery -A triton_serve.tasks worker "${worker_args[@]}"
+}
+
 main() {
     if [ "$1" = "webserver" ]; then
         start_webserver
@@ -47,8 +56,10 @@ main() {
         run_tests
     elif [ "$1" = "check" ]; then
         check_gpus
+    elif [ "$1" = "sentinel" ]; then
+        start_sentinel
     else
-        echo "Invalid argument. Please specify 'webserver' or 'test'."
+        echo "Invalid argument. Please specify 'webserver', 'test' or 'sentinel'."
         exit 1
     fi
 }

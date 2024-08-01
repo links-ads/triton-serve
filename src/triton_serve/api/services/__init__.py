@@ -132,3 +132,25 @@ def delete_service(
         traefik=traefik,
         service_id=service_id,
     )
+
+
+@router.post("/services/{service_id}/stop", status_code=200, tags=["services"], response_model=ServiceSchema)
+def stop_service(
+    service_id: int,
+    docker: DockerClient = Depends(docker_client),
+    db: Session = Depends(get_db),
+):
+    """
+    Stops the container of a service with the specified id.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to be stopped.
+
+    **Returns:**
+    - `None`
+    """
+    return domain.stop_service(
+        db=db,
+        client=docker,
+        service_id=service_id,
+    )
