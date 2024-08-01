@@ -2,7 +2,6 @@ import triton_python_backend_utils as pb_utils
 
 
 class TritonPythonModel:
-
     @staticmethod
     def auto_complete_config(auto_complete_model_config):
         return auto_complete_model_config
