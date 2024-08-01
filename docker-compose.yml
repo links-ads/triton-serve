@@ -73,16 +73,16 @@ services:
       timeout: 10s
       retries: 5
 
-  celery-sentinel:
+  sentinel:
     build:
       context: .
-      dockerfile: containers/celery/Dockerfile
+      dockerfile: containers/sentinel/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
-    image: ghcr.io/links/triton-serve-celery-sentinel:${PROJECT_VERSION:-latest}
+    image: ghcr.io/links/triton-serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
       - ./src:/app/src
-    container_name: serve-celery-sentinel
+    container_name: serve-sentinel
     env_file:
       - .env
     depends_on:

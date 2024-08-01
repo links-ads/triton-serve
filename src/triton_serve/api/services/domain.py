@@ -536,9 +536,7 @@ def stop_service(
 ) -> Service:
     try:
         service = get_service(db=db, docker_client=client, service_id=service_id)
-        container = client.containers.get(service.container_id)
-        if container.status == "running":
-            container.stop()
+        client.containers.get(service.container_id).stop()
         service.container_status = ServiceStatus.STOPPED
         db.commit()
         db.refresh(service)

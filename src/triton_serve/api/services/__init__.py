@@ -134,7 +134,7 @@ def delete_service(
     )
 
 
-@router.post("/services/{service_id}/stop", status_code=201, tags=["services"], response_model=ServiceSchema)
+@router.post("/services/{service_id}/stop", status_code=200, tags=["services"], response_model=ServiceSchema)
 def stop_service(
     service_id: int,
     docker: DockerClient = Depends(docker_client),

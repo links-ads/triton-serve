@@ -1,6 +1,7 @@
 from enum import Enum
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +20,7 @@ class AppSettings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
+    environment: str = Field("dev", alias="TARGET")
     project_name: str = "triton-serve"
     api_title: str = "Triton Serve"
     api_description: str = "Triton Serve API"
@@ -43,6 +44,11 @@ class AppSettings(BaseSettings):
     database_port: int = 5432
     database_name: str = "serve_db"
 
+    # worker params
+    sentinel_poll_interval: int = 60
+    backend_host: str
+    backend_port: int
+
     @property
     def database_url(self):
         return (
@@ -50,14 +56,6 @@ class AppSettings(BaseSettings):
             f"{self.database_host}:{self.database_port}/{self.database_name}"
         )
 
-    # celery sentinel
     @property
     def celery_broker_url(self):
         return f"sqla+{self.database_url}"
-
-    sentinel_poll_interval_s: int = 60
-    sentinel_api_key: str
-
-    # backend
-    backend_host: str
-    backend_port: int

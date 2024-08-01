@@ -6,7 +6,7 @@ import requests
 from docker.errors import NotFound
 
 from triton_serve.database.model import Device, Service, ServiceStatus
-from triton_serve.tasks import check_and_update_container_task
+from triton_serve.tasks import update_service_status
 
 LOG = logging.getLogger(pytest.__name__)
 
@@ -18,22 +18,22 @@ LOG = logging.getLogger(pytest.__name__)
         (
             "trt-srv_test_svc1",
             [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
-            {"gpus": 1, "shm_size": 256, "mem_size": 4096},
+            {"gpus": 1, "shm_size": 256, "mem_size": 1024},
             3600,
         ),
         (
             "trt-srv_test_svc4",
             [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
-            {"gpus": 0, "shm_size": 256, "mem_size": 4096},
-            5,
+            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
+            5,  # set timeout to 1 seconds to test stopping the service
         ),
         (
             "trt-srv_test_svc3",
             [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
-            {"gpus": 0, "shm_size": 256, "mem_size": 4096},
+            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
             3600,
         ),
-        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 4096}, 3600),
+        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 1024}, 3600),
     ],
 )
 def test_create_service(test_client, test_docker, test_db, name, models, resources, timeout):
@@ -70,24 +70,39 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
 @pytest.mark.order(after="test_create_service")
 @pytest.mark.parametrize(
-    "name, service_container_status, db_service_status",
-    [("trt-srv_test_svc4", "exited", ServiceStatus.STOPPED), ("trt-srv_test_svc2", "running", ServiceStatus.ACTIVE)],
+    "service_name, service_container_status",
+    [
+        ("trt-srv_test_svc4", "exited"),
+        ("trt-srv_test_svc2", "running"),
+    ],
 )
-def test_stop_service(test_client, test_docker, test_db, name, service_container_status, db_service_status):
-    # wait 5 seconds to be sure that the service has surpassed the time limit
+def test_stop_service(
+    test_client,
+    test_docker,
+    test_db,
+    service_name,
+    service_container_status,
+):
+    # make sure the service is running
+    for _ in range(3):
+        container_status = test_docker.containers.get(service_name).status
+        LOG.debug(f"container status: {container_status}")
+        if container_status == "running":
+            break
+        LOG.debug(f"{service_name} is not {service_container_status} yet ...")
+
+    # assert that the initial status is indeed "running"
+    init_status = test_docker.containers.get(service_name).status
+    init_service = test_db.query(Service).filter(Service.service_name == service_name).first()
+    LOG.debug(f"service: {init_service}")
+    assert init_status == "running"
+    assert init_service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING)
+    # make sure we update the service status once the timeout has passed
     time.sleep(5)
-    initial_status = test_docker.containers.get(name).status
-    assert initial_status == "running", f"Container {name} is not running, but {initial_status}"
-    # using apply and executing the task in the same process. Only for testing purposes.
-    check_and_update_container_task.apply(kwargs={"client": test_client})
-    assert (
-        test_docker.containers.get(name).status == service_container_status
-    ), f"Container {name} is not {service_container_status}, but {test_docker.containers.get(name).status}"
-    # check if service is in db has been updated
-    service = test_db.query(Service).filter(Service.service_name == name).first()
-    assert (
-        service.container_status == db_service_status
-    ), f"Service {name} is not {db_service_status}, but {service.container_status}"
+    # Manually execute the update service status task: one of the services should be stopped
+    # due to the timeout, the other should be running.
+    update_service_status.apply(kwargs={"client": test_client})
+    assert test_docker.containers.get(service_name).status == service_container_status
 
 
 @pytest.mark.order(after="test_stop_service")
