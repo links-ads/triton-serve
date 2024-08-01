@@ -53,7 +53,8 @@ def upgrade() -> None:
 
         # Insert GPU info
         for gpu in gpus:
-            device = Device(host_id=machine.host_id, **gpu.model_dump())
+            gpu.host_id = machine.host_id
+            device = Device(**gpu.model_dump())
             session.add(device)
 
         # insert master admin keys, lasting for 10 years

@@ -17,6 +17,19 @@ class APIKeyCreateBody(BaseModel):
         return v
 
 
+class APIKeyUpdateBody(BaseModel):
+    project: str | None = None
+    notes: str | None = None
+
+    @classmethod
+    @field_validator("project")
+    def validate_project(cls, v):
+        if v is not None:
+            if not v.strip():
+                raise ValueError("Project name cannot be empty or just whitespace")
+        return v
+
+
 class ServiceKeyCreateBody(BaseModel):
     project: str
     notes: str | None = None

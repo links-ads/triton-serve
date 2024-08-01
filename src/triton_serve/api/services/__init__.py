@@ -162,7 +162,7 @@ def delete_service(
 
 
 @router.get(
-    "/services/status",
+    "/status",
     status_code=200,
     tags=["status"],
 )
@@ -175,12 +175,9 @@ def check_service_status(
     """
     Checks the status of a service, turning it on if it is stopped.
 
-    **Arguments:**
-    - `service_id` (`int`): The id of the service to be checked.
-
     **Returns:**
     - `200` if the service is running,
     - `202` if the service is starting,
     - `503` if the service is cannot be started.
     """
-    print(request.headers)
+    pass

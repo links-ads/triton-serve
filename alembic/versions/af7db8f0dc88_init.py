@@ -1,10 +1,11 @@
 """init
 
 Revision ID: af7db8f0dc88
-Revises: 
+Revises:
 Create Date: 2024-07-27 18:33:35.895033
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -27,8 +28,8 @@ def upgrade() -> None:
         sa.Column("value", sa.String(), nullable=False),
         sa.Column("project", sa.String(), nullable=False),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=True),
-        sa.Column("expires_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("key_id"),
         sa.UniqueConstraint("value"),
     )

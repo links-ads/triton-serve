@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from functools import partial
 
 from sqlalchemy import (
-    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -70,8 +69,8 @@ class APIKey(Base):
     value = Column(String, unique=True, nullable=False)
     project = Column(String, nullable=False)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=utcnow)
-    expires_at = Column(DateTime)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    expires_at = Column(DateTime(timezone=True))
 
     services = relationship("Service", secondary=key_service_association)
 

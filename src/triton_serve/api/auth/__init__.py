@@ -12,8 +12,8 @@ from triton_serve.api.auth.domain import (
     revoke_key,
     update_key,
 )
-from triton_serve.api.dto import APIKeyCreateBody, KeyType, ServiceKeyCreateBody
-from triton_serve.api.services import get_service
+from triton_serve.api.dto import APIKeyCreateBody, APIKeyUpdateBody, KeyType, ServiceKeyCreateBody
+from triton_serve.api.services.domain import get_service
 from triton_serve.config import get_traefik
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.schema import APIKeySchema
@@ -29,7 +29,7 @@ router = APIRouter()
     tags=["keys"],
     response_model=list[APIKeySchema],
 )
-async def list_api_keys(
+def list_api_keys(
     key_type: KeyType = None,
     project: str = None,
     service: str = None,
@@ -61,7 +61,7 @@ async def list_api_keys(
     tags=["keys"],
     response_model=APIKeySchema,
 )
-async def create_api_key(
+def create_api_key(
     key_data: APIKeyCreateBody,
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
@@ -94,10 +94,9 @@ async def create_api_key(
     tags=["keys"],
     response_model=APIKeySchema,
 )
-async def update_api_key(
-    key: str | None = None,
-    project: str | None = None,
-    notes: str | None = None,
+def update_api_key(
+    key: str,
+    update: APIKeyUpdateBody,
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
@@ -115,8 +114,8 @@ async def update_api_key(
     return update_key(
         db=db,
         key=key,
-        project=project,
-        notes=notes,
+        project=update.project,
+        notes=update.notes,
     )
 
 
@@ -125,7 +124,7 @@ async def update_api_key(
     status_code=204,
     tags=["keys"],
 )
-async def revoke_api_key(
+def revoke_api_key(
     key: str,
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
@@ -143,7 +142,7 @@ async def revoke_api_key(
 
 
 @router.post("/keys/{service_id}", status_code=201, tags=["keys"], response_model=APIKeySchema)
-async def create_service_key(
+def create_service_key(
     service_id: int,
     key_data: ServiceKeyCreateBody,
     db: Session = Depends(get_db),
@@ -154,7 +153,7 @@ async def create_service_key(
     Creates a new API key for a specific service.
     """
     # Check if the service exists
-    if not (service := get_service(service_id)):
+    if not (service := get_service(db=db, service_id=service_id)):
         raise HTTPException(status_code=404, detail="Service not found")
 
     new_key = generate_key(
@@ -167,12 +166,12 @@ async def create_service_key(
     )
 
     # Update Traefik configuration with the new key
-    traefik.add_service_key(service.name, new_key.key)
+    traefik.add_service_key(service.service_name, new_key.value)
     return new_key
 
 
 @router.post("/keys/{key_id}/services/{service_id}", status_code=200, tags=["keys"], response_model=APIKeySchema)
-async def add_service_key(
+def add_service_key(
     key_id: int,
     service_id: int,
     db: Session = Depends(get_db),
@@ -182,26 +181,25 @@ async def add_service_key(
     """
     Adds a service to an existing API key.
     """
-    key = get_key(db=db, key_id=key_id)
+    key = get_key(db, key_id)
     if not key:
         raise HTTPException(status_code=404, detail="Key not found")
 
     if key.key_type != KeyType.SERVICE:
         raise HTTPException(status_code=400, detail="This operation is only valid for service keys")
 
-    service = get_service(service_id)  # You'll need to implement this function
-    if not service:
+    if not (service := get_service(db=db, service_id=service_id)):
         raise HTTPException(status_code=404, detail="Service not found")
 
-    updated_key = add_service_to_key(db=db, key_id=key_id, service_id=service_id)
-    traefik.add_service_key(service.name, updated_key.key)
+    updated_key = add_service_to_key(db=db, key=key, service=service)
+    traefik.add_service_key(service.service_name, updated_key.value)
 
     return updated_key
 
 
-@router.delete("/keys/{key_id}/services/{service_id}", status_code=200, tags=["keys"], response_model=APIKeySchema)
-async def remove_service_key(
-    key_id: str,
+@router.delete("/keys/{key_id}/services/{service_id}", status_code=204, tags=["keys"])
+def remove_service_key(
+    key_id: int,
     service_id: int,
     db: Session = Depends(get_db),
     traefik: TraefikConfigManager = Depends(get_traefik),
@@ -217,12 +215,11 @@ async def remove_service_key(
     if key.key_type != KeyType.SERVICE:
         raise HTTPException(status_code=400, detail="This operation is only valid for service keys")
 
-    service = get_service(service_id)
-    if not service:
+    if not (service := get_service(db=db, service_id=service_id)):
         raise HTTPException(status_code=404, detail="Service not found")
 
-    if service_id not in key.service_ids:
+    if service_id not in (s.service_id for s in key.services):
         raise HTTPException(status_code=400, detail="This key is not associated with the specified service")
 
-    updated_key = remove_service_from_key(db=db, key_id=key_id, service_id=service_id)
-    traefik.remove_service_key(service.name, key.key)
+    remove_service_from_key(db=db, key=key, service=service)
+    traefik.remove_service_key(service.service_name, key.value)

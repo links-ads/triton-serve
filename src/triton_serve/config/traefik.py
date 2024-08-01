@@ -13,7 +13,6 @@ class TraefikConfigManager:
 
         Args:
             service_name (str): The name of the service.
-            configs_path (Path): The path to the traefik configs.
 
         Returns:
             `None`
@@ -33,7 +32,6 @@ class TraefikConfigManager:
 
         Returns:
             `None`
-
         """
         prefix_name = f"{service_prefix}/{service_name}"
         path_prefix = f"PathPrefix(`{prefix_name}`)"
@@ -85,3 +83,53 @@ class TraefikConfigManager:
 
         with open(yaml_file_name, "w") as file:
             yaml.dump(raw_data, file)
+
+    def add_service_key(self, service_name: str, key: str):
+        """
+        Adds a new API key to the service's configuration.
+
+        Args:
+            service_name (str): The name of the service.
+            key (str): The API key to add.
+
+        Returns:
+            `None`
+        """
+        yaml_file_name = self.configs_path / f"{service_name}.yaml"
+        if not yaml_file_name.exists():
+            raise FileNotFoundError(f"Configuration file for service {service_name} not found.")
+
+        with open(yaml_file_name) as file:
+            config = yaml.safe_load(file)
+
+        auth_middleware = config["http"]["middlewares"][f"{service_name}_auth"]["plugin"]["traefik-api-key-middleware"]
+        if key not in auth_middleware["keys"]:
+            auth_middleware["keys"].append(key)
+
+        with open(yaml_file_name, "w") as file:
+            yaml.dump(config, file)
+
+    def remove_service_key(self, service_name: str, key: str):
+        """
+        Removes an API key from the service's configuration.
+
+        Args:
+            service_name (str): The name of the service.
+            key (str): The API key to remove.
+
+        Returns:
+            `None`
+        """
+        yaml_file_name = self.configs_path / f"{service_name}.yaml"
+        if not yaml_file_name.exists():
+            raise FileNotFoundError(f"Configuration file for service {service_name} not found.")
+
+        with open(yaml_file_name) as file:
+            config = yaml.safe_load(file)
+
+        auth_middleware = config["http"]["middlewares"][f"{service_name}_auth"]["plugin"]["traefik-api-key-middleware"]
+        if key in auth_middleware["keys"]:
+            auth_middleware["keys"].remove(key)
+
+        with open(yaml_file_name, "w") as file:
+            yaml.dump(config, file)

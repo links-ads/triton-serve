@@ -86,7 +86,7 @@ def test_docker():
     client = docker.from_env()
     try:
         yield client
-        containers = [c for c in client.containers.list() if c.name.startswith("trt-srv_test_sv")]
+        containers = [c for c in client.containers.list() if c.name.startswith("trt-srv_test_")]
         for container in containers:
             LOG.info(f"Removing container {container.name}...")
             container.stop()

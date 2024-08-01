@@ -10,7 +10,7 @@ from triton_serve.database.model import Device, Service
 LOG = logging.getLogger(pytest.__name__)
 
 
-@pytest.mark.order(after="test_api_key.py::test_api_key_authorized")
+@pytest.mark.order(after="test_auth.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, resources",
     [

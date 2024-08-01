@@ -32,7 +32,7 @@ class DeviceBaseSchema(BaseModel):
 
 
 class DeviceCreateSchema(DeviceBaseSchema):
-    host_id: int
+    host_id: int | None = None
 
 
 class DeviceSchema(DeviceBaseSchema):
