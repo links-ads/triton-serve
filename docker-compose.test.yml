@@ -27,8 +27,8 @@ services:
       - 7500:80
       - 7510:8080
 
-  sablier:
-    container_name: serve-sablier_test
+  sentinel:
+    container_name: serve-sentinel_test
 
   database:
       container_name: serve-database_test

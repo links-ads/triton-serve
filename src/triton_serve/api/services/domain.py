@@ -4,7 +4,7 @@ from itertools import chain
 from pathlib import Path
 
 from docker import DockerClient
-from docker.errors import APIError, ImageNotFound, NotFound
+from docker.errors import APIError, ImageNotFound, NotFound, NullResource
 from docker.types import DeviceRequest
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
@@ -155,9 +155,10 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
         db.commit()
         db.refresh(service)
         return service
-    except NotFound:
+    except (NotFound, NullResource):
         if service.deleted_at is None:
             service.deleted_at = datetime.now(tz=timezone.utc)
+        service.container_status = ServiceStatus.DELETED
         db.commit()
         db.refresh(service)
         return service
@@ -211,8 +212,7 @@ def spawn_service_container(
     # prepare the list of models to load
     triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
 
-    # prepare the labels and volumes for the container
-    labels = {"sablier.enable": "true", "sablier.group": "serve-workers"}
+    # prepare volumes for the container
     volumes = {str(worker_volume): {"bind": "/models", "mode": "ro"}}
 
     gpus, runtime = None, None
@@ -231,7 +231,6 @@ def spawn_service_container(
         network=worker_network,
         volumes=volumes,
         environment=environment,
-        labels=labels,
         restart_policy={"Name": "unless-stopped"},
         runtime=runtime,
         device_requests=gpus,
@@ -327,6 +326,7 @@ def create_service_entry(
         priority=service_priority,
         container_status=ServiceStatus.STARTING,
         created_at=datetime.now(tz=timezone.utc),
+        last_active_time=datetime.now(tz=timezone.utc),
     )
     service.models.extend(model_instances)
 
@@ -526,3 +526,22 @@ def delete_service(
         db.rollback()
         LOG.exception(f"Unexpected error while deleting service {service_id}")
         raise HTTPException(status_code=500, detail=f"Unexpected error deleting service: {str(e)}")
+
+
+def stop_service(
+    db: Session,
+    client: DockerClient,
+    service_id: int,
+) -> Service:
+    try:
+        service = get_service(db=db, docker_client=client, service_id=service_id)
+        client.containers.get(service.container_id).stop()
+        service.container_status = ServiceStatus.STOPPED
+        db.commit()
+        db.refresh(service)
+        return service
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Container not found")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error stopping container: {str(e)}")

@@ -1,0 +1,18 @@
+name: "ensemble_py_step"
+backend: "python"
+
+max_batch_size: 8
+input [
+    {
+      name: "input_img"
+      data_type: TYPE_FP32
+      dims: [12, 480, 480]
+    }
+  ]
+  output [
+    {
+      name: "processed_input"
+      data_type: TYPE_FP32
+      dims: [12, 480, 480]
+    }
+  ]
