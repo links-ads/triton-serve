@@ -12,13 +12,18 @@ from triton_serve.api.auth.domain import (
     revoke_key,
     update_key,
 )
-from triton_serve.api.dto import APIKeyCreateBody, APIKeyUpdateBody, KeyType, ServiceKeyCreateBody
-from triton_serve.api.services.domain import get_service
+from triton_serve.api.dto import (
+    APIKeyCreateBody,
+    APIKeyUpdateBody,
+    KeyType,
+    ServiceKeyCreateBody,
+)
 from triton_serve.config import get_traefik
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.schema import APIKeySchema
 from triton_serve.extensions import get_db
 from triton_serve.security import require_admin
+from triton_serve.api.services.domain import get_service
 
 router = APIRouter()
 

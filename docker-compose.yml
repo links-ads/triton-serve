@@ -4,7 +4,7 @@ x-backend-base: &backend-base
       dockerfile: containers/backend/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
-      - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-525.125.06}
+      - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-550.90.07}
       - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
       - PYTHON_VERSION=${PYTHON_VERSION:-3.10.12}
     image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
