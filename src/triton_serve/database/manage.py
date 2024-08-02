@@ -1,9 +1,7 @@
 import contextlib
 
-from sqlalchemy import Connection, create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-
-Base = declarative_base()
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class DatabaseManager:
@@ -49,13 +47,3 @@ class DatabaseManager:
             raise
         finally:
             session.close()
-
-    # Used for testing
-    def create_all(self, connection: Connection):
-        connection.run_sync(Base.metadata.create_all)
-
-    def drop_all(self, connection):
-        connection.run_sync(Base.metadata.drop_all)
-
-
-database_manager = DatabaseManager()

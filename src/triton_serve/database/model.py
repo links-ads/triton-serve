@@ -15,11 +15,12 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Table,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declarative_base, relationship
 
-from triton_serve.database.manage import Base
+Base = declarative_base()
 
 utcnow = partial(datetime.now, tz=timezone.utc)
 
@@ -42,6 +43,36 @@ class ServiceStatus(enum.Enum):
     ERROR = "error"
     STOPPED = "stopped"
     DELETED = "deleted"
+
+
+# Association table for many-to-many relationship between APIKey and Service
+key_service_association = Table(
+    "key_service_association",
+    Base.metadata,
+    Column("api_key_id", Integer, ForeignKey("api_keys.key_id")),
+    Column("service_id", Integer, ForeignKey("services.service_id")),
+    PrimaryKeyConstraint("api_key_id", "service_id", name="api_key_service"),
+)
+
+
+class KeyType(enum.Enum):
+    ADMIN = "admin"
+    USER = "user"
+    SERVICE = "service"
+
+
+class APIKey(Base):
+    __tablename__ = "api_keys"
+
+    key_id = Column(Integer, primary_key=True)
+    key_type = Column(Enum(KeyType), nullable=False)
+    value = Column(String, unique=True, nullable=False)
+    project = Column(String, nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    expires_at = Column(DateTime(timezone=True))
+
+    services = relationship("Service", secondary=key_service_association)
 
 
 model_mapping = Table(

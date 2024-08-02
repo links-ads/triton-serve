@@ -1,5 +1,47 @@
 from pydantic import BaseModel, Field, field_validator
 
+from triton_serve.database.model import KeyType
+
+
+class APIKeyCreateBody(BaseModel):
+    project: str
+    key_type: KeyType
+    notes: str | None = None
+    expiration_days: int = 365
+
+    @field_validator("expiration_days")
+    @classmethod
+    def validate_expiration_days(cls, v):
+        if v < 1:
+            raise ValueError("Expiration days must be greater than 0")
+        return v
+
+
+class APIKeyUpdateBody(BaseModel):
+    project: str | None = None
+    notes: str | None = None
+
+    @classmethod
+    @field_validator("project")
+    def validate_project(cls, v):
+        if v is not None:
+            if not v.strip():
+                raise ValueError("Project name cannot be empty or just whitespace")
+        return v
+
+
+class ServiceKeyCreateBody(BaseModel):
+    project: str
+    notes: str | None = None
+    expiration_days: int = 365
+
+    @field_validator("expiration_days")
+    @classmethod
+    def validate_expiration_days(cls, v):
+        if v < 1:
+            raise ValueError("Expiration days must be greater than 0")
+        return v
+
 
 class ModelInfo(BaseModel):
     name: str = Field(min_length=1, max_length=255, description="Model name")

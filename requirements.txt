@@ -1,10 +1,11 @@
-alembic >= 1.13.0, < 2.0.0
+alembic >= 1.13.2, < 2.0.0
 docker >= 7.1.0, < 8.0.0
-fastapi >= 0.104.0, < 1.0.0
+fastapi >= 0.112.0, < 1.0.0
 gunicorn >= 22.0.0, < 23.0.0
-uvicorn[standard] >= 0.15.0, < 0.16.0
-pydantic-settings >= 2.1.0, < 3.0.0
+httpx >= 0.27.0, < 1.0.0
+pydantic-settings >= 2.4.0, < 3.0.0
 python-multipart >= 0.0.6, < 1.0.0
 psycopg2-binary >= 2.9.9, < 3.0.0
-psutil >= 5.9.6, < 6.0.0
-sqlalchemy >= 2.0.23, < 3.0.0
+psutil >= 6.0.0, < 7.0.0
+sqlalchemy >= 2.0.31, < 3.0.0
+uvicorn[standard] >= 0.30.0, < 1.0.0

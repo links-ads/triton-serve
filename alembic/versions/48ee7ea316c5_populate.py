@@ -8,12 +8,14 @@ Create Date: 2023-12-22 10:58:21.040444
 
 import logging
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 
 from alembic import op
 from sqlalchemy.orm import Session
 
 from triton_serve.api.services.resources import get_gpu_info, get_machine_info
-from triton_serve.database.model import Device, Machine
+from triton_serve.config import get_settings
+from triton_serve.database.model import APIKey, Device, KeyType, Machine
 
 # revision identifiers, used by Alembic.
 revision: str = "48ee7ea316c5"
@@ -29,6 +31,7 @@ def upgrade() -> None:
 
     try:
         # Get machine info
+        settings = get_settings()
         hostname, num_cpus, total_mem = get_machine_info()
 
         # Insert machine info
@@ -50,8 +53,21 @@ def upgrade() -> None:
 
         # Insert GPU info
         for gpu in gpus:
-            device = Device(host_id=machine.host_id, **gpu.model_dump())
+            gpu.host_id = machine.host_id
+            device = Device(**gpu.model_dump())
             session.add(device)
+
+        # insert master admin keys, lasting for 10 years
+        expiration = datetime.now(tz=timezone.utc) + timedelta(days=3650)
+        for key_str in settings.api_keys:
+            key = APIKey(
+                key_type=KeyType.ADMIN,
+                value=key_str,
+                project="admin",
+                notes="Master admin keys",
+                expires_at=expiration,
+            )
+            session.add(key)
 
         session.commit()
     except Exception as e:

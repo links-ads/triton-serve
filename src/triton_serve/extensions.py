@@ -13,7 +13,7 @@ def get_db():
         yield session
 
 
-def docker_client() -> docker.DockerClient:
+def docker_client() -> docker.DockerClient:  # type: ignore
     """Yields a docker client API instance safely.
 
     :return: docker client instance

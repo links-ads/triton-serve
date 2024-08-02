@@ -26,10 +26,8 @@ dynamic = ["version", "dependencies"]
 [project.optional-dependencies]
 # Add development dependencies here
 dev = [
-    "black >= 23.0.0, < 24",
-    "isort >= 5.1.0, < 6.0.0",
     "gitchangelog >= 3.0.4, < 4.0.0",
-    "ruff >= 0.0.1, < 0.1.0",
+    "ruff >= 0.5.5, < 1.0.0",
 ]
 # Add documentation dependencies here
 docs = [
@@ -39,10 +37,9 @@ docs = [
 # Add testing dependencies here
 test = [
     "coverage >= 7.3.0, < 8",
-    "httpx >= 0.25.0, < 1",
-    "pytest >= 7.4.0, < 8",
-    "pytest-cov >= 4.1.0, < 5",
-    "pytest-dependency >= 0.5.1, < 1",
+    "pytest >= 8.3.0, < 9",
+    "pytest-cov >= 5.0.0, < 6",
+    "pytest-dependency >= 0.6.0, < 1",
     "pytest-order >= 1.2.0, < 2",
     "requests >= 2.32.0, < 3",
     "celery >=5.4.0,<6.0.0",
@@ -62,14 +59,8 @@ package-dir = { "" = "src" }
 version = {attr = "triton_serve.__version__"}
 dependencies = {file = "requirements.txt"}
 
-[tool.black]
-line-length = 119
-
 [tool.ruff]
 line-length = 119
-src = ["src"]
-select = ["E", "F", "UP"]
 
-[tool.isort]
-profile = "black"
-src_paths = ["src", "tests"]
+[tool.ruff.format]
+docstring-code-format = true

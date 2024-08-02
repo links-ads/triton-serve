@@ -49,7 +49,7 @@ def list_services(
     return [check_service_status(db=db, docker_client=docker_client, service=service) for service in services]
 
 
-def get_service(db: Session, docker_client: DockerClient, service_id: int):
+def get_service(db: Session, service_id: int, docker_client: DockerClient | None = None):
     """Returns a specific service by id, if present.
 
     Args:
@@ -357,7 +357,6 @@ def create_device_allocations(db: Session, service_id: int, device_infos: list):
             device_id=device.uuid,
             service_id=service_id,
             allocation_percentage=1.0,
-            allocated_at=datetime.now(tz=timezone.utc),
         )
         db.add(allocation)
 

@@ -2,15 +2,14 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Security
+from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve import __version__
-from triton_serve.api import models, services
+from triton_serve.api import auth, models, services
 from triton_serve.config import AppSettings
 from triton_serve.database import database_manager
 from triton_serve.database.validation import check_resources
-from triton_serve.security import api_key_auth
 
 log = logging.getLogger(uvicorn.__name__)
 
@@ -70,7 +69,6 @@ def register_routers(app: FastAPI):
     :param app: FastAPI instance
     :type app: FastAPI
     """
-    app.include_router(models.router, tags=["models"], dependencies=[Security(api_key_auth)])
-    app.include_router(services.router, tags=["services"], dependencies=[Security(api_key_auth)])
-    app.include_router(models.router, tags=["models"], dependencies=[Security(api_key_auth)])
-    app.include_router(services.router, tags=["services"], dependencies=[Security(api_key_auth)])
+    app.include_router(models.router, tags=["models"])
+    app.include_router(services.router, tags=["services"])
+    app.include_router(auth.router, tags=["keys"])
