@@ -106,6 +106,39 @@ def test_stop_service(
 
 
 @pytest.mark.order(after="test_stop_service")
+def test_restart_services(test_docker, test_settings, test_client):
+    # make sure it does not work without auth
+    response = requests.get("http://traefik/trt-srv_test_svc4/v2/health/ready")
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 403
+    # make sure it returns a 404 for a non-existent service
+    headers = {"X-API-Key": test_settings.api_keys[0]}
+    response = requests.get(
+        "http://traefik/whatever/v2/health/ready",
+        headers=headers,
+    )
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 404
+    # we need to 'manually' restart the service since there's no backed running
+    test_client.get("status/trt-srv_test_svc4")
+    # attempt a couple of times to get a response != 50x using traefik
+    for _ in range(3):
+        response = requests.get(
+            "http://traefik/trt-srv_test_svc4/v2/health/ready",
+            headers=headers,
+        )
+        LOG.debug(f"headers: {response.headers}")
+        LOG.debug(f"response: {response.text}")
+        if response.status_code not in (502, 503):
+            break
+        time.sleep(5)
+
+    assert response.status_code == 200
+    container = test_docker.containers.get("trt-srv_test_svc4")
+    assert container.status == "running"
+
+
+@pytest.mark.order(after="test_check_service_status")
 @pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
 def test_triton_ping_unathorized(name):
     url = f"http://traefik/{name}/v2/health/ready"

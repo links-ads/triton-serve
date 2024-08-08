@@ -1,5 +1,7 @@
+import io
 import logging
 import os
+from typing import cast
 
 import pytest
 
@@ -25,7 +27,7 @@ def test_create_models_from_zip_wrong_content(test_client, make_zip, model):
     """
     with make_zip(include_models=[model]) as src:
         response = test_client.post("/models", files={"package": src})
-    LOG.debug(f"Response: {response.json()}")
+    LOG.debug(f"Response: {response.text}")
     assert response.status_code == 422
 
 
@@ -36,8 +38,9 @@ def test_create_models_from_zip(test_client, test_settings, make_zip, model):
     Test with successful model creation using both onnx and config and only the onnx file.
     """
     with make_zip(include_models=[model]) as src:
+        src = cast(io.BytesIO, src)
         response = test_client.post("/models", files={"package": src})
-    LOG.debug(f"Response: {response.json()}")
+    LOG.debug(f"Response: {response.text}")
     assert response.status_code == 201
     # check if the model is present inside the models repository
     expected_model_root = test_settings.repository_path / model
@@ -58,7 +61,7 @@ def test_create_models_from_zip(test_client, test_settings, make_zip, model):
 def test_create_models_from_zip_already_existing(test_client, make_zip, model):
     with make_zip(include_models=[model]) as package:
         response = test_client.post("/models", files={"package": package})
-    LOG.debug(f"Response: {response.json()}")
+    LOG.debug(f"Response: {response.text}")
     assert response.status_code == 409
 
 
@@ -67,7 +70,7 @@ def test_create_models_from_zip_already_existing(test_client, make_zip, model):
 def test_create_models_from_zip_already_existing_with_update(test_client, test_settings, make_zip, model):
     with make_zip(include_models=[model]) as package:
         response = test_client.post("/models", data={"update": True}, files={"package": package})
-    LOG.debug(f"Response: {response.json()}")
+    LOG.debug(f"Response: {response.text}")
     assert response.status_code == 201
     # check if the model is present inside the models repository
     expected_model_root = test_settings.repository_path / model
@@ -89,7 +92,7 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
     model_dirs = {d for d in repository_root.iterdir() if d.is_dir()}
 
     response = test_client.post("/models/repository", params={"repository_url": test_repository})
-    LOG.debug(f"Response: {response.json()}")
+    LOG.debug(f"Response: {response.text}")
     assert response.status_code == 201
 
     updated_model_dirs = {d for d in repository_root.iterdir() if d.is_dir()}

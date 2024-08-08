@@ -65,6 +65,32 @@ def get_service(db: Session, service_id: int, docker_client: DockerClient | None
     return service
 
 
+def get_service_by_name(db: Session, service_name: str, docker_client: DockerClient | None = None):
+    """Returns a specific service by name, if present.
+
+    Args:
+        db (Session): The database session.
+        service_name (str): The name of the service.
+
+    Returns:
+        Service: The requested service.
+    """
+    # get any service with the specified name, not deleted
+    service = (
+        db.query(Service)
+        .filter(
+            Service.service_name == service_name,
+            Service.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if service is None:
+        raise HTTPException(status_code=404, detail=f"No active service named '{service_name}'")
+    if docker_client is not None:
+        return check_service_status(db=db, docker_client=docker_client, service=service)
+    return service
+
+
 def get_available_devices(db: Session, count: int, required_percentage: float = 100.0) -> list[Device]:
     """
     Returns a list of available devices, considering the allocation percentage.
@@ -528,20 +554,49 @@ def delete_service(
         raise HTTPException(status_code=500, detail=f"Unexpected error deleting service: {str(e)}")
 
 
+def start_service(
+    db: Session,
+    client: DockerClient,
+    service: Service,
+) -> None:
+    try:
+        LOG.debug(f"Starting service {service.service_id}...")
+        client.containers.get(service.container_id).start()
+        service.container_status = ServiceStatus.ACTIVE
+        service.last_active_time = datetime.now(tz=timezone.utc)
+        db.commit()
+    except NotFound:
+        raise HTTPException(status_code=404, detail="Service not found")
+    except Exception as e:
+        db.rollback()
+        LOG.debug(f"Error starting container: {str(e)}")
+        raise HTTPException(status_code=503, detail="Error restarting service")
+
+
+def update_active_time(db: Session, service: Service):
+    """Updates the last active time of a service.
+
+    Args:
+        db (Session): The database session.
+        service (Service): The service to update.
+    """
+    service.last_active_time = datetime.now(tz=timezone.utc)
+    db.commit()
+
+
 def stop_service(
     db: Session,
     client: DockerClient,
     service_id: int,
-) -> Service:
+) -> None:
     try:
+        LOG.debug(f"Stopping service {service_id}...")
         service = get_service(db=db, docker_client=client, service_id=service_id)
         client.containers.get(service.container_id).stop()
         service.container_status = ServiceStatus.STOPPED
         db.commit()
-        db.refresh(service)
-        return service
     except NotFound:
-        raise HTTPException(status_code=404, detail="Container not found")
+        raise HTTPException(status_code=404, detail="Service not found")
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error stopping container: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error stopping service: {str(e)}")

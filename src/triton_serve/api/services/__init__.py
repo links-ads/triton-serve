@@ -1,7 +1,7 @@
 from typing import Any
 
 from docker import DockerClient
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody
@@ -161,7 +161,11 @@ def delete_service(
     )
 
 
-@router.post("/services/{service_id}/stop", status_code=200, tags=["services"], response_model=ServiceSchema)
+@router.post(
+    "/services/{service_id}/stop",
+    status_code=204,
+    tags=["services"],
+)
 def stop_service(
     service_id: int,
     docker: DockerClient = Depends(docker_client),
@@ -176,7 +180,7 @@ def stop_service(
     **Returns:**
     - `None`
     """
-    return domain.stop_service(
+    domain.stop_service(
         db=db,
         client=docker,
         service_id=service_id,
@@ -184,12 +188,12 @@ def stop_service(
 
 
 @router.get(
-    "/status",
+    "/status/{service_name}",
     status_code=200,
     tags=["status"],
 )
 def check_service_status(
-    request: Request,
+    service_name: str,
     db: Session = Depends(get_db),
     docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_service),
@@ -202,4 +206,30 @@ def check_service_status(
     - `202` if the service is starting,
     - `503` if the service is cannot be started.
     """
-    pass
+    print(f"Checking status of service: {service_name}")
+    service = domain.get_service_by_name(
+        db=db,
+        service_name=service_name,
+        docker_client=docker,
+    )
+    match service.container_status:
+        case ServiceStatus.ACTIVE:
+            print(f"Service '{service_name}' is active")
+            domain.update_active_time(db=db, service=service)
+            return 200
+        case ServiceStatus.STARTING:
+            print(f"Service '{service_name}' is starting")
+            domain.update_active_time(db=db, service=service)
+            return 202
+        case ServiceStatus.STOPPED:
+            print(f"Service '{service_name}' is stopped")
+            domain.start_service(
+                db=db,
+                client=docker,
+                service=service,
+            )
+            return 202
+        case ServiceStatus.ERROR:
+            raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")
+        case _:
+            raise HTTPException(status_code=503, detail=f"Service '{service_name}' is unavailable")

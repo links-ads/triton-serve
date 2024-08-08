@@ -5,8 +5,7 @@ x-override: &override
   volumes:
     - configs:/var/serve/configs
     - models:/var/serve/models
-  command: test
-  tty: true
+  command: webserver
 
 volumes:
   configs:
@@ -32,3 +31,24 @@ services:
 
   database:
       container_name: serve-database_test
+
+  # Same image as the backend, but with a different command
+  # Runs the tests inside the container, calling the backend
+  tester:
+    image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - configs:/var/serve/configs
+      - models:/var/serve/models
+    env_file:
+      - .env
+    environment:
+      - RUN_MIGRATIONS=false  # assume backend runs them 
+    depends_on:
+      database:
+        condition: service_healthy
+      traefik:
+        condition: service_healthy
+    container_name: serve-tester_test
+    command: test
+    tty: true

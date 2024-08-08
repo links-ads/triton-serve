@@ -28,7 +28,7 @@ def create_api_key(test_db):
     return _create_api_key
 
 
-@pytest.mark.order(after="test_models.py::test_get_model_wrong_params")
+@pytest.mark.order(after="test_models.py::test_create_models_from_zip")
 def test_api_key_authorized(test_client, test_settings):
     # make a get request for /models and set the X-API-Key header to the app_secret
     response = test_client.get("/models", headers={"X-API-Key": test_settings.api_keys[0]})
@@ -159,11 +159,13 @@ def test_add_service_to_key(
             "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
         },
     )
+    LOG.debug("Service response: %s", service_response.text)
     assert service_response.status_code == 201
     service_id = service_response.json()["service_id"]
 
     # Add service to key
     response = test_client.post(f"/keys/{api_key.key_id}/services/{service_id}")
+    LOG.debug("Add service response: %s", response.text)
     assert response.status_code == 200
     data = response.json()
     assert len(data["services"]) == 1
@@ -177,28 +179,41 @@ def test_add_service_to_key(
 def test_check_service_status(test_client):
     # using the client, get the service key associated with test project
     response = test_client.get("/keys", params={"project": "status_check"})
+    LOG.debug("Response: %s", response.text)
     assert response.status_code == 200
     data = response.json()
     assert len(data) > 0
     key = data[0]["value"]
 
     # Test with user key
-    response = test_client.get("/status", headers={"X-API-Key": "test_key_userkey1"})
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": "test_key_userkey1"},
+    )
     LOG.debug(response.text)
     assert response.status_code == 403
 
     # Test with no key
-    response = test_client.get("/status", headers={"X-API-Key": ""})
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": ""},
+    )
     LOG.debug(response.text)
     assert response.status_code == 403
 
     # Test with invalid key
-    response = test_client.get("/status", headers={"X-API-Key": "invalid_key"})
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": "invalid_key"},
+    )
     LOG.debug(response.text)
     assert response.status_code == 401
 
     # test with the service key
-    response = test_client.get("/status", headers={"X-API-Key": key})
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": key},
+    )
     LOG.debug(response.text)
     assert response.status_code == 200
 

@@ -32,6 +32,26 @@ run_tests() {
         # run alembic upgrade head, exit only if it fails
         alembic upgrade head || exit 1
     fi
+    echo "Waiting for the backend to start..."
+    
+    # Set timeout (in seconds)
+    timeout=60
+    start_time=$(date +%s)
+    while true; do
+        # Try to connect to the backend
+        if curl -s "http://${BACKEND_HOST}:${BACKEND_PORT}" > /dev/null; then
+            echo "Backend is up!"
+            break
+        fi
+        # Check if we've exceeded the timeout
+        current_time=$(date +%s)
+        if [ $((current_time - start_time)) -ge $timeout ]; then
+            echo "Timeout waiting for backend to start. Exiting."
+            exit 1
+        fi
+        echo "Backend not ready yet. Retrying in 5 seconds..."
+        sleep 5
+    done
     echo "Running pytest..."
     exec pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
 }
