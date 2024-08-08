@@ -50,5 +50,5 @@ jobs:
             docker-compose.yml
             docker-compose.test.yml
           compose-flags: "-p serve-test --profile cpu"
-          up-flags: "--build --abort-on-container-exit --exit-code-from backend-cpu"
+          up-flags: "--build --abort-on-container-exit --exit-code-from tester"
           down-flags: "--volumes"

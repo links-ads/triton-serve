@@ -16,7 +16,7 @@ router = APIRouter(prefix="/models")
 
 
 @router.get(
-    "/",
+    "",
     response_model=list[ModelSchema],
     status_code=200,
     tags=["models"],
@@ -84,7 +84,7 @@ def get_model(
 
 
 @router.post(
-    "/",
+    "",
     status_code=201,
     response_model=list[ModelSchema],
     tags=["models"],

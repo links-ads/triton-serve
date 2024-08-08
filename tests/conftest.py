@@ -9,11 +9,10 @@ import docker
 import multipart
 import pytest
 import urllib3
-from fastapi.testclient import TestClient
+from httpx import Client
 
 from triton_serve.config import get_settings
-from triton_serve.extensions import get_db
-from triton_serve.factory import create_app
+from triton_serve.database import database_manager
 
 logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -34,18 +33,6 @@ def test_repository():
     yield TEST_GIT_REPO
 
 
-@pytest.fixture(scope="function")
-def test_db():
-    """
-    Get the database connection
-
-    :return: the database connection
-
-    """
-    db = next(get_db())
-    yield db
-
-
 @pytest.fixture(scope="session")
 def test_settings():
     """
@@ -56,26 +43,38 @@ def test_settings():
 
 
 @pytest.fixture(scope="session")
-def test_app():
+def test_connection(test_settings):
     """
-    Get the uvicorn test app
+    Get the database connection
 
-    :return: the test app
+    :return: the database connection
+
     """
-    LOG.info("Initializing webserver...")
-    app = create_app(settings=get_settings())
-    yield app
+    database_manager.init(test_settings.database_url)
+    yield
+    database_manager.close()
 
 
 @pytest.fixture(scope="session")
-def test_client(test_app, test_settings):
+def test_db(test_connection):
     """
-    Get the test client to call the endpoints of the webserver
+    Get the database session
+
+    :return: the database session
     """
+    with database_manager.session() as session:
+        yield session
+
+
+@pytest.fixture(scope="session")
+def test_client(test_settings, custom_headers=None, timeout=60):
     LOG.debug("Initializing test client...")
-    client = TestClient(app=test_app)
+    client = Client(base_url=f"http://{test_settings.backend_host}:{test_settings.backend_port}", timeout=timeout)
     client.headers.update({"X-API-Key": test_settings.api_keys[0]})
+    if custom_headers:
+        client.headers.update(custom_headers)
     yield client
+    client.close()
 
 
 @pytest.fixture(scope="session")
@@ -97,7 +96,7 @@ def test_docker():
 
 
 @pytest.fixture(scope="session")
-def make_zip():
+def make_zip() -> io.BytesIO:
     @contextmanager
     def _create_zip(
         archive_name: str = "repository.zip",

@@ -153,13 +153,13 @@ test:					## Run tests.
 		--profile cpu \
 		-f docker-compose.yml \
 		-f docker-compose.test.yml up --build \
-		--abort-on-container-exit --exit-code-from backend-cpu; \
+		--abort-on-container-exit --exit-code-from tester; \
 	else \
 		docker compose -p serve-test \
 		--profile gpu \
 		-f docker-compose.yml \
 		-f docker-compose.test.yml up --build \
-		--abort-on-container-exit --exit-code-from backend; fi
+		--abort-on-container-exit --exit-code-from tester; fi
 	@echo "Tearing everything down..."
 	@docker compose -p serve-test \
 		--profile $(PROFILE) \

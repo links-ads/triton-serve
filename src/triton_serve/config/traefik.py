@@ -42,15 +42,23 @@ class TraefikConfigManager:
             "http": {
                 "services": {service_name: {"loadBalancer": {"servers": [{"url": service_url}]}}},
                 "middlewares": {
-                    f"{service_name}_stripprefix": {"stripPrefix": {"prefixes": [prefix_name]}},
-                    f"{service_name}_auth": {
+                    f"{service_name}-stripprefix": {
+                        "stripPrefix": {"prefixes": [prefix_name]},
+                    },
+                    f"{service_name}-auth": {
                         "plugin": {
                             "traefik-api-key-middleware": {
                                 "authenticationHeader": True,
                                 "authenticationheaderName": "X-API-Key",
+                                "removeHeadersOnSuccess": False,
                                 "keys": api_keys,
                             }
                         }
+                    },
+                    f"{service_name}-forward": {
+                        "forwardAuth": {
+                            "address": f"http://backend:5000/status/{service_name}",
+                        },
                     },
                 },
                 "routers": {
@@ -58,8 +66,9 @@ class TraefikConfigManager:
                         "rule": path_prefix,
                         "entryPoints": ["http"],
                         "middlewares": [
-                            f"{service_name}_auth@file",
-                            f"{service_name}_stripprefix@file",
+                            f"{service_name}-auth@file",  # we first check that the key is associated with the service
+                            f"{service_name}-forward@file",  # then we check that the service is running (if it is stopped, we start it)
+                            f"{service_name}-stripprefix@file",  # we strip the prefix from the request
                         ],
                         "service": service_name,
                     }
@@ -88,7 +97,7 @@ class TraefikConfigManager:
         with open(yaml_file_name) as file:
             config = yaml.safe_load(file)
 
-        auth_middleware = config["http"]["middlewares"][f"{service_name}_auth"]["plugin"]["traefik-api-key-middleware"]
+        auth_middleware = config["http"]["middlewares"][f"{service_name}-auth"]["plugin"]["traefik-api-key-middleware"]
         if key not in auth_middleware["keys"]:
             auth_middleware["keys"].append(key)
 
@@ -113,7 +122,7 @@ class TraefikConfigManager:
         with open(yaml_file_name) as file:
             config = yaml.safe_load(file)
 
-        auth_middleware = config["http"]["middlewares"][f"{service_name}_auth"]["plugin"]["traefik-api-key-middleware"]
+        auth_middleware = config["http"]["middlewares"][f"{service_name}-auth"]["plugin"]["traefik-api-key-middleware"]
         if key in auth_middleware["keys"]:
             auth_middleware["keys"].remove(key)
 
