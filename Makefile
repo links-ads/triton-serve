@@ -24,7 +24,7 @@ install: check-venv		## Install the project in dev mode.
 
 .PHONY: fmt
 fmt: check-venv			## Format code using ruff.
-	@$(PY_BIN)/ruff format --check .
+	@$(PY_BIN)/ruff format .
 
 
 

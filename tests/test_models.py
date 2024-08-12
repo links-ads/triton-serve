@@ -264,7 +264,7 @@ def test_delete_non_existent_model(name, version, test_client):
 
 @pytest.mark.order(after="test_get_models_wrong_params")
 @pytest.mark.parametrize("name, version", [("python", 2)])
-def test_delete_model(name, version, test_client, test_settings):
+def test_delete_model_not_in_use(name, version, test_client, test_settings):
     response = test_client.delete(f"/models/{name}/{version}")
     assert response.status_code == 204
     expected_path = test_settings.repository_path / name / str(version)

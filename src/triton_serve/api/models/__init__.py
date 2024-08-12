@@ -24,6 +24,7 @@ router = APIRouter(prefix="/models")
 def get_models(
     model_name: str | None = None,
     version: int | None = None,
+    deleted: bool = False,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
     _: Any = Depends(require_elevated),
@@ -34,17 +35,21 @@ def get_models(
     **Arguments:**
     - `name` (`Optional[str]`, optional): Model `name` as specified by the user. Defaults to `None`.
     - `version` (`Optional[int]`, optional): Version of the model. Defaults to `None`.
+    - `deleted` (`bool`, optional): Whether to include deleted models. Defaults to `False`.
 
     **Returns:**
     - `List[ModelSchema]`: A list of models.
     """
     if model_name == "":
         raise HTTPException(status_code=422, detail="Model name cannot be empty")
+    if version is not None and version < 1:
+        raise HTTPException(status_code=422, detail="Model version must be greater than 0")
     models = domain.list_models(
         db=db,
         storage=storage,
         model_name=model_name,
         version=version,
+        deleted=deleted,
     )
     return models
 

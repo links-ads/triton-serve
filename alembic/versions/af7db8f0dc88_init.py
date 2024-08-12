@@ -2,14 +2,14 @@
 
 Revision ID: af7db8f0dc88
 Revises:
-Create Date: 2024-07-27 18:33:35.895033
+Create Date: 2024-08-12 11:22:23.723813
 
 """
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from alembic import op
+import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -27,15 +27,15 @@ def upgrade() -> None:
         sa.Column("key_type", sa.Enum("ADMIN", "USER", "SERVICE", name="keytype"), nullable=False),
         sa.Column("value", sa.String(), nullable=False),
         sa.Column("project", sa.String(), nullable=False),
-        sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("notes", sa.String(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("key_id"),
         sa.UniqueConstraint("value"),
     )
     op.create_table(
         "machines",
-        sa.Column("host_id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("host_id", sa.Integer(), nullable=False),
         sa.Column("host_name", sa.String(), nullable=False),
         sa.Column("num_cpus", sa.Integer(), nullable=False),
         sa.Column("total_memory", sa.Integer(), nullable=False),
@@ -43,6 +43,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "models",
+        sa.Column("model_id", sa.Integer(), nullable=False),
         sa.Column("model_name", sa.String(), nullable=False),
         sa.Column("model_version", sa.Integer(), nullable=False),
         sa.Column("model_uri", sa.String(), nullable=False),
@@ -64,14 +65,22 @@ def upgrade() -> None:
         ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("source", sa.String(), nullable=True),
         sa.Column("dependencies", postgresql.ARRAY(sa.String()), nullable=True),
         sa.CheckConstraint("model_version > 0", name="model_version_positive"),
-        sa.PrimaryKeyConstraint("model_name", "model_version", name="model_name_version"),
+        sa.PrimaryKeyConstraint("model_id"),
+    )
+    op.create_index(
+        "model_version_idx",
+        "models",
+        ["model_name", "model_version"],
+        unique=True,
+        postgresql_where=sa.text("deleted_at IS NULL"),
     )
     op.create_table(
         "services",
-        sa.Column("service_id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("service_id", sa.Integer(), nullable=False),
         sa.Column("service_name", sa.String(), nullable=False),
         sa.Column("service_image", sa.String(), nullable=False),
         sa.Column("container_id", sa.String(), nullable=True),
@@ -80,11 +89,12 @@ def upgrade() -> None:
             sa.Enum("STARTING", "ACTIVE", "ERROR", "STOPPED", "DELETED", name="servicestatus"),
             nullable=False,
         ),
+        sa.Column("container_command", sa.String(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_active_time", sa.DateTime(timezone=True), nullable=False),
         sa.Column("inactivity_timeout", sa.Integer(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False),
-        sa.Column("last_active_time", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("inactivity_timeout >= 0", name="non_negative_timeout"),
         sa.CheckConstraint("priority >= 0", name="non_negative_priority"),
         sa.PrimaryKeyConstraint("service_id"),
@@ -109,26 +119,17 @@ def upgrade() -> None:
         "key_service_association",
         sa.Column("api_key_id", sa.Integer(), nullable=False),
         sa.Column("service_id", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["api_key_id"],
-            ["api_keys.key_id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["service_id"],
-            ["services.service_id"],
-        ),
+        sa.ForeignKeyConstraint(["api_key_id"], ["api_keys.key_id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["service_id"], ["services.service_id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("api_key_id", "service_id", name="api_key_service"),
     )
     op.create_table(
         "model_mapping",
         sa.Column("service_id", sa.Integer(), nullable=False),
-        sa.Column("model_name", sa.String(), nullable=False),
-        sa.Column("model_version", sa.Integer(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["model_name", "model_version"], ["models.model_name", "models.model_version"], ondelete="CASCADE"
-        ),
+        sa.Column("model_id", sa.Integer(), nullable=False),
+        sa.ForeignKeyConstraint(["model_id"], ["models.model_id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["service_id"], ["services.service_id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("service_id", "model_name", "model_version", name="service_model"),
+        sa.PrimaryKeyConstraint("service_id", "model_id", name="service_model"),
     )
     op.create_table(
         "service_resources",
@@ -148,9 +149,9 @@ def upgrade() -> None:
     )
     op.create_table(
         "device_allocations",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("device_id", sa.String(), nullable=True),
-        sa.Column("service_id", sa.Integer(), nullable=True),
+        sa.Column("allocation_id", sa.Integer(), nullable=False),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("service_id", sa.Integer(), nullable=False),
         sa.Column("allocation_percentage", sa.Float(), nullable=False),
         sa.CheckConstraint(
             "allocation_percentage > 0 AND allocation_percentage <= 100", name="valid_allocation_percentage"
@@ -163,7 +164,7 @@ def upgrade() -> None:
             ["service_id"],
             ["services.service_id"],
         ),
-        sa.PrimaryKeyConstraint("id"),
+        sa.PrimaryKeyConstraint("allocation_id"),
     )
     # ### end Alembic commands ###
 
@@ -177,6 +178,7 @@ def downgrade() -> None:
     op.drop_table("devices")
     op.drop_index("service_name_idx", table_name="services", postgresql_where=sa.text("deleted_at IS NULL"))
     op.drop_table("services")
+    op.drop_index("model_version_idx", table_name="models", postgresql_where=sa.text("deleted_at IS NULL"))
     op.drop_table("models")
     op.drop_table("machines")
     op.drop_table("api_keys")
