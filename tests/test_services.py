@@ -69,6 +69,17 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
 
 @pytest.mark.order(after="test_create_service")
+@pytest.mark.parametrize("name, version", [("onnx", 1)])
+def test_delete_model_in_use(name, version, test_client, test_settings):
+    response = test_client.delete(f"/models/{name}/{version}")
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == f"Cannot delete model: Model <{name}:{version}> is in use"
+    expected_path = test_settings.repository_path / name / str(version)
+    assert expected_path.exists()
+
+
+@pytest.mark.order(after="test_create_service")
 @pytest.mark.parametrize(
     "service_name, service_container_status",
     [

@@ -119,14 +119,10 @@ class LocalModelStorage(ModelStorage):
         updated_uri = self.location(updated)
         updated_root = Path(updated_uri).parent
         current_root = current_uri.parent
-        print(f"current_root: {current_root}")
-        print(f"updated_root: {updated_root}")
-        print(f"current_uri: {current_uri}")
-        print(f"updated_uri: {updated_uri}")
+
         # case 1 - name does not exist: create the model directory and move the version directory inside
         # also add the config file from the original model
         if not updated_root.exists():
-            print("Root does not exist")
             updated_root.mkdir()
             move(current_uri, dst=updated_uri)
             config_file = current_root / "config.pbtxt"
@@ -139,7 +135,6 @@ class LocalModelStorage(ModelStorage):
                 copy(config_file, dst=updated_root / "config.pbtxt")
         # case 2 - the model already exists, we just need to move to the version
         else:
-            print("Root exists")
             move(current_uri, dst=updated_uri)
         # return the updated model URI
         # extra check to remove empty directories, if any
