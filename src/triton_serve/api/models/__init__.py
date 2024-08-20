@@ -23,7 +23,6 @@ router = APIRouter(prefix="/models")
 )
 def get_models(
     model_name: str | None = None,
-    version: int | None = None,
     deleted: bool = False,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
@@ -33,36 +32,26 @@ def get_models(
     Retrieves a list of models, allowing filtering by `name` and `versions`.
 
     **Arguments:**
-    - `name` (`Optional[str]`, optional): Model `name` as specified by the user. Defaults to `None`.
-    - `version` (`Optional[int]`, optional): Version of the model. Defaults to `None`.
-    - `deleted` (`bool`, optional): Whether to include deleted models. Defaults to `False`.
+    - `model_name` (`Optional[str]`, optional): Model `name` as specified by the user. Defaults to `None`.
+    - `deleted` (`Optional[bool]`, optional): Whether to include deleted models. Defaults to `False`.
 
     **Returns:**
     - `List[ModelSchema]`: A list of models.
     """
     if model_name == "":
         raise HTTPException(status_code=422, detail="Model name cannot be empty")
-    if version is not None and version < 1:
-        raise HTTPException(status_code=422, detail="Model version must be greater than 0")
-    models = domain.list_models(
-        db=db,
-        storage=storage,
-        model_name=model_name,
-        version=version,
-        deleted=deleted,
-    )
+    models = domain.get_all_models(db=db, storage=storage, model_name=model_name, deleted=deleted)
     return models
 
 
 @router.get(
-    "/{model_name}/{model_version}",
+    "/{model_name}",
     response_model=ModelSchema,
     status_code=200,
     tags=["models"],
 )
 def get_model(
     model_name: str,
-    model_version: int,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
     _: Any = Depends(require_elevated),
@@ -72,19 +61,13 @@ def get_model(
 
     **Arguments:**
     - `model_name` (`str`): The name of the model.
-    - `model_version` (int): The version of the model.
 
     **Returns:**
     - `ModelSchema`: The requested model.
     """
-    model = domain.get_model(
-        db=db,
-        model_name=model_name,
-        model_version=model_version,
-        storage=storage,
-    )
+    model = domain.get_single_model(db=db, model_name=model_name, storage=storage)
     if model is None:
-        raise HTTPException(status_code=404, detail=f"Model <{model_name}:{model_version}> does not exist")
+        raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
     return model
 
 
@@ -156,13 +139,12 @@ def create_models_from_repository(
 
 
 @router.put(
-    "/{model_name}/{model_version}",
+    "/{model_name}",
     response_model=ModelSchema,
     tags=["models"],
 )
-def edit_model_info(
+def rename_model(
     model_name: str,
-    model_version: int,
     model_info: ModelUpdateBody,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
@@ -173,15 +155,14 @@ def edit_model_info(
 
     **Arguments:**
     - `model_name` (`str`): The name of the model.
-    - `model_version` (`int`): The version of the model.
-    - `model_updates` (`ModelUpdateBody`): The updates to apply to the model.
+    - `model_info` (`ModelUpdateBody`): The updates to apply to the model.
 
     **Returns:**
     - `ModelSchema`: The updated model.
     """
-    model = domain.get_model(db=db, storage=storage, model_name=model_name, model_version=model_version)
+    model = domain.get_single_model(db=db, storage=storage, model_name=model_name)
     if model is None:
-        raise HTTPException(status_code=404, detail=f"Model <{model_name}:{model_version}> does not exist")
+        raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
     domain.edit_model_info(
         db=db,
         storage=storage,
@@ -192,13 +173,13 @@ def edit_model_info(
 
 
 @router.delete(
-    "/{model_name}/{model_version}",
-    status_code=204,
+    "/{model_name}",
+    status_code=200,
     tags=["models"],
 )
 def delete_model(
     model_name: str,
-    model_version: int,
+    model_version: int | None = None,
     db: Session = Depends(get_db),
     storage: ModelStorage = Depends(get_storage),
     _: Any = Depends(require_admin),
@@ -213,7 +194,15 @@ def delete_model(
     **Returns:**
     - `None`
     """
-    model = domain.get_model(db=db, storage=storage, model_name=model_name, model_version=model_version)
+    model = domain.get_single_model(db=db, storage=storage, model_name=model_name)
     if model is None:
-        raise HTTPException(status_code=404, detail=f"Model <{model_name}:{model_version}> does not exist")
-    domain.delete_model(db=db, storage=storage, model=model)
+        raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
+    if model.services:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Model '{model_name}' has associated services. Please delete the services first.",
+        )
+    if model_version is not None:
+        if not any(version.version_id == model_version for version in model.versions):
+            raise HTTPException(status_code=404, detail=f"Model version '{model_name}:{model_version}' does not exist")
+    return domain.delete_model(db=db, storage=storage, model=model, version_number=model_version)

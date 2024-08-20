@@ -12,8 +12,8 @@ from sqlalchemy import (
     String,
     Table,
 )
-from sqlalchemy.orm import Mapped, relationship, mapped_column, declarative_base
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
 
 Base = declarative_base()
 
@@ -106,21 +106,26 @@ class Model(Base):
 
     model_id: Mapped[int] = mapped_column(primary_key=True)
     model_name: Mapped[str] = mapped_column(nullable=False)
-    model_version: Mapped[int] = mapped_column(nullable=False)
-    model_uri: Mapped[str] = mapped_column(nullable=False)
     model_type: Mapped[ModelType] = mapped_column(nullable=False, default=ModelType.UNK)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     source: Mapped[str] = mapped_column(nullable=True)
     dependencies: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True, default=[])
+    version_policy: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    versions: Mapped[list["ModelVersion"]] = relationship("ModelVersion")
 
-    __table_args__ = (
-        Index(
-            "model_version_idx", "model_name", "model_version", unique=True, postgresql_where=(deleted_at.is_(None))
-        ),
-        CheckConstraint("model_version > 0", name="model_version_positive"),
-    )
+    __table_args__ = (Index("model_name_idx", "model_name", unique=True, postgresql_where=(deleted_at.is_(None))),)
+
+
+class ModelVersion(Base):
+    __tablename__ = "model_versions"
+
+    model_id: Mapped[int] = mapped_column(ForeignKey(Model.model_id), primary_key=True)
+    version_id: Mapped[int] = mapped_column(primary_key=True)
+    model_uri: Mapped[str] = mapped_column(nullable=False)
+
+    __table_args__ = (CheckConstraint("version_id > 0", name="version_positive"),)
 
 
 class Service(Base):
@@ -131,12 +136,11 @@ class Service(Base):
     service_image: Mapped[str] = mapped_column(nullable=False)
     container_id: Mapped[str] = mapped_column(nullable=True)
     container_status: Mapped[ServiceStatus] = mapped_column(nullable=False, default=ServiceStatus.STARTING)
-    container_command: Mapped[str] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     last_active_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     inactivity_timeout: Mapped[int] = mapped_column(nullable=False, default=3600)  # 1 hour
-    priority: Mapped[int] = mapped_column(nullable=False, default=0)  # 0 is the lowest priority
+    priority: Mapped[int] = mapped_column(nullable=False)  # 0 is the lowest priority
 
     models: Mapped[list["Model"]] = relationship(secondary=model_service_association, backref="services")
     device_allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="service")

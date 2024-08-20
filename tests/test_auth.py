@@ -62,7 +62,7 @@ def test_create_service_key(test_client):
         "/services",
         json={
             "name": "trt-srv_test_test_service",
-            "models": [{"name": "ensemble", "version": 2}],
+            "models": ["ensemble"],
             "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
         },
     )
@@ -155,7 +155,7 @@ def test_add_service_to_key(
         "/services",
         json={
             "name": "trt-srv_test_another_test_service",
-            "models": [{"name": "onnx", "version": 1}],
+            "models": ["onnx"],
             "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
         },
     )
@@ -227,7 +227,7 @@ def test_remove_service_from_key(test_client, create_api_key):
         "/services",
         json={
             "name": "trt-srv_yet_another_test_service",
-            "models": [{"name": "onnx", "version": 1}],
+            "models": ["onnx"],
             "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
         },
     )

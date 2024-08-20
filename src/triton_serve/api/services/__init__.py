@@ -75,7 +75,7 @@ def get_service(
     **Returns:**
     - `Service`: The requested service.
     """
-    service = domain.get_service(
+    service = domain.get_service_by_id(
         db=db,
         docker_client=docker,
         service_id=service_id,
@@ -106,7 +106,11 @@ def create_service(
     **Arguments:**
     - `name` (`string`): The name of the service to be created.
     - `models` (`list[Model]`): The models to be served by the service.
-    - `gpus` (`int`): The number of GPUs to be allocated to the service. Defaults to `0`.
+    - `docker_image` (`Optional[str]`): The docker image to be used for the service. Defaults to `tritonserver:23.07-py3`.
+    - `environment` (`Optional[dict]`): Environment variables to be passed to the service. Defaults to `{}`.
+    - `resources` (`Optional[ServiceResources]`): Resources to be allocated to the service.
+    - `timeout` (`Optional[int]`): Timeout for the service. Defaults to `3600`.
+    - `priority` (`Optional[int]`): Priority of the service. Defaults to `1`.
 
     **Returns:**
     - `Service` (`ServiceCreateSchema`): Information about the created service.

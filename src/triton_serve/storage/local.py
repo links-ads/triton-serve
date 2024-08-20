@@ -1,7 +1,7 @@
 from pathlib import Path
 from shutil import copy, move, rmtree
 
-from triton_serve.database.schema import ModelSchema
+from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 from triton_serve.storage import ModelStorage
 
 
@@ -39,29 +39,31 @@ class LocalModelStorage(ModelStorage):
                     return True
         return False
 
-    def load(self, model: ModelSchema) -> str:
+    def load(self, model: ModelSchema, version: ModelVersionSchema) -> str:
         """Simply returns the model URI.
 
         Args:
-            model (ModelSchema): The model to load.
+            model (ModelSchema): model name and version
+            version (ModelVersionSchema): model version
 
         Returns:
             str: The model URI.
         """
-        return self.location(model)
+        return self.location(model, version)
 
-    def exists(self, model: ModelSchema) -> bool:
+    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
         """Checks if the model exists in the base path.
 
         Args:
             model (ModelSchema): The model to check.
+            version (ModelVersionSchema): The version to check.
 
         Returns:
             bool: True if the model exists, False otherwise.
         """
-        return Path(self.location(model)).exists()
+        return Path(self.location(model, version)).exists()
 
-    def save(self, model: ModelSchema, origin: Path) -> Path:
+    def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
         """
         Moves the model from the origin to the base path.
         There are two possible scenarios:
@@ -73,6 +75,7 @@ class LocalModelStorage(ModelStorage):
 
         Args:
             model (ModelSchema): The model to save.
+            version (ModelVersionSchema): The version to save.
             origin (Path): The path to the temporary directory containing the model.
 
         Returns:
@@ -81,15 +84,15 @@ class LocalModelStorage(ModelStorage):
         Raises:
             AssertionError: If the version folder does not exist.
         """
-        model_uri = self.location(model)
+        model_uri = self.location(model, version)
         model_root = Path(model_uri).parent
         # create the model directory if it does not exist
         model_root.mkdir(exist_ok=True)
         # compose the temporary paths for the config file and the version directory
         config_tmp = origin / model.model_name / "config.pbtxt"
-        model_version_tmp = origin / model.model_name / str(model.model_version)
+        model_version_tmp = origin / model.model_name / str(version.version_id)
         # check if the version directory exists, this is a must
-        assert model_version_tmp.exists(), f"Version {model.model_name}:{model.model_version} does not exist"
+        assert model_version_tmp.exists(), f"Version {model.model_name}:{version.version_id} does not exist"
         # if the config file is present, move it to the model root
         # using the full path in destination overwrites the original file
         if config_tmp.exists():
@@ -102,7 +105,7 @@ class LocalModelStorage(ModelStorage):
         # return the model URI
         return model_uri
 
-    def update(self, updated: ModelSchema, current_uri: Path) -> Path:
+    def update(self, model: ModelSchema, version: ModelVersionSchema, current_uri: Path) -> Path:
         """
         Moves the updated model to the base path.
         The model is moved from the temporary directory to the base path.
@@ -116,7 +119,7 @@ class LocalModelStorage(ModelStorage):
             Path: The model URI.
         """
         # two cases again: the new name does not exist, or it does
-        updated_uri = self.location(updated)
+        updated_uri = self.location(model, version)
         updated_root = Path(updated_uri).parent
         current_root = current_uri.parent
 
@@ -141,14 +144,14 @@ class LocalModelStorage(ModelStorage):
         self._delete_empty_directories(self.base_path)
         return updated_uri
 
-    def delete(self, model: ModelSchema) -> None:
+    def delete(self, model: ModelSchema, version: ModelVersionSchema) -> None:
         """
         Deletes the model from the base path. If the model is the last one in the directory,
         the directory is removed as well.
         """
-        model_uri = self.location(model)
+        model_uri = self.location(model, version)
         rmtree(model_uri, ignore_errors=False)
-        model_root = Path(self.location(model)).parent
+        model_root = Path(self.location(model, version)).parent
         # if the model root does not have version folders, remove it
         if not self._contains_directory(model_root):
             rmtree(model_root, ignore_errors=False)

@@ -4,6 +4,7 @@ from itertools import chain
 from pathlib import Path
 
 from docker import DockerClient
+from docker.models.images import Image
 from docker.errors import APIError, ImageNotFound, NotFound, NullResource
 from docker.types import DeviceRequest
 from fastapi import HTTPException
@@ -11,7 +12,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateResources
-from triton_serve.api.models.domain import get_model
+from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
     Device,
@@ -49,7 +50,7 @@ def list_services(
     return [check_service_status(db=db, docker_client=docker_client, service=service) for service in services]
 
 
-def get_service(db: Session, service_id: int, docker_client: DockerClient | None = None):
+def get_service_by_id(db: Session, service_id: int, docker_client: DockerClient | None = None):
     """Returns a specific service by id, if present.
 
     Args:
@@ -122,21 +123,21 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
         .outerjoin(alloc_subquery, Device.uuid == alloc_subquery.c.device_id)
         .where(
             or_(
-                alloc_subquery.c.total_allocation.is_(None),  # Devices with no allocations
-                (
-                    100 - alloc_subquery.c.total_allocation
-                    >= required_percentage  # Devices with enough free allocation
-                ),
+                # Devices with no allocations
+                alloc_subquery.c.total_allocation.is_(None),
+                # Devices with enough free allocation
+                (100 - alloc_subquery.c.total_allocation >= required_percentage),
             )
         )
-        .order_by(func.coalesce(alloc_subquery.c.total_allocation, 0))  # Order by least allocated first
+        # Order by least allocated first
+        .order_by(func.coalesce(alloc_subquery.c.total_allocation, 0))
         .limit(count)
     )
 
     return db.scalars(query).all()
 
 
-def get_service_image(docker_client: DockerClient, image_name: str):
+def get_service_image(docker_client: DockerClient, image_name: str) -> Image:
     """Returns the image id of a docker image.
     If it does not exist, it tries to pull it from the registry, otherwise raises
     an HTTPException with code 412, and the message "Image not found".
@@ -151,10 +152,10 @@ def get_service_image(docker_client: DockerClient, image_name: str):
     try:
         try:
             image = docker_client.images.get(image_name)
-            return image.id
+            return image
         except ImageNotFound:
             image = docker_client.images.pull(image_name)
-            return image.id
+            return image
     except APIError as e:
         raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
 
@@ -232,7 +233,7 @@ def spawn_service_container(
 
     # prepare the requirements, if any
     environment = environment or {}
-    dependencies_list = list(chain.from_iterable([model.dependencies for model in models]))
+    dependencies_list = set(chain.from_iterable([model.dependencies for model in models]))
     environment["WORKER_REQUIREMENTS"] = " ".join(dependencies_list) if dependencies_list else ""
 
     # prepare the list of models to load
@@ -283,14 +284,9 @@ def validate_models(db: Session, storage: ModelStorage, model_infos: list) -> li
         HTTPException: If a specified model does not exist.
     """
     model_instances = []
-    for model_info in model_infos:
-        model = get_model(
-            db=db,
-            model_name=model_info.name,
-            model_version=model_info.version,
-            storage=storage,
-        )
-        assert model is not None, f"Model <{model_info}> does not exist"
+    for model_name in model_infos:
+        model = get_single_model(db=db, model_name=model_name, storage=storage)
+        assert model is not None, f"Model '{model_name}' does not exist"
         model_instances.append(model)
     return model_instances
 
@@ -327,7 +323,7 @@ def create_service_entry(
     service_priority: int,
     service_resources: ServiceCreateResources,
     service_environment: dict,
-    model_instances: list,
+    model_instances: list[Model],
 ) -> Service:
     """
     Creates a new service entry in the database.
@@ -402,7 +398,7 @@ def create_service(
     service_timeout: int,
     service_priority: int,
     service_api_keys: list[str],
-    model_infos: list,
+    model_infos: list[str],
 ) -> Service:
     """
     Creates a Triton docker container loading the specified models.
@@ -433,7 +429,7 @@ def create_service(
     try:
         # Validate image
         assert image_name, "No image specified"
-        image_id = get_service_image(client, image_name)
+        image = get_service_image(client, image_name)
         model_instances = validate_models(db, storage, model_infos)
         device_infos = get_available_gpus(db, service_resources.gpus)
         # Create service entry in database
@@ -456,7 +452,7 @@ def create_service(
         # Spawn docker container
         container_id = spawn_service_container(
             client=client,
-            image_id=image_id,
+            image_id=image.id,
             worker_name=service_name,
             worker_network=service_network,
             worker_volume=service_models_volume,
@@ -513,7 +509,7 @@ def delete_service(
     """
     try:
         # check if service exists
-        if (service := get_service(db=db, docker_client=client, service_id=service_id)) is None:
+        if (service := get_service_by_id(db=db, docker_client=client, service_id=service_id)) is None:
             raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
 
         current_time = datetime.now(tz=timezone.utc)
@@ -591,7 +587,7 @@ def stop_service(
 ) -> None:
     try:
         LOG.debug(f"Stopping service {service_id}...")
-        service = get_service(db=db, docker_client=client, service_id=service_id)
+        service = get_service_by_id(db=db, docker_client=client, service_id=service_id)
         client.containers.get(service.container_id).stop()
         service.container_status = ServiceStatus.STOPPED
         db.commit()

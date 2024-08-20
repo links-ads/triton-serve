@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ModelUpdateBody
-from triton_serve.database.model import Model
+from triton_serve.database.model import Model, ModelVersion
 from triton_serve.database.schema import ModelCreateSchema, timezone_aware_now
 from triton_serve.storage import ModelSource, ModelStorage
 from triton_serve.storage.validation import validate_models
@@ -14,40 +14,37 @@ from triton_serve.storage.validation import validate_models
 LOG = logging.getLogger("uvicorn")
 
 
-def get_model(db: Session, storage: ModelStorage, model_name: str, model_version: int) -> Model | None:
+def get_single_model(
+    db: Session,
+    storage: ModelStorage,
+    model_name: str,
+) -> Model | None:
     """
-    Retrieves a model given a unique combination of name and version.
+    Retrieves a model given a unique name.
 
     Args:
         db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
         model_name (str): The name of the model to retrieve.
-        model_version (int): The version of the model to retrieve.
 
     Returns:
-        ModelSchema: Returns the requested ModelSchema instance if found, or None otherwise.
+        Model: Returns the requested model instance if found, or None otherwise.
     """
     model = (
-        # partial index allows for a unique constraint on the model name and version
-        # we can assume there is only one model with the given name and version (not deleted)
         db.query(Model)
         .filter(
             Model.model_name == model_name,
-            Model.model_version == model_version,
             Model.deleted_at.is_(None),
         )
         .first()
     )
-    if model is not None:
-        assert storage.exists(model), f"Model URI {model.model_uri} does not exist"
     return model
 
 
-def list_models(
+def get_all_models(
     db: Session,
     storage: ModelStorage,
     model_name: str | None = None,
-    version: int | None = None,
     deleted: bool = False,
 ) -> list[Model]:
     """
@@ -56,28 +53,17 @@ def list_models(
     Args:
         repository_path (Path): The path to the directory containing the models.
         model_name (Optional[str], optional): The name of the model to filter. Defaults to None.
-        version (Optional[int], optional): The version of the model to filter. Defaults to None.
         deleted (bool, optional): Whether to include deleted models. Defaults to False.
 
     Returns:
         List[ModelSchema]: A list of ModelSchema instances representing the filtered models.
     """
-    # query models from database based on the given parameters
-    LOG.debug(f"Retrieving models with name {model_name} and version {version}")
     statement = db.query(Model)
     if model_name is not None:
         statement = statement.filter(Model.model_name == model_name)
-    if version is not None:
-        statement = statement.filter(Model.model_version == version)
     if not deleted:
         statement = statement.filter(Model.deleted_at.is_(None))
-    models = statement.all()
-    # assert the stored path exists
-    for model in models:
-        assert storage.exists(model), f"Model URI {model.model_uri} does not exist"
-
-    # return the list of models
-    return models
+    return statement.all()
 
 
 def create_models_from_source(
@@ -106,39 +92,42 @@ def create_models_from_source(
         with tempfile.TemporaryDirectory() as tmp_dir:
             models_origin = source.origin()
             tmp_repository = source.extract(path=Path(tmp_dir))
-            validated: list[ModelCreateSchema] = validate_models(tmp_repository)
+            validated_models: list[ModelCreateSchema] = validate_models(tmp_repository)
             # store the models in the database
-            for instance in validated:
+            for instance in validated_models:
                 # verify the model is not already in the database
-                LOG.debug(f"Creating model {instance.model_name}:{instance.model_version}")
-                if existing_model := get_model(
-                    db=db,
-                    storage=storage,
-                    model_name=instance.model_name,
-                    model_version=instance.model_version,
-                ):
-                    # if update is enabled, delete the previous model from the repository
-                    # and update the model instance in the database
-                    if update:
-                        storage.delete(existing_model)
-                        instance.model_uri = str(storage.save(instance, origin=tmp_repository))
-                        instance.source = instance.source or models_origin
-                        for key, value in instance.model_dump().items():
-                            setattr(existing_model, key, value)
-                        existing_model.updated_at = timezone_aware_now()
-                        model = existing_model
-                    else:
+                if old_model := get_single_model(db=db, storage=storage, model_name=instance.model_name):
+                    if not update:
                         raise HTTPException(
                             status_code=409,
-                            detail=f"Model <{instance.model_name}:{instance.model_version}> already exists",
+                            detail=f"Model '{instance.model_name}' already exists",
                         )
+                    # if update is enabled, update the model fields...
+                    old_model.model_type = instance.model_type
+                    old_model.source = instance.source or models_origin
+                    old_model.dependencies = instance.dependencies
+                    old_model.version_policy = instance.version_policy
+                    old_model.updated_at = timezone_aware_now()
+                    # clean up the versions
+                    for version in old_model.versions:
+                        storage.delete(old_model, version)
+                    old_model.versions = []
+                    # ... then update its versions
+                    for version in instance.versions:
+                        version.model_id = old_model.model_id
+                        version.model_uri = str(storage.save(old_model, version, origin=tmp_repository))
+                        old_model.versions.append(ModelVersion(**version.model_dump()))
+
                 # if the model does not exist, create a new model
                 # store files in the repository and create a new model instance
                 else:
-                    instance.model_uri = str(storage.save(instance, origin=tmp_repository))
+                    model_versions = []
                     instance.source = instance.source or models_origin
-                    # store the model in the database
-                    model = Model(**instance.model_dump())
+                    for version in instance.versions:
+                        version.model_uri = str(storage.save(instance, version, origin=tmp_repository))
+                        model_versions.append(ModelVersion(**version.model_dump()))
+
+                    model = Model(**{**instance.model_dump(), "versions": model_versions})
                     db.add(model)
 
                 db.commit()
@@ -169,19 +158,16 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
     """
     try:
         updated_name = updates.name or model.model_name
-        updated_version = updates.version or model.model_version
-        LOG.debug(f"Updating model {model.model_name}:{model.model_version} to {updated_name}:{updated_version}")
-        # check if the model exists
+        # check if the updated model exists
         assert (
-            get_model(db=db, storage=storage, model_name=updated_name, model_version=updated_version) is None
-        ), f"Model <{updated_name}:{updated_version}> already exists"
+            get_single_model(db=db, storage=storage, model_name=updated_name) is None
+        ), f"Model '{updated_name}' already exists"
         # update the model
         model.model_name = updated_name
-        model.model_version = updated_version
         model.source = updates.source or model.source
-        # update the model in the storage
-        model.model_uri = str(storage.update(model, current_uri=Path(model.model_uri)))
         model.updated_at = timezone_aware_now()
+        for version in model.versions:
+            version.model_uri = str(storage.update(model, version, current_uri=Path(version.model_uri)))
         db.commit()
         db.refresh(model)
         return model
@@ -192,13 +178,20 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
         raise HTTPException(status_code=500, detail=f"Cannot update model: {e}")
 
 
-def delete_model(db: Session, storage: ModelStorage, model: Model) -> Model:
+def delete_model(
+    db: Session,
+    storage: ModelStorage,
+    model: Model,
+    version_number: int | None,
+) -> Model:
     """
     Deletes a model given the name and the version.
 
     Args:
+        db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
         model (ModelSchema): The model to delete.
+        version_number (int): The version of the model to delete.
 
     Raises:
         HTTPException: If the model could not be deleted.
@@ -207,17 +200,21 @@ def delete_model(db: Session, storage: ModelStorage, model: Model) -> Model:
         None
 
     """
-    try:
-        LOG.debug(f"Deleting model {model.model_name}:{model.model_version}")
-        # check if the model is in use
-        assert not model.services, f"Model <{model.model_name}:{model.model_version}> is in use"
-        storage.delete(model)
-        model.deleted_at = timezone_aware_now()
-        db.commit()
-        db.refresh(model)
-        return model
-    except AssertionError as e:
-        raise HTTPException(status_code=409, detail=f"Cannot delete model: {e}")
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Cannot delete model: {e}")
+    LOG.debug("Deleting model '%s' (version: %s)", model.model_name, version_number)
+    if version_number is not None:
+        model_version = db.query(ModelVersion).get(model.model_id, version_number)
+        versions = [model_version]
+    else:
+        versions = model.versions
+
+    for version in versions:
+        storage.delete(model, version)
+        db.delete(version)
+
+    model.deleted_at = timezone_aware_now()
+    db.commit()
+    db.refresh(model)
+    return model
+
+    # except AssertionError as e:
+    #     raise HTTPException(status_code=409, detail=f"Cannot delete model: {e}")

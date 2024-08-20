@@ -53,7 +53,7 @@ run_tests() {
         sleep 5
     done
     echo "Running pytest..."
-    exec pytest -sv --cov-report=term --log-cli-level=${LOG_LEVEL:-info} --cov=src tests/
+    exec pytest -sv --cov-report=term --log-level=${LOG_LEVEL:-info} --cov=src tests/
 }
 
 check_gpus() {
