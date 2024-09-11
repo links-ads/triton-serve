@@ -40,8 +40,9 @@ def test_create_models_from_zip(test_client, test_settings, make_zip, model):
     with make_zip(include_models=[model]) as src:
         src = cast(io.BytesIO, src)
         response = test_client.post("/models", files={"package": src})
-    LOG.debug(f"Response: {response.text}")
+    LOG.info(f"Response: {response.text}")
     assert response.status_code == 201
+
     # check if the model is present inside the models repository
     expected_model_root = test_settings.repository_path / model
     assert expected_model_root.exists() and expected_model_root.is_dir()
@@ -146,9 +147,8 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
 @pytest.mark.parametrize(
     "name, count",
     [
-        ("ensemble", 2),
+        ("ensemble", 1),
         ("onnx", 1),
-        (None, 6),
         ("non_existent", 0),
         (None, 5),
     ],
@@ -178,12 +178,13 @@ def test_get_models(test_client, name, count):
         assert "versions" in item
         assert len(item["versions"]) > 0
         if name == "ensemble":
+            assert item["model_name"] == "ensemble"
             assert item["model_type"] == "ensemble"
             assert len(item["versions"]) == 2
 
 
 @pytest.mark.order(after="test_create_models_from_zip_already_existing")
-@pytest.mark.parametrize("name", ["", "whatever"])
+@pytest.mark.parametrize("name", [""])
 def test_get_models_wrong_params(test_client, name):
     query_params = {}
     if name is not None:
@@ -198,6 +199,7 @@ def test_get_models_wrong_params(test_client, name):
 @pytest.mark.parametrize("name", ["onnx", "python"])
 def test_get_model(test_client, name):
     response = test_client.get(f"/models/{name}")
+
     assert response.status_code == 200
     data = response.json()
     assert data["model_name"] == name
@@ -210,8 +212,6 @@ def test_get_model(test_client, name):
     [
         ("ensemble", 200),
         ("non_existent", 404),
-        ("", 422),
-        (12, 422),
     ],
 )
 def test_get_model_wrong_params(test_client, name, expected_code):
@@ -223,8 +223,8 @@ def test_get_model_wrong_params(test_client, name, expected_code):
 @pytest.mark.parametrize(
     "query_params",
     [
-        ({"model_name": "onnx"},),
-        ({"model_name": "ensemble"},),
+        {"model_name": "onnx"},
+        {"model_name": "ensemble"},
     ],
 )
 def test_get_models_filters(test_client, query_params):

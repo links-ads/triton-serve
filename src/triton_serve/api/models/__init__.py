@@ -25,7 +25,6 @@ def get_models(
     model_name: str | None = None,
     deleted: bool = False,
     db: Session = Depends(get_db),
-    storage: ModelStorage = Depends(get_storage),
     _: Any = Depends(require_elevated),
 ):
     """
@@ -40,7 +39,7 @@ def get_models(
     """
     if model_name == "":
         raise HTTPException(status_code=422, detail="Model name cannot be empty")
-    models = domain.get_all_models(db=db, storage=storage, model_name=model_name, deleted=deleted)
+    models = domain.get_all_models(db=db, model_name=model_name, deleted=deleted)
     return models
 
 
@@ -53,7 +52,6 @@ def get_models(
 def get_model(
     model_name: str,
     db: Session = Depends(get_db),
-    storage: ModelStorage = Depends(get_storage),
     _: Any = Depends(require_elevated),
 ):
     """
@@ -65,7 +63,7 @@ def get_model(
     **Returns:**
     - `ModelSchema`: The requested model.
     """
-    model = domain.get_single_model(db=db, model_name=model_name, storage=storage)
+    model = domain.get_single_model(db=db, model_name=model_name)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
     return model
@@ -160,7 +158,7 @@ def rename_model(
     **Returns:**
     - `ModelSchema`: The updated model.
     """
-    model = domain.get_single_model(db=db, storage=storage, model_name=model_name)
+    model = domain.get_single_model(db=db, model_name=model_name)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
     domain.edit_model_info(
@@ -194,14 +192,16 @@ def delete_model(
     **Returns:**
     - `None`
     """
-    model = domain.get_single_model(db=db, storage=storage, model_name=model_name)
+    model = domain.get_single_model(db=db, model_name=model_name)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' does not exist")
-    if model.services:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Model '{model_name}' has associated services. Please delete the services first.",
-        )
+    # do not allow deletion of models with associated active services
+    for service in model.services:
+        if service.deleted_at is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Model '{model_name}' has associated services. Please delete the services first.",
+            )
     if model_version is not None:
         if not any(version.version_id == model_version for version in model.versions):
             raise HTTPException(status_code=404, detail=f"Model version '{model_name}:{model_version}' does not exist")

@@ -16,7 +16,6 @@ LOG = logging.getLogger("uvicorn")
 
 def get_single_model(
     db: Session,
-    storage: ModelStorage,
     model_name: str,
 ) -> Model | None:
     """
@@ -43,7 +42,6 @@ def get_single_model(
 
 def get_all_models(
     db: Session,
-    storage: ModelStorage,
     model_name: str | None = None,
     deleted: bool = False,
 ) -> list[Model]:
@@ -51,7 +49,7 @@ def get_all_models(
     Retrieves a list of models filtered by the given parameters, if provided.
 
     Args:
-        repository_path (Path): The path to the directory containing the models.
+        db (Session): The database session to query from.
         model_name (Optional[str], optional): The name of the model to filter. Defaults to None.
         deleted (bool, optional): Whether to include deleted models. Defaults to False.
 
@@ -96,7 +94,8 @@ def create_models_from_source(
             # store the models in the database
             for instance in validated_models:
                 # verify the model is not already in the database
-                if old_model := get_single_model(db=db, storage=storage, model_name=instance.model_name):
+                print(instance.model_name)
+                if old_model := get_single_model(db=db, model_name=instance.model_name):
                     if not update:
                         raise HTTPException(
                             status_code=409,
@@ -111,12 +110,14 @@ def create_models_from_source(
                     # clean up the versions
                     for version in old_model.versions:
                         storage.delete(old_model, version)
+                        db.delete(version)
                     old_model.versions = []
                     # ... then update its versions
                     for version in instance.versions:
                         version.model_id = old_model.model_id
                         version.model_uri = str(storage.save(old_model, version, origin=tmp_repository))
                         old_model.versions.append(ModelVersion(**version.model_dump()))
+                    model = old_model
 
                 # if the model does not exist, create a new model
                 # store files in the repository and create a new model instance
@@ -159,9 +160,7 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
     try:
         updated_name = updates.name or model.model_name
         # check if the updated model exists
-        assert (
-            get_single_model(db=db, storage=storage, model_name=updated_name) is None
-        ), f"Model '{updated_name}' already exists"
+        assert get_single_model(db=db, model_name=updated_name) is None, f"Model '{updated_name}' already exists"
         # update the model
         model.model_name = updated_name
         model.source = updates.source or model.source

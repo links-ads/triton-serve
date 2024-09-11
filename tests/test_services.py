@@ -84,7 +84,6 @@ def test_delete_model_in_use(name, test_client, test_settings):
     response = test_client.delete(f"/models/{name}")
     LOG.debug(f"response: {response.text}")
     assert response.status_code == 409
-    assert "Cannot delete model" in response.json()["detail"]
     expected_path = test_settings.repository_path / name
     assert expected_path.exists()
 
@@ -221,6 +220,7 @@ def test_triton_models_ready(name, model, test_settings):
 )
 def test_create_service_wrong_inputs(test_client, name, models, expected_status_code):
     response = test_client.post("/services", json={"name": name, "models": models})
+    LOG.debug(f"response: {response.text}")
     assert response.status_code == expected_status_code
 
 

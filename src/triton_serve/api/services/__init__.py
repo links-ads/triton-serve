@@ -10,14 +10,12 @@ from triton_serve.config import (
     AppSettings,
     TraefikConfigManager,
     get_settings,
-    get_storage,
     get_traefik,
 )
 from triton_serve.database.model import ServiceStatus
 from triton_serve.database.schema import ServiceSchema
 from triton_serve.extensions import docker_client, get_db
 from triton_serve.security import require_admin, require_elevated, require_service
-from triton_serve.storage import ModelStorage
 
 router = APIRouter()
 
@@ -96,7 +94,6 @@ def create_service(
     settings: AppSettings = Depends(get_settings),
     docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
-    storage: ModelStorage = Depends(get_storage),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
@@ -119,7 +116,6 @@ def create_service(
     return domain.create_service(
         client=docker,
         traefik=traefik,
-        storage=storage,
         service_name=service_params.name,
         image_name=docker_image,
         service_network=settings.service_network,
@@ -210,7 +206,6 @@ def check_service_status(
     - `202` if the service is starting,
     - `503` if the service is cannot be started.
     """
-    print(f"Checking status of service: {service_name}")
     service = domain.get_service_by_name(
         db=db,
         service_name=service_name,
@@ -218,15 +213,12 @@ def check_service_status(
     )
     match service.container_status:
         case ServiceStatus.ACTIVE:
-            print(f"Service '{service_name}' is active")
             domain.update_active_time(db=db, service=service)
             return 200
         case ServiceStatus.STARTING:
-            print(f"Service '{service_name}' is starting")
             domain.update_active_time(db=db, service=service)
             return 202
         case ServiceStatus.STOPPED:
-            print(f"Service '{service_name}' is stopped")
             domain.start_service(
                 db=db,
                 client=docker,

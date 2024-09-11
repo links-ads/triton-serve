@@ -4,8 +4,8 @@ from itertools import chain
 from pathlib import Path
 
 from docker import DockerClient
-from docker.models.images import Image
 from docker.errors import APIError, ImageNotFound, NotFound, NullResource
+from docker.models.images import Image
 from docker.types import DeviceRequest
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
@@ -22,7 +22,6 @@ from triton_serve.database.model import (
     ServiceResources,
     ServiceStatus,
 )
-from triton_serve.storage import ModelStorage
 
 LOG = logging.getLogger("uvicorn")
 
@@ -268,13 +267,12 @@ def spawn_service_container(
     return container.id
 
 
-def validate_models(db: Session, storage: ModelStorage, model_infos: list) -> list:
+def validate_models(db: Session, model_infos: list) -> list:
     """
     Validates the existence of specified models in the database.
 
     Args:
         db (Session): The database session.
-        storage (ModelStorage): The model storage manager.
         model_infos (list): List of model information to validate.
 
     Returns:
@@ -285,7 +283,9 @@ def validate_models(db: Session, storage: ModelStorage, model_infos: list) -> li
     """
     model_instances = []
     for model_name in model_infos:
-        model = get_single_model(db=db, model_name=model_name, storage=storage)
+        if model_name == "":
+            raise HTTPException(status_code=422, detail="Model name cannot be empty")
+        model = get_single_model(db=db, model_name=model_name)
         assert model is not None, f"Model '{model_name}' does not exist"
         model_instances.append(model)
     return model_instances
@@ -387,7 +387,6 @@ def create_service(
     db: Session,
     client: DockerClient,
     traefik: TraefikConfigManager,
-    storage: ModelStorage,
     service_name: str,
     image_name: str,
     service_network: str,
@@ -407,7 +406,6 @@ def create_service(
         db (Session): The database session.
         client (DockerClient): The Docker client.
         traefik (TraefikConfigManager): The Traefik config manager.
-        storage (ModelStorage): The model storage manager.
         service_name (str): The name of the service.
         image_name (str): The name of the Docker image to use.
         service_network (str): The name of the Docker network to use.
@@ -430,7 +428,7 @@ def create_service(
         # Validate image
         assert image_name, "No image specified"
         image = get_service_image(client, image_name)
-        model_instances = validate_models(db, storage, model_infos)
+        model_instances = validate_models(db, model_infos)
         device_infos = get_available_gpus(db, service_resources.gpus)
         # Create service entry in database
         service = create_service_entry(
@@ -482,7 +480,7 @@ def create_service(
         raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {str(e)}") from e
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Unexpected error creating service: {str(e)}") from e
+        raise e
 
 
 def delete_service(
