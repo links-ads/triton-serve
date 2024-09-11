@@ -40,16 +40,34 @@ class DeviceSchema(DeviceBaseSchema):
     host_id: int
 
 
+class ModelVersionBaseSchema(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    version_id: int
+    model_uri: str
+
+
+class ModelVersionCreateSchema(ModelVersionBaseSchema):
+    model_id: int | None = None
+
+
+class ModelVersionSchema(ModelVersionBaseSchema):
+    model_config = ConfigDict(
+        from_attributes=True,
+        protected_namespaces=(),
+    )
+    model_id: int
+
+
 class ModelBaseSchema(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
-    model_version: int
     model_type: ModelType
-    model_uri: str
     created_at: datetime = Field(default_factory=timezone_aware_now)
     updated_at: datetime = Field(default_factory=timezone_aware_now)
     source: str | None = None
     dependencies: list | None = Field(default_factory=list)
+    version_policy: dict | None = None
+    versions: list[ModelVersionBaseSchema] = Field(default_factory=list)
 
 
 class ModelCreateSchema(ModelBaseSchema):
@@ -58,6 +76,7 @@ class ModelCreateSchema(ModelBaseSchema):
 
 class ModelSchema(ModelBaseSchema):
     model_config = ConfigDict(from_attributes=True)
+    model_id: int
 
 
 class ServiceResourcesSchema(BaseModel):
@@ -83,8 +102,8 @@ class ServiceBaseSchema(BaseModel):
     priority: int = Field(default=0, ge=0)
     last_active_time: datetime | None = None
     resources: ServiceResourcesSchema
-    models: list[ModelSchema] = []
-    device_allocations: list[DeviceAllocationSchema] = []
+    models: list[ModelSchema] = Field(default_factory=list)
+    device_allocations: list[DeviceAllocationSchema] = Field(default_factory=list)
 
 
 class ServiceCreateSchema(ServiceBaseSchema):

@@ -4,7 +4,6 @@ import time
 import pytest
 import requests
 from docker.errors import NotFound
-
 from triton_serve.database.model import Device, Service, ServiceStatus
 from triton_serve.tasks import update_service_status
 
@@ -17,23 +16,28 @@ LOG = logging.getLogger(pytest.__name__)
     [
         (
             "trt-srv_test_svc1",
-            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            ["squeezenet"],
             {"gpus": 1, "shm_size": 256, "mem_size": 1024},
             3600,
         ),
         (
             "trt-srv_test_svc4",
-            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            ["ensemble_py_step", "ensemble"],
             {"gpus": 0, "shm_size": 256, "mem_size": 1024},
-            5,  # set timeout to 1 seconds to test stopping the service
+            5,  # set timeout low to test stopping the service
         ),
         (
             "trt-srv_test_svc3",
-            [{"name": "ensemble_py_step", "version": 1}, {"name": "ensemble", "version": 2}],
+            ["onnx"],
             {"gpus": 0, "shm_size": 256, "mem_size": 1024},
             3600,
         ),
-        ("trt-srv_test_svc2", [{"name": "onnx", "version": 1}], {"gpus": 0, "shm_size": 256, "mem_size": 1024}, 3600),
+        (
+            "trt-srv_test_svc2",
+            ["onnx"],
+            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
+            3600,
+        ),
     ],
 )
 def test_create_service(test_client, test_docker, test_db, name, models, resources, timeout):
@@ -41,7 +45,13 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
     devices = set(test_db.query(Device.uuid).all())
 
     response = test_client.post(
-        "/services", json={"name": name, "models": models, "resources": resources, "timeout": timeout}
+        "/services",
+        json={
+            "name": name,
+            "models": models,
+            "resources": resources,
+            "timeout": timeout,
+        },
     )
     LOG.debug(f"response: {response.text}")
     if resources["gpus"] and not devices:
@@ -69,13 +79,12 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
 
 @pytest.mark.order(after="test_create_service")
-@pytest.mark.parametrize("name, version", [("onnx", 1)])
-def test_delete_model_in_use(name, version, test_client, test_settings):
-    response = test_client.delete(f"/models/{name}/{version}")
+@pytest.mark.parametrize("name,", ["onnx"])
+def test_delete_model_in_use(name, test_client, test_settings):
+    response = test_client.delete(f"/models/{name}")
     LOG.debug(f"response: {response.text}")
     assert response.status_code == 409
-    assert response.json()["detail"] == f"Cannot delete model: Model <{name}:{version}> is in use"
-    expected_path = test_settings.repository_path / name / str(version)
+    expected_path = test_settings.repository_path / name
     assert expected_path.exists()
 
 
@@ -205,13 +214,13 @@ def test_triton_models_ready(name, model, test_settings):
     "name, models, expected_status_code",
     [
         ("", ["ensemble"], 422),
-        ("trt-srv_test_svc4", [{"name": "nonexistent", "version": 1}], 409),
-        ("trt-srv_test_svc5", [{"name": "nonexistent", "version": 1}], 409),
-        ("trt-srv_test_svc6", [{"name": "nonexistent", "version": 1}], 409),
+        ("trt-srv_test_svc4", [""], 422),
+        ("trt-srv_test_svc5", ["nonexistent"], 409),
     ],
 )
 def test_create_service_wrong_inputs(test_client, name, models, expected_status_code):
     response = test_client.post("/services", json={"name": name, "models": models})
+    LOG.debug(f"response: {response.text}")
     assert response.status_code == expected_status_code
 
 

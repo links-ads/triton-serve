@@ -10,7 +10,6 @@ import multipart
 import pytest
 import urllib3
 from httpx import Client
-
 from triton_serve.config import get_settings
 from triton_serve.database import database_manager
 

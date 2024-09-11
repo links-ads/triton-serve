@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from triton_serve.database.schema import ModelSchema
+from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 
 
 class BaseExtractor(ABC):
@@ -51,24 +51,27 @@ class ModelStorage(ABC):
     def __init__(self, base_path: Path) -> None:
         self.base_path = base_path
 
-    def location(self, model: ModelSchema) -> str:
+    def location(self, model: ModelSchema, version: ModelVersionSchema) -> str:
         """Constructs the absolute path to the package, starting from the base path
         and using both the artifact's name and the artifact's version.
 
-        :param artifact: artifact instance or its schema
-        :type artifact: ArtifactSchema
-        :return: path to the artifact files
-        :rtype: str
+        Args:
+            model (ModelSchema): model name and version
+            version (ModelVersionSchema): model version
+
+        Returns:
+            str: absolute path to the package
         """
-        return self.base_path / model.model_name / str(model.model_version)
+        return self.base_path / model.model_name / str(version.version_id)
 
     @abstractmethod
-    def load(self, model: ModelSchema) -> Path:
+    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
         """Required to transform a possibly remote URI into a local path.
         No-op for local storage.
 
         Args:
             model (ModelSchema): model name and version
+            version (ModelVersionSchema): model version
 
         Returns:
             Path: local path to a model.
@@ -76,11 +79,12 @@ class ModelStorage(ABC):
         ...
 
     @abstractmethod
-    def exists(self, model: ModelSchema) -> bool:
+    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
         """Checks whether the given model exists.
 
         Args:
             model (ModelSchema): model name and version
+            version (ModelVersionSchema): model version
 
         Returns:
             bool: True if the model exists, False otherwise.
@@ -88,26 +92,28 @@ class ModelStorage(ABC):
         ...
 
     @abstractmethod
-    def save(model: ModelSchema, origin: Path) -> tuple[Path, list[Path]]:
+    def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
         """Required to store the given data into the storage implementation (locally, blog storage, etc.).
         This is the complement of the load method.
 
         Args:
             model (ModelSchema): model name and version.
+            verrsion (ModelVersionSchema): model version.
             origin (Path): local path to the model root.
 
         Returns:
-            tuple[Path, list[Path]]: local path to the model root, and list of files extracted.
+            path to the model root.
         """
         ...
 
     @abstractmethod
-    def update(self, updated: ModelSchema, current_uri: Path) -> Path:
+    def update(self, model: ModelSchema, version: ModelVersionSchema, current_uri: Path) -> Path:
         """Required to update a given URI and move files around.
         Generates a new URI for the updated model.
 
         Args:
-            updated (ModelSchema): current model name and version.
+            model (ModelSchema): current model name and version.
+            version (ModelVersionSchema): current model version.
             origin (Path): old path to the model root, to be updated.
 
         Returns:
@@ -116,11 +122,12 @@ class ModelStorage(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def delete(self, model: ModelSchema) -> None:
+    def delete(self, model: ModelSchema, version: ModelVersionSchema) -> None:
         """Deletes the given model.
 
         Args:
             model (ModelSchema): model name and version.
+            version (ModelVersionSchema): model version.
         """
         ...
 

@@ -43,14 +43,8 @@ class ServiceKeyCreateBody(BaseModel):
         return v
 
 
-class ModelInfo(BaseModel):
-    name: str = Field(min_length=1, max_length=255, description="Model name")
-    version: int = Field(ge=1, description="Model version")
-
-
 class ModelUpdateBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    version: int | None = Field(default=None, ge=1)
     source: str | None = None
 
     @classmethod
@@ -85,7 +79,7 @@ class ServiceCreateResources(BaseModel):
 
 class ServiceCreateBody(BaseModel):
     name: str
-    models: list[ModelInfo]
+    models: list[str]
     docker_image: str | None = None
     environment: dict[str, str] | None = None
     timeout: int | None = 3600  # in seconds
