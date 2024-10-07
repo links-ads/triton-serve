@@ -79,7 +79,7 @@ services:
       dockerfile: containers/sentinel/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
-    image: ghcr.io/links-ads/triton-serve-sentinel:${PROJECT_VERSION:-latest}
+    image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
       - ./src:/app/src
     container_name: serve-sentinel

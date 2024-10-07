@@ -59,7 +59,7 @@ class ModelUpdateBody(BaseModel):
 
 
 class ServiceCreateResources(BaseModel):
-    gpus: int = Field(ge=0, default=0, description="Number of GPUs")
+    gpus: float = Field(ge=0.0, default=0.0, description="Number of GPUs, float for fractional GPUs")
     shm_size: int = Field(gt=0, le=65536, default=256, description="Shared memory size in MB")
     mem_size: int = Field(gt=0, le=65536, default=4096, description="Memory size in MB")
     cpu_count: int = Field(gt=0, default=2, description="Number of CPUs")

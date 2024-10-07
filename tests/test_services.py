@@ -17,7 +17,13 @@ LOG = logging.getLogger(pytest.__name__)
         (
             "trt-srv_test_svc1",
             ["squeezenet"],
-            {"gpus": 1, "shm_size": 256, "mem_size": 1024},
+            {"gpus": 0.5, "shm_size": 256, "mem_size": 1024},
+            3600,
+        ),
+        (
+            "trt-srv_test_svc6",
+            ["squeezenet"],
+            {"gpus": 0.4, "shm_size": 256, "mem_size": 256},
             3600,
         ),
         (

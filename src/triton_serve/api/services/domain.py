@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
@@ -291,13 +292,13 @@ def validate_models(db: Session, model_infos: list) -> list:
     return model_instances
 
 
-def get_available_gpus(db: Session, required_gpus: int) -> list:
+def get_available_gpus(db: Session, required_gpus: float) -> list:
     """
     Retrieves available GPUs based on the required amount.
 
     Args:
         db (Session): The database session.
-        required_gpus (int): The number of GPUs required.
+        required_gpus (float): The number of GPUs required.
 
     Returns:
         list: List of available GPU devices.
@@ -306,7 +307,20 @@ def get_available_gpus(db: Session, required_gpus: int) -> list:
         AssertionError: If not enough GPUs are available.
     """
     if required_gpus > 0:
-        device_infos = get_available_devices(db, count=required_gpus)
+        # if under 1, we need to allocate a percentage of a single GPU
+        if required_gpus < 1:
+            gpu_count = 1
+            gpu_percent = math.ceil(required_gpus * 100)
+        # if over 1, we need to allocate a full GPU,
+        # for simplicity we round up to the nearest integer
+        else:
+            gpu_count = math.ceil(required_gpus)
+            gpu_percent = 100
+        device_infos = get_available_devices(
+            db,
+            count=gpu_count,
+            required_percentage=gpu_percent,
+        )
         if len(device_infos) < required_gpus:
             raise AssertionError(
                 f"Not enough GPUs available. Requested: {required_gpus}, Available: {len(device_infos)}"
