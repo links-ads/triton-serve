@@ -201,19 +201,22 @@ def delete_model(
     """
     LOG.debug("Deleting model '%s' (version: %s)", model.model_name, version_number)
     if version_number is not None:
-        model_version = db.query(ModelVersion).get(model.model_id, version_number)
-        versions = [model_version]
+        model_version = db.query(ModelVersion).get((model.model_id, version_number))
+        if model_version:
+            storage.delete(model, model_version)
+            db.delete(model_version)
+            db.flush()
     else:
-        versions = model.versions
+        for model_version in model.versions:
+            storage.delete(model, model_version)
+            db.delete(model_version)
+        db.flush()
 
-    for version in versions:
-        storage.delete(model, version)
-        db.delete(version)
+    # check if the model has any versions left
+    remaining = db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).first()
+    if remaining is None:
+        model.deleted_at = timezone_aware_now()
 
-    model.deleted_at = timezone_aware_now()
     db.commit()
     db.refresh(model)
     return model
-
-    # except AssertionError as e:
-    #     raise HTTPException(status_code=409, detail=f"Cannot delete model: {e}")

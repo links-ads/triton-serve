@@ -88,6 +88,13 @@ def test_create_models_from_zip_already_existing_with_update(test_client, test_s
 
 
 @pytest.mark.order(after="test_create_models_from_zip")
+def test_create_models_from_repo_wrong_url(test_client):
+    response = test_client.post("/models/repository", params={"repository_url": "https://github.com"})
+    LOG.debug(f"Response: {response.text}")
+    assert response.status_code == 400
+
+
+@pytest.mark.order(after="test_create_models_from_zip")
 def test_create_models_from_repo(test_client, test_settings, test_repository):
     repository_root = test_settings.repository_path
     model_dirs = {d for d in repository_root.iterdir() if d.is_dir()}
@@ -268,6 +275,18 @@ def test_delete_non_existent_model(name, test_client):
 
 
 @pytest.mark.order(after="test_get_models_wrong_params")
+@pytest.mark.parametrize("name,version", [("python", 2)])
+def test_delete_model_version(name, version, test_client, test_settings):
+    params = {"model_version": version}
+    response = test_client.delete(f"/models/{name}", params=params)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["deleted_at"] is None
+    expected_path = test_settings.repository_path / name / str(version)
+    assert not expected_path.exists()
+
+
+@pytest.mark.order(after="test_delete_model_version")
 @pytest.mark.parametrize("name", ["python"])
 def test_delete_model_not_in_use(name, test_client, test_settings):
     response = test_client.delete(f"/models/{name}")

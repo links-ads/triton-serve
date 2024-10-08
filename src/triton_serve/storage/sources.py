@@ -66,6 +66,8 @@ class RepositoryModelSource(ModelSource):
     """Model source that extracts models from a git repository."""
 
     def __init__(self, url: str, target_dir: str = None):
+        # check that the URL is a valid git SSH URL
+        assert url.startswith("git@"), "Invalid git URL, use SSH format (git@...)"
         self.url = url
         self.target_dir = target_dir or "model_repository"
 

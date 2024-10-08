@@ -126,14 +126,17 @@ def create_models_from_repository(
     **Returns:**
     - `List[ModelSchema]`: The created models.
     """
-    source = RepositoryModelSource(repository_url, target_dir=settings.repository_dirname)
-    stored_models = domain.create_models_from_source(
-        source=source,
-        storage=storage,
-        db=db,
-        update=update,
-    )
-    return stored_models
+    try:
+        source = RepositoryModelSource(repository_url, target_dir=settings.repository_dirname)
+        stored_models = domain.create_models_from_source(
+            source=source,
+            storage=storage,
+            db=db,
+            update=update,
+        )
+        return stored_models
+    except AssertionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put(
