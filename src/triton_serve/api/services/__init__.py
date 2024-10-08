@@ -114,6 +114,7 @@ def create_service(
     """
     docker_image = service_params.docker_image or settings.service_default_image
     return domain.create_service(
+        db=db,
         client=docker,
         traefik=traefik,
         service_name=service_params.name,
@@ -125,9 +126,8 @@ def create_service(
         service_resources=service_params.resources,
         service_timeout=service_params.timeout,
         service_priority=service_params.priority,
-        service_api_keys=settings.api_keys,
         model_infos=service_params.models,
-        db=db,
+        service_api_keys=settings.api_keys,
     )
 
 

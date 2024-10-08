@@ -22,6 +22,11 @@ entryPoints:
     address: :80
     forwardedHeaders:
       insecure: true
+    transport:
+      respondingTimeouts:
+        readTimeout: 5m
+        writeTimeout: 5m
+        idleTimeout: 5m
 
 providers:
   docker:
