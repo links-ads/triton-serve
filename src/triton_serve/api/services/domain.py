@@ -410,8 +410,8 @@ def create_service(
     service_resources: ServiceCreateResources,
     service_timeout: int,
     service_priority: int,
-    service_api_keys: list[str],
     model_infos: list[str],
+    service_api_keys: list[str] | None = None,
 ) -> Service:
     """
     Creates a Triton docker container loading the specified models.
@@ -429,7 +429,7 @@ def create_service(
         service_resources (ServiceCreateResources): The resources to use for the container.
         service_timeout (int): The timeout for the service.
         service_priority (int): The priority for the service.
-        service_api_keys (list[str]): The list of API keys to use for the service.
+        service_api_keys (list[str], optional): The list of API keys to use for the service.
         model_infos (list): The list of models to load.
 
     Returns:
@@ -476,10 +476,11 @@ def create_service(
 
         # Update service with container ID and configure Traefik
         service.container_id = container_id
+        service_keys = service_api_keys or []
         traefik.add(
             service_prefix=service_url_prefix,
             service_name=service.service_name,
-            api_keys=service_api_keys,
+            api_keys=service_keys,
         )
         # commit changes to be persisted
         db.commit()
