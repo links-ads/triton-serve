@@ -24,7 +24,7 @@ class ModelType(enum.Enum):
     UNK = "unknown"
     TENSORRT = "tensorrt"
     ONNX = "onnx"
-    TORCHSCRIPT = "torchscript"
+    TORCHSCRIPT = "pytorch_libtorch"
     TENSORFLOW = "tensorflow"
     OPENVINO = "openvino"
     PYTHON = "python"

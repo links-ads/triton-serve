@@ -102,6 +102,12 @@ def create_models_from_source(
                             detail=f"Model '{instance.model_name}' already exists",
                         )
                     # if update is enabled, update the model fields...
+                    # first check if the model has the same source
+                    if old_model.source != models_origin:
+                        raise ValueError(
+                            f"Old model source '{old_model.source}' does not match new source '{models_origin}' for '{instance.model_name}'."
+                            "If the new source is correct, delete the model and re-register it with the correct source."
+                        )
                     old_model.model_type = instance.model_type
                     old_model.source = instance.source or models_origin
                     old_model.dependencies = instance.dependencies
@@ -137,7 +143,7 @@ def create_models_from_source(
 
         return models
     except (AssertionError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid source: {e}")
+        raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}")
 
 
 def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: ModelUpdateBody) -> Model:

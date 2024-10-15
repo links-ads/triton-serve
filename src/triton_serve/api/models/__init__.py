@@ -89,6 +89,7 @@ def create_models_from_archive(
 
     **Arguments:**
     - `package` (`UploadFile`): Model package.
+    - `update` (`bool`, optional): Whether to update existing models. Defaults to `False`.
 
     **Returns:**
     - `list[ModelSchema]`: The stored models.
@@ -121,7 +122,8 @@ def create_models_from_repository(
     Creates models from a repository.
 
     **Arguments:**
-    - `repository_url` (`URL`): The URL of the repository.
+    - `repository_url` (`URL`): The URL of the repository to clone, in SSH format.
+    - `update` (`bool`, optional): Whether to update existing models. Defaults to `False`.
 
     **Returns:**
     - `List[ModelSchema]`: The created models.
@@ -189,11 +191,11 @@ def delete_model(
     Deletes a model by name and version.
 
     **Arguments:**
-    - `model_name` (`str`): The name of the model.
-    - `model_version` (`int`): The version of the model.
+    - `model_name` (`str`): The name of the model, to delete everything.
+    - `model_version` (`int`): The version of the model, to delete only a specific version.
 
     **Returns:**
-    - `None`
+    - `200` if the model was deleted successfully.
     """
     model = domain.get_single_model(db=db, model_name=model_name)
     if model is None:
