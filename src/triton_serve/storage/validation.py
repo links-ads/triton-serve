@@ -78,7 +78,7 @@ def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
     Returns:
         ModelType: the model type inferred from the files
     """
-    extensions = {file.suffix for file in files}
+    extensions = {file.suffix for file in files if file.is_file()}
     match extensions:
         case exts if ".plan" in exts:
             return ModelType.TENSORRT
