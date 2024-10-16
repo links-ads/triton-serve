@@ -50,7 +50,7 @@ def list_keys(
         if project:
             query = query.filter_by(project=project)
         if service:
-            query = query.join(APIKey.services).filter_by(name=service)
+            query = query.join(APIKey.services).filter_by(service_name=service)
         return query.all()
     except SQLAlchemyError as e:
         raise HTTPException(status_code=500, detail=e._message())

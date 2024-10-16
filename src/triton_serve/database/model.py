@@ -23,7 +23,7 @@ utcnow = partial(datetime.now, tz=timezone.utc)
 class ModelType(enum.Enum):
     UNK = "unknown"
     TENSORRT = "tensorrt"
-    ONNX = "onnx"
+    ONNX = "onnxruntime_onnx"
     TORCHSCRIPT = "pytorch_libtorch"
     TENSORFLOW = "tensorflow"
     OPENVINO = "openvino"
