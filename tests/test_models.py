@@ -181,7 +181,7 @@ def test_get_models(test_client, name, count):
         assert "source" in item
         if name is not None:
             assert item["model_name"] == name
-        assert item["model_type"] in ["ensemble", "onnx", "python"]
+        assert item["model_type"] in ["ensemble", "onnxruntime_onnx", "python"]
         assert "versions" in item
         assert len(item["versions"]) > 0
         if name == "ensemble":
