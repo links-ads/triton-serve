@@ -106,6 +106,13 @@ class ServiceBaseSchema(BaseModel):
     device_allocations: list[DeviceAllocationSchema] = Field(default_factory=list)
 
 
+class ServiceInfoSchema(BaseModel):
+    service_id: int
+    service_name: str
+    container_id: str
+    container_status: ServiceStatus
+
+
 class ServiceCreateSchema(ServiceBaseSchema):
     pass
 
@@ -122,7 +129,7 @@ class APIKeyBaseSchema(BaseModel):
     notes: str | None = None
     created_at: datetime = Field(default_factory=timezone_aware_now)
     expires_at: datetime | None = None
-    services: list[ServiceSchema] = []
+    services: list[ServiceInfoSchema] = []
 
 
 class APIKeyCreateSchema(APIKeyBaseSchema):
