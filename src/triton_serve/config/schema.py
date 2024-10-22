@@ -48,6 +48,11 @@ class AppSettings(BaseSettings):
     sentinel_poll_interval: int = 60
     backend_host: str
     backend_port: int
+    
+    # queue message purge
+    queue_messages_purging_interval: int = 600
+    older_than_minutes_to_purge: int = 5
+    
 
     @property
     def database_url(self):

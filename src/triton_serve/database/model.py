@@ -186,3 +186,29 @@ class DeviceAllocation(Base):
             "allocation_percentage > 0 AND allocation_percentage <= 100", name="valid_allocation_percentage"
         ),
     )
+
+class KombuQueue(Base):
+    __tablename__ = "kombu_queue"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(nullable=False)
+
+    messages: Mapped[list["KombuMessage"]] = relationship("KombuMessage", back_populates="queue")
+    
+
+    
+    
+class KombuMessage(Base):
+    __tablename__ = "kombu_message"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    visible: Mapped[bool] = mapped_column()
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), )
+    payload: Mapped[str] = mapped_column()
+    version: Mapped[int] = mapped_column()
+    queue_id: Mapped[int] = mapped_column(ForeignKey("kombu_queue.id"))
+    
+    queue: Mapped["KombuQueue"] = relationship("KombuQueue", back_populates="messages")
+
+    
+        
