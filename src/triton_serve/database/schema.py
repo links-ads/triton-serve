@@ -143,4 +143,3 @@ class APIKeySchema(APIKeyBaseSchema):
 
 class QueueMessageDeleteResponseSchema(BaseModel):
     deleted_messages: int
-    

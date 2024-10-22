@@ -27,7 +27,7 @@ def setup_periodic_tasks(sender, **_):
         update_service_status.s(),
         name="Update service status",
     )
-    
+
     sender.add_periodic_task(
         settings.queue_messages_purging_interval,
         purge_queue_messages.s(),
@@ -57,6 +57,7 @@ def update_service_status(client: Client = None) -> None:
     except Exception as e:
         LOG.error("Error checking container status: %s", e)
 
+
 @app.task
 def purge_queue_messages(client: Client = None) -> None:
     """
@@ -68,4 +69,3 @@ def purge_queue_messages(client: Client = None) -> None:
         LOG.debug("Purge of queue messages complete: %s", response.text)
     except Exception as e:
         LOG.error("Error purging queue messages: %s", e)
-        

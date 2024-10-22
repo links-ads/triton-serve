@@ -1,5 +1,3 @@
-from typing import Any
-
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -10,9 +8,10 @@ from triton_serve.database.schema import QueueMessageDeleteResponseSchema
 
 router = APIRouter(prefix="/operations")
 
+
 @router.delete(
     "/queue/messages",
-    response_model = QueueMessageDeleteResponseSchema,
+    response_model=QueueMessageDeleteResponseSchema,
     status_code=200,
     tags=["operations"],
 )
@@ -26,9 +25,9 @@ def delete_queue_messages(
     Parameters:
     - db (Session): Database session
     - settings (AppSettings): Application settings
-    
+
     Returns:
     - dict: Information about the deleted messages
-    
+
     """
     return domain.delete_queue_messages(db=db, older_than_minutes=settings.older_than_minutes_to_purge)
