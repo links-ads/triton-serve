@@ -26,15 +26,11 @@ def delete_queue_messages(db: Session, older_than_hours: int) -> None:
     Raises:
         HTTPException: If an error occurs while deleting the messages
     """
-    try:
-        LOG.debug("Deleting queue messages older than %d hours", older_than_hours)
-        query = delete(KombuMessage).where(
-            KombuMessage.timestamp < (timezone_aware_now() - timedelta(hours=older_than_hours))
-        )
+    LOG.debug("Deleting queue messages older than %d hours", older_than_hours)
+    query = delete(KombuMessage).where(
+        KombuMessage.timestamp < (timezone_aware_now() - timedelta(hours=older_than_hours))
+    )
 
-        result = db.execute(query)
-        db.commit()
-        return QueueMessageDeleteResponseSchema(deleted_messages=result.rowcount)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error deleting queue messages: {e}")
+    result = db.execute(query)
+    db.commit()
+    return QueueMessageDeleteResponseSchema(deleted_messages=result.rowcount)
