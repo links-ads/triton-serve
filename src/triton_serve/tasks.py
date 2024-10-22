@@ -65,7 +65,7 @@ def purge_queue_messages(client: Client = None) -> None:
     """
     client = client or worker_client
     try:
-        response = client.delete("operations/queue/messages")
+        response = client.delete("queue/messages")
         LOG.debug("Purge of queue messages complete: %s", response.text)
     except Exception as e:
         LOG.error("Error purging queue messages: %s", e)

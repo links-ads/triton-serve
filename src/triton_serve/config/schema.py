@@ -50,8 +50,8 @@ class AppSettings(BaseSettings):
     backend_port: int
 
     # queue message purge
-    queue_messages_purging_interval: int = 600
-    older_than_minutes_to_purge: int = 5
+    purge_message_schedule: int = 86400
+    older_than_hours_to_purge: int = 24
 
     @property
     def database_url(self):
