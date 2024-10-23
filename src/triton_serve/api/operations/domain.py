@@ -1,5 +1,4 @@
 import logging
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from sqlalchemy import delete
