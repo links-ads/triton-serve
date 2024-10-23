@@ -132,6 +132,34 @@ def test_stop_service(
 
 
 @pytest.mark.order(after="test_stop_service")
+@pytest.mark.parametrize(
+    "service_name, service_container_status, expected_status",
+    [
+        ("trt-srv_test_svc4", "exited", 204),
+        ("trt-srv_test_svc3", "running", 204),
+    ],
+)
+def test_refresh_services(test_docker, test_db, test_client, service_name, service_container_status, expected_status):
+    service = test_db.query(Service).filter(Service.service_name == service_name).first()
+    initial_srv_status = service.container_status
+    service_id = service.service_id if service else -1
+    response = test_client.post(f"/services/{service_id}/refresh")
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == expected_status
+    # check if the container status is the same as the expected status
+    assert test_docker.containers.get(service_name).status == service_container_status
+    service = test_db.query(Service).filter(Service.service_name == service_name).first()
+    assert service.container_status == initial_srv_status
+
+
+@pytest.mark.order(after="test_refresh_services")
+def test_refresh_non_existent(test_client):
+    response = test_client.post("/services/-1/refresh")
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 404
+
+
+@pytest.mark.order(after="test_refresh_services")
 def test_restart_services(test_docker, test_settings, test_client):
     # make sure it does not work without auth
     response = requests.get("http://traefik/trt-srv_test_svc4/v2/health/ready")
