@@ -109,7 +109,7 @@ class ServiceBaseSchema(BaseModel):
 class ServiceInfoSchema(BaseModel):
     service_id: int
     service_name: str
-    container_id: str
+    container_id: str | None = None
     container_status: ServiceStatus
 
 
