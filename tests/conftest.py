@@ -20,6 +20,7 @@ LOG = logging.getLogger(pytest.__name__)
 
 TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
 TEST_GIT_REPO = os.getenv("TEST_GIT_REPO")
+ARCHIVE_NAME = "repository.zip"
 
 
 @pytest.fixture(scope="session")
@@ -30,6 +31,16 @@ def test_repository():
     if not TEST_GIT_REPO:
         pytest.skip("No test repository provided")
     yield TEST_GIT_REPO
+
+
+@pytest.fixture(scope="session")
+def test_archive():
+    """
+    Test if the repository is set, then yield the repository url
+    """
+    if not ARCHIVE_NAME:
+        pytest.skip("No test repository provided")
+    yield ARCHIVE_NAME
 
 
 @pytest.fixture(scope="session")
@@ -98,7 +109,7 @@ def test_docker():
 def make_zip() -> io.BytesIO:
     @contextmanager
     def _create_zip(
-        archive_name: str = "repository.zip",
+        archive_name: str = ARCHIVE_NAME,
         include_models: list[str] = None,
         exclude_models: list[str] = None,
         include_files: list[str] = None,
