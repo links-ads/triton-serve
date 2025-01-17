@@ -49,6 +49,10 @@ class AppSettings(BaseSettings):
     backend_host: str
     backend_port: int
 
+    # queue message purge
+    purge_message_schedule: int = 86400
+    older_than_hours_to_purge: int = 24
+
     @property
     def database_url(self):
         return (

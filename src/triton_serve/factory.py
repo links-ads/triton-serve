@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve import __version__
-from triton_serve.api import auth, models, services
+from triton_serve.api import auth, models, services, operations
 from triton_serve.config import AppSettings
 from triton_serve.database import database_manager
 from triton_serve.database.validation import check_resources
@@ -42,7 +42,6 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
         root_path=settings.api_root_path,
         lifespan=lifespan,
     )
-
     register_middlewares(app)
     register_routers(app)
     return app
@@ -69,6 +68,7 @@ def register_routers(app: FastAPI):
     :param app: FastAPI instance
     :type app: FastAPI
     """
-    app.include_router(models.router, tags=["models"])
-    app.include_router(services.router, tags=["services"])
-    app.include_router(auth.router, tags=["keys"])
+    app.include_router(models.router)
+    app.include_router(services.router)
+    app.include_router(auth.router)
+    app.include_router(operations.router)

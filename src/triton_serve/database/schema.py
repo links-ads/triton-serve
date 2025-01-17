@@ -139,3 +139,7 @@ class APIKeyCreateSchema(APIKeyBaseSchema):
 class APIKeySchema(APIKeyBaseSchema):
     model_config = ConfigDict(from_attributes=True)
     key_id: int
+
+
+class QueueMessageDeleteResponseSchema(BaseModel):
+    deleted_messages: int

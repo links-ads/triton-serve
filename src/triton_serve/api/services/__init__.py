@@ -164,12 +164,13 @@ def delete_service(
 @router.post(
     "/services/{service_id}/stop",
     status_code=204,
-    tags=["services"],
+    tags=["operations"],
 )
 def stop_service(
     service_id: int,
     docker: DockerClient = Depends(docker_client),
     db: Session = Depends(get_db),
+    _: Any = Depends(require_admin),
 ):
     """
     Stops the container of a service with the specified id.
@@ -190,7 +191,7 @@ def stop_service(
 @router.get(
     "/status/{service_name}",
     status_code=200,
-    tags=["status"],
+    tags=["operations"],
 )
 def check_service_status(
     service_name: str,
