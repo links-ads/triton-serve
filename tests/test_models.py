@@ -152,19 +152,24 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
 
 @pytest.mark.order(after="test_create_models_from_zip_already_existing")
 @pytest.mark.parametrize(
-    "name, count",
+    "name, source, count",
     [
-        ("ensemble", 1),
-        ("onnx", 1),
-        ("non_existent", 0),
-        (None, 5),
+        ("ensemble", None, 1),
+        ("onnx", None, 1),
+        ("non_existent", None, 0),
+        (None, None, 5),
+        (None, "test_repository", 1),
+        (None, "test_archive", 4),
+        ("onnx", "test_archive", 1),
     ],
 )
-def test_get_models(test_client, name, count):
+def test_get_models(test_client, test_repository, test_archive, name, source, count):
     # build the request uri with the query parameters
     query_params = {}
     if name is not None:
         query_params["model_name"] = name
+    if source is not None:
+        query_params["source"] = test_archive if source == "test_archive" else test_repository
 
     request_uri = "/models"
     response = test_client.get(request_uri, params=query_params)

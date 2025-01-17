@@ -44,6 +44,7 @@ def get_all_models(
     db: Session,
     model_name: str | None = None,
     deleted: bool = False,
+    source: str | None = None,
 ) -> list[Model]:
     """
     Retrieves a list of models filtered by the given parameters, if provided.
@@ -52,6 +53,7 @@ def get_all_models(
         db (Session): The database session to query from.
         model_name (Optional[str], optional): The name of the model to filter. Defaults to None.
         deleted (bool, optional): Whether to include deleted models. Defaults to False.
+        source (Optional[str], optional): The source of the model to filter. Defaults to None.
 
     Returns:
         List[ModelSchema]: A list of ModelSchema instances representing the filtered models.
@@ -61,6 +63,12 @@ def get_all_models(
         statement = statement.filter(Model.model_name == model_name)
     if not deleted:
         statement = statement.filter(Model.deleted_at.is_(None))
+    if source is not None:
+        if not source.startswith("git@") and not source.endswith((".zip", ".tgz", ".tar.gz")):
+            raise HTTPException(
+                status_code=500, detail="Invalid source format. Must be a git repository or an archive file."
+            )
+        statement = statement.filter(Model.source == source)
     return statement.all()
 
 

@@ -24,22 +24,25 @@ router = APIRouter(prefix="/models")
 def get_models(
     model_name: str | None = None,
     deleted: bool = False,
+    source: str | None = None,
     db: Session = Depends(get_db),
     _: Any = Depends(require_elevated),
 ):
     """
-    Retrieves a list of models, allowing filtering by `name` and `versions`.
+    Retrieves a list of models, allowing filtering by `name`, `deleted` status, and `source`.
 
     **Arguments:**
     - `model_name` (`Optional[str]`, optional): Model `name` as specified by the user. Defaults to `None`.
     - `deleted` (`Optional[bool]`, optional): Whether to include deleted models. Defaults to `False`.
+    - `source` (`Optional[str]`, optional): The source of the model. Defaults to `None`.
+        `source` is either the ssh URL of the repository or the name of the archive file (including the extension) used to upload the models.
 
     **Returns:**
     - `List[ModelSchema]`: A list of models.
     """
     if model_name == "":
         raise HTTPException(status_code=422, detail="Model name cannot be empty")
-    models = domain.get_all_models(db=db, model_name=model_name, deleted=deleted)
+    models = domain.get_all_models(db=db, model_name=model_name, deleted=deleted, source=source)
     return models
 
 
