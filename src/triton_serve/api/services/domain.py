@@ -612,10 +612,15 @@ def stop_service(
 
 
 def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
-    LOG.debug("Refreshing service %d...", service_id)
     if (service := get_service_by_id(db=db, service_id=service_id, docker_client=docker_client)) is None:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
 
+    LOG.debug(
+        "Refreshing service %s (%d), status: %s",
+        service.service_name,
+        service.service_id,
+        service.container_status,
+    )
     # if service is either active, we need to stop and start it again
     if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
         stop_service(db=db, client=docker_client, service_id=service_id)
@@ -623,19 +628,14 @@ def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
         LOG.debug("Service %s with id %s has been refreshed", service.service_name, service.service_id)
     elif service.container_status in (ServiceStatus.DELETED, ServiceStatus.ERROR):
         LOG.debug(
-            "Could not refresh the service %s with id %s because it is in %s state",
+            "Could not refresh the service %s with id %s: %s",
             service.service_name,
             service.service_id,
             service.container_status,
         )
         raise HTTPException(
-            status_code=409, detail=f"Service '{service.service_name}' is in {service.container_status} state"
+            status_code=409, detail=f"Service '{service.service_name}'status: {service.container_status}"
         )
     # ServiceStatus.STOPPED case. We don't need to restart, it will refresh automatically when it will be called
     else:
-        LOG.debug(
-            "Service %s with id %s is in %s state, no need to refresh",
-            service.service_name,
-            service.service_id,
-            service.container_status,
-        )
+        LOG.debug("No need to refresh")
