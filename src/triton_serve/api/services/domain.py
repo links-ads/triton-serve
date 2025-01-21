@@ -292,7 +292,7 @@ def validate_models(db: Session, model_infos: list) -> list:
     return model_instances
 
 
-def get_available_gpus(db: Session, required_gpus: float) -> list:
+def get_allocable_devices(db: Session, required_gpus: float) -> tuple[list[Device], float]:
     """
     Retrieves available GPUs based on the required amount.
 
@@ -325,8 +325,8 @@ def get_available_gpus(db: Session, required_gpus: float) -> list:
             raise AssertionError(
                 f"Not enough GPUs available. Requested: {required_gpus}, Available: {len(device_infos)}"
             )
-        return device_infos
-    return []
+        return device_infos, gpu_percent
+    return [], 0
 
 
 def create_service_entry(
@@ -379,7 +379,12 @@ def create_service_entry(
     return service
 
 
-def create_device_allocations(db: Session, service_id: int, device_infos: list):
+def create_device_allocations(
+    db: Session,
+    service_id: int,
+    device_infos: list,
+    device_percent: float,
+):
     """
     Creates device allocation entries for a service.
 
@@ -387,12 +392,13 @@ def create_device_allocations(db: Session, service_id: int, device_infos: list):
         db (Session): The database session.
         service_id (int): The ID of the service.
         device_infos (list): List of device information to allocate.
+        device_percent (float): Allocation percentage, 100% unless partial device
     """
     for device in device_infos:
         allocation = DeviceAllocation(
             device_id=device.uuid,
             service_id=service_id,
-            allocation_percentage=1.0,
+            allocation_percentage=device_percent,
         )
         db.add(allocation)
 
@@ -443,7 +449,7 @@ def create_service(
         assert image_name, "No image specified"
         image = get_service_image(client, image_name)
         model_instances = validate_models(db, model_infos)
-        device_infos = get_available_gpus(db, service_resources.gpus)
+        device_infos, device_percent = get_allocable_devices(db, required_gpus=service_resources.gpus)
         # Create service entry in database
         service = create_service_entry(
             db=db,
@@ -460,6 +466,7 @@ def create_service(
             db=db,
             service_id=service.service_id,
             device_infos=device_infos,
+            device_percent=device_percent,
         )
         # Spawn docker container
         container_id = spawn_service_container(

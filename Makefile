@@ -1,6 +1,6 @@
 .ONESHELL:
 PY_ENV=.venv
-PY_BIN=$(shell python -c "print('$(PY_ENV)/bin') if __import__('pathlib').Path('$(PY_ENV)/bin/pip').exists() else print('')")
+PY_BIN=$(shell python -c "print('$(PY_ENV)/bin') if __import__('pathlib').Path('$(PY_ENV)/bin/python').exists() else print('')")
 
 # Define default variables
 .DEFAULT_GOAL := help

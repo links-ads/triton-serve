@@ -6,14 +6,15 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import docker
-import multipart
 import pytest
+import python_multipart
 import urllib3
 from httpx import Client
+
 from triton_serve.config import get_settings
 from triton_serve.database import database_manager
 
-logging.getLogger(multipart.__name__).setLevel(logging.WARNING)
+logging.getLogger(python_multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
 logging.getLogger(urllib3.__name__).setLevel(logging.WARNING)
 LOG = logging.getLogger(pytest.__name__)

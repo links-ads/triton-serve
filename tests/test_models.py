@@ -131,9 +131,9 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
                 if is_text:
                     with open(file) as f:
                         first_line = f.readline().strip()
-                        assert not first_line.startswith(
-                            "version https://git-lfs.github.com/spec/"
-                        ), f"File {file} appears to be a Git LFS pointer"
+                        assert not first_line.startswith("version https://git-lfs.github.com/spec/"), (
+                            f"File {file} appears to be a Git LFS pointer"
+                        )
 
                 # If the file is large (> 1MB), check that it's not just filled with the same byte
                 if os.path.getsize(file) > 1_000_000:
@@ -143,9 +143,9 @@ def test_create_models_from_repo(test_client, test_settings, test_repository):
                         middle_byte = f.read(1)
                         f.seek(-1, 2)  # Check last byte
                         last_byte = f.read(1)
-                    assert not (
-                        first_byte == middle_byte == last_byte
-                    ), f"Large file {file} appears to be filled with the same byte"
+                    assert not (first_byte == middle_byte == last_byte), (
+                        f"Large file {file} appears to be filled with the same byte"
+                    )
 
     LOG.debug(f"Successfully verified {len(diff)} new model directories")
 
