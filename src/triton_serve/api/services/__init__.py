@@ -230,3 +230,26 @@ def check_service_status(
             raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")
         case _:
             raise HTTPException(status_code=503, detail=f"Service '{service_name}' is unavailable")
+
+
+@router.post("/services/{service_id}/refresh", status_code=204, tags=["operations"])
+def refresh_service(
+    service_id: int,
+    docker: DockerClient = Depends(docker_client),
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_admin),
+):
+    """
+    Refreshes the service with the specified id.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to be refreshed.
+
+    **Returns:**
+    - `None`
+    """
+    domain.refresh_service(
+        db=db,
+        docker_client=docker,
+        service_id=service_id,
+    )

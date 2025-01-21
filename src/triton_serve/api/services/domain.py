@@ -61,7 +61,7 @@ def get_service_by_id(db: Session, service_id: int, docker_client: DockerClient 
         Service: The requested service.
     """
     service = db.get(Service, ident=service_id)
-    if docker_client is not None:
+    if docker_client is not None and service is not None:
         return check_service_status(db=db, docker_client=docker_client, service=service)
     return service
 
@@ -616,3 +616,33 @@ def stop_service(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error stopping service: {str(e)}")
+
+
+def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
+    if (service := get_service_by_id(db=db, service_id=service_id, docker_client=docker_client)) is None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+
+    LOG.debug(
+        "Refreshing service %s (%d), status: %s",
+        service.service_name,
+        service.service_id,
+        service.container_status,
+    )
+    # if service is either active, we need to stop and start it again
+    if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
+        stop_service(db=db, client=docker_client, service_id=service_id)
+        start_service(db=db, client=docker_client, service=service)
+        LOG.debug("Service %s with id %s has been refreshed", service.service_name, service.service_id)
+    elif service.container_status in (ServiceStatus.DELETED, ServiceStatus.ERROR):
+        LOG.debug(
+            "Could not refresh the service %s with id %s: %s",
+            service.service_name,
+            service.service_id,
+            service.container_status,
+        )
+        raise HTTPException(
+            status_code=409, detail=f"Service '{service.service_name}'status: {service.container_status}"
+        )
+    # ServiceStatus.STOPPED case. We don't need to restart, it will refresh automatically when it will be called
+    else:
+        LOG.debug("No need to refresh")
