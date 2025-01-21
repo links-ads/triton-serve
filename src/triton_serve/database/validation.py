@@ -16,9 +16,9 @@ def check_resources(session: Session):
     # check if machine resources match
     _, num_cpus, total_mem = get_machine_info()
     assert num_cpus == machine.num_cpus, f"The cpu count ({num_cpus}) does not match, expected {machine.num_cpus}"
-    assert (
-        total_mem == machine.total_memory
-    ), f"The total memory ({total_mem}) does not match, expected {machine.total_memory}"
+    assert total_mem == machine.total_memory, (
+        f"The total memory ({total_mem}) does not match, expected {machine.total_memory}"
+    )
 
     # retrieve devices and check if they match
     host_devices = session.query(Device).filter(Device.machine.has(host_id=machine.host_id)).all()
@@ -28,9 +28,9 @@ def check_resources(session: Session):
         log = logging.getLogger(__name__)
         log.warning("Failed to get GPU info: %s", e)
         saved_devices = []
-    assert len(host_devices) == len(
-        saved_devices
-    ), f"Node devices ({len(host_devices)}) do not match the saved devices ({len(saved_devices)})"
+    assert len(host_devices) == len(saved_devices), (
+        f"Node devices ({len(host_devices)}) do not match the saved devices ({len(saved_devices)})"
+    )
 
     device_dict = {device.uuid: device for device in host_devices}
     for device in saved_devices:
