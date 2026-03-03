@@ -5,19 +5,19 @@ start_webserver() {
     if [ "$RUN_MIGRATIONS" = "true" ]; then
         echo "Running database migrations..."
         # run alembic upgrade head, exit only if it fails
-        alembic upgrade head || exit 1
+        uv run alembic upgrade head || exit 1
     fi
     echo "Starting web server..."
     # if TARGET is set and equal to "prod", run the server in production mode using gunicorn
     if [ "$TARGET" = "prod" ]; then
-        exec gunicorn -k uvicorn.workers.UvicornWorker \
+        exec uv run gunicorn -k uvicorn.workers.UvicornWorker \
             --log-level=${LOG_LEVEL:-info} \
             --bind "0.0.0.0:5000" \
             --workers ${API_WORKERS:-4} \
             triton_serve.wsgi:app
     else
         # otherwise, run the server in development mode using uvicorn
-        exec uvicorn triton_serve.wsgi:app \
+        exec uv run uvicorn triton_serve.wsgi:app \
             --log-level=${LOG_LEVEL:-info} \
             --host 0.0.0.0 \
             --port 5000 \
@@ -30,10 +30,10 @@ run_tests() {
     if [ "$RUN_MIGRATIONS" = "true" ]; then
         echo "Running database migrations..."
         # run alembic upgrade head, exit only if it fails
-        alembic upgrade head || exit 1
+        uv run alembic upgrade head || exit 1
     fi
     echo "Waiting for the backend to start..."
-    
+
     # Set timeout (in seconds)
     timeout=60
     start_time=$(date +%s)
@@ -53,7 +53,7 @@ run_tests() {
         sleep 5
     done
     echo "Running pytest..."
-    exec pytest -sv --cov-report=term --log-level=${LOG_LEVEL:-info} --cov=src tests/
+    exec uv run pytest -sv --cov-report=term --log-level=${LOG_LEVEL:-info} --cov=src tests/
 }
 
 check_gpus() {
@@ -66,7 +66,7 @@ start_sentinel() {
     if [ "$TARGET" != "test" ]; then
         worker_args+=("--beat")
     fi
-    exec celery -A triton_serve.tasks worker "${worker_args[@]}"
+    exec uv run celery -A triton_serve.tasks worker "${worker_args[@]}"
 }
 
 main() {

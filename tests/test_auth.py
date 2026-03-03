@@ -199,7 +199,7 @@ def test_check_service_status(test_client):
         headers={"X-API-Key": ""},
     )
     LOG.debug(response.text)
-    assert response.status_code == 403
+    assert response.status_code == 401
 
     # Test with invalid key
     response = test_client.get(

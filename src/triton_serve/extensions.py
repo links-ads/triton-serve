@@ -23,6 +23,6 @@ def docker_client() -> docker.DockerClient:  # type: ignore
     """
     client = docker.from_env()
     try:
-        yield client
+        yield client  # type: ignore
     finally:
         client.close()

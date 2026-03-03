@@ -27,9 +27,9 @@ def get_key(db: Session, key_id: int) -> APIKey:
 
 def list_keys(
     db: Session,
-    key_type: KeyType = None,
-    project: str = None,
-    service: str = None,
+    key_type: KeyType | None = None,
+    project: str | None = None,
+    service: str | None = None,
 ):
     """
     Retrieve a list of API keys, allowing filtering by `key_type`, `project`, and `service`.
@@ -59,10 +59,10 @@ def list_keys(
 def generate_key(
     db: Session,
     key_type: KeyType,
-    project: str = None,
-    notes: str = None,
+    project: str | None = None,
+    notes: str | None = None,
     expiration_days: int = 30,
-    services: list[Service] = None,
+    services: list[Service] | None = None,
 ) -> APIKey:
     """
     Generate a new API key, with an optional expiration date and services.
@@ -119,7 +119,12 @@ def revoke_key(db: Session, key: str):
         raise HTTPException(status_code=500, detail=e._message())
 
 
-def update_key(db: Session, key: str, project: str, notes: str) -> APIKey:
+def update_key(
+    db: Session,
+    key: str,
+    project: str | None,
+    notes: str | None,
+) -> APIKey:
     """
     Update an existing API key with new project and notes.
 

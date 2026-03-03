@@ -14,21 +14,21 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10"]
+        python-version: ["3.12", "3.14"]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v2
+        uses: actions/checkout@v5
+      - name: Setup UV
+        uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: python -m pip install ".[dev]"
+        run: uv sync --all-groups
       - name: Lint and format check
         run: |
-          python -m ruff check .
-          python -m ruff format --check .
+          make lint
+          make format
       - name: 'Create env file'
         run: echo "${{ secrets.environment }}" > .env
       - name: 'Create SSH key'
@@ -44,7 +44,7 @@ jobs:
           echo "Pulling ghcr.io/${{ github.repository_owner }}/$TRITON_IMAGE_NAME:$TRITON_VERSION..."
           docker pull "ghcr.io/${{ github.repository_owner }}/$TRITON_IMAGE_NAME:$TRITON_VERSION"
       - name: Run tests
-        uses: isbang/compose-action@v1.5.1
+        uses: isbang/compose-action@v2.5.0
         with:
           compose-file: |
             docker-compose.yml

@@ -18,12 +18,12 @@ from triton_serve.api.dto import (
     KeyType,
     ServiceKeyCreateBody,
 )
+from triton_serve.api.services.domain import get_service_by_id
 from triton_serve.config import get_traefik
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.schema import APIKeySchema
 from triton_serve.extensions import get_db
 from triton_serve.security import require_admin
-from triton_serve.api.services.domain import get_service_by_id
 
 router = APIRouter()
 
@@ -35,9 +35,9 @@ router = APIRouter()
     response_model=list[APIKeySchema],
 )
 def list_api_keys(
-    key_type: KeyType = None,
-    project: str = None,
-    service: str = None,
+    key_type: KeyType | None = None,
+    project: str | None = None,
+    service: str | None = None,
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):

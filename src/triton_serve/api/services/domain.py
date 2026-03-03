@@ -2,7 +2,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from itertools import chain
-from pathlib import Path
+from typing import cast
 
 from docker import DockerClient
 from docker.errors import APIError, ImageNotFound, NotFound, NullResource
@@ -30,8 +30,8 @@ LOG = logging.getLogger("uvicorn")
 def list_services(
     db: Session,
     docker_client: DockerClient,
-    names: list[str] = None,
-    statuses: list[ServiceStatus] = None,
+    names: list[str] | None = None,
+    statuses: list[ServiceStatus] | None = None,
 ):
     """Returns a list of all services.
 
@@ -134,7 +134,7 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
         .limit(count)
     )
 
-    return db.scalars(query).all()
+    return cast(list, db.scalars(query).all())
 
 
 def get_service_image(docker_client: DockerClient, image_name: str) -> Image:
@@ -192,7 +192,7 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
     except APIError as e:
         service.status = ServiceStatus.ERROR
         db.commit()
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+        raise HTTPException(status_code=e.status_code or 500, detail=str(e)) from e
 
 
 def spawn_service_container(
@@ -203,8 +203,8 @@ def spawn_service_container(
     worker_volume: str,
     models: list[Model],
     resources: ServiceCreateResources,
-    devices: list = None,
-    environment: dict[str, str] = None,
+    devices: list | None = None,
+    environment: dict[str, str] | None = None,
 ):
     """Spawns a triton worker container.
 
@@ -249,6 +249,7 @@ def spawn_service_container(
             DeviceRequest(device_ids=[str(gpu.uuid)], capabilities=[["gpu", "nvidia", "compute"]]) for gpu in devices
         ]
 
+    policy = {"MaximumRetryCount": 3, "Name": "on-failure"}
     container = client.containers.run(
         detach=True,
         remove=False,
@@ -258,7 +259,7 @@ def spawn_service_container(
         network=worker_network,
         volumes=volumes,
         environment=environment,
-        restart_policy={"Name": "unless-stopped"},
+        restart_policy=policy,  # type: ignore
         runtime=runtime,
         device_requests=gpus,
         nano_cpus=int(resources.cpu_count * 1e9),
@@ -410,7 +411,7 @@ def create_service(
     service_name: str,
     image_name: str,
     service_network: str,
-    service_models_volume: Path,
+    service_models_volume: str,
     service_url_prefix: str,
     service_environment: dict[str, str],
     service_resources: ServiceCreateResources,
@@ -448,6 +449,7 @@ def create_service(
         # Validate image
         assert image_name, "No image specified"
         image = get_service_image(client, image_name)
+        assert image.id is not None, f"Invalid image ID for {image_name}"
         model_instances = validate_models(db, model_infos)
         device_infos, device_percent = get_allocable_devices(db, required_gpus=service_resources.gpus)
         # Create service entry in database
@@ -482,7 +484,7 @@ def create_service(
         )
 
         # Update service with container ID and configure Traefik
-        service.container_id = container_id
+        service.container_id = str(container_id)
         service_keys = service_api_keys or []
         traefik.add(
             service_prefix=service_url_prefix,
@@ -499,7 +501,7 @@ def create_service(
         raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
     except APIError as e:
         db.rollback()
-        raise HTTPException(status_code=e.status_code, detail=f"Error creating service: {str(e)}") from e
+        raise HTTPException(status_code=e.status_code or 500, detail=f"Error creating service: {str(e)}") from e
     except Exception as e:
         db.rollback()
         raise e
@@ -549,7 +551,7 @@ def delete_service(
         # Update service status
         service.deleted_at = current_time
         service.container_status = ServiceStatus.DELETED
-        service.container_id = None  # Clear the container ID as it's been removed
+        service.container_id = None  # type: ignore - Clear the container ID as it's been removed
 
         # Remove traefik config
         try:
@@ -608,6 +610,7 @@ def stop_service(
     try:
         LOG.debug(f"Stopping service {service_id}...")
         service = get_service_by_id(db=db, docker_client=client, service_id=service_id)
+        assert service is not None, f"Service {service_id} could not be returned"
         client.containers.get(service.container_id).stop()
         service.container_status = ServiceStatus.STOPPED
         db.commit()

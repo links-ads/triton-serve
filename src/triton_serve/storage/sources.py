@@ -11,12 +11,13 @@ from triton_serve.storage.extractors import ExtractorType, TarExtractor, ZipExtr
 class ArchiveModelSource(ModelSource):
     """Model source that extracts models from an archive file."""
 
-    def __init__(self, package: UploadFile, target_dir: str = None):
+    def __init__(self, package: UploadFile, target_dir: str | None = None):
         self.package = package
-        self.package_name = package.filename
+        assert package.filename is not None, "Invalid package name"
+        self.package_name: str = package.filename
         self.target_dir = target_dir or "model_repository"
 
-    def _get_extractor(self, filename: Path) -> ExtractorType:
+    def _get_extractor(self, filename: Path | str) -> type[ExtractorType]:
         """Checks the extension from the filename, returning the correct
         extractor implementation.
 
@@ -29,9 +30,9 @@ class ArchiveModelSource(ModelSource):
         Returns:
             ExtractorType: Extractor implementation.
         """
-        if filename.endswith(".zip"):
+        if str(filename).endswith(".zip"):
             return ZipExtractor
-        elif filename.endswith(".tar.gz") or filename.endswith(".tgz"):
+        elif str(filename).endswith(".tar.gz") or str(filename).endswith(".tgz"):
             return TarExtractor
         else:
             suffix = Path(filename).suffix
@@ -41,8 +42,9 @@ class ArchiveModelSource(ModelSource):
         return self.package_name
 
     def extract(self, path: Path):
-        extractor = self._get_extractor(filename=self.package.filename)
-        temp_file = path / self.package.filename
+        assert self.package is not None, "Missing package"
+        extractor = self._get_extractor(filename=self.package_name)
+        temp_file = path / self.package_name
         # sto the upload file in a temporary file
         with open(temp_file, mode="wb+") as buffer:
             shutil.copyfileobj(self.package.file, buffer)
@@ -65,7 +67,7 @@ class ArchiveModelSource(ModelSource):
 class RepositoryModelSource(ModelSource):
     """Model source that extracts models from a git repository."""
 
-    def __init__(self, url: str, target_dir: str = None):
+    def __init__(self, url: str, target_dir: str | None = None):
         # check that the URL is a valid git SSH URL
         assert url.startswith("git@"), "Invalid git URL, use SSH format (git@...)"
         self.url = url

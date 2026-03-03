@@ -1,0 +1,31 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: no-commit-to-branch  # prevent direct commits to main branch
+  - id: check-yaml
+    args: ['--unsafe']
+  - id: check-toml
+  - id: end-of-file-fixer
+  - id: trailing-whitespace
+
+- repo: https://github.com/DavidAnson/markdownlint-cli2
+  rev: v0.18.1
+  hooks:
+  - id: markdownlint-cli2
+    args: ["--fix"]
+
+- repo: local
+  hooks:
+  - id: lint
+    name: Lint
+    entry: make lint
+    types: [python]
+    language: system
+    pass_filenames: false
+  - id: typecheck
+    name: Typecheck
+    entry: make typecheck
+    types: [python]
+    language: system
+    pass_filenames: false

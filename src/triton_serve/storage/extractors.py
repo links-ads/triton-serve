@@ -4,19 +4,19 @@ from triton_serve.storage import BaseExtractor
 
 
 class ZipExtractor(BaseExtractor):
-    def __enter__(self, mode: str = "r"):
+    def __enter__(self, mode: str = "r"):  # type: ignore
         from zipfile import ZipFile
 
-        self.archive = ZipFile(self.file, mode=mode)
+        self.archive = ZipFile(self.file, mode)  # type: ignore
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.archive.close()
 
-    def __iter__(self):
+    def __iter__(self):  # type: ignore
         return iter(self.archive.namelist())
 
-    def extract(self, path: Path, member: str = None):
+    def extract(self, path: Path, member: str | None = None):  # type: ignore
         if member is not None:
             self.archive.extract(member, path)
         else:
@@ -24,10 +24,10 @@ class ZipExtractor(BaseExtractor):
 
 
 class TarExtractor(BaseExtractor):
-    def __enter__(self, mode: str = "r:gz"):
+    def __enter__(self, mode: str = "r:gz"):  # type: ignore
         from tarfile import TarFile
 
-        self.archive = TarFile.open(self.file, mode=mode)
+        self.archive = TarFile.open(self.file, mode)  # type: ignore
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -36,7 +36,7 @@ class TarExtractor(BaseExtractor):
     def __iter__(self):
         return iter(self.archive.getnames())
 
-    def extract(self, path: Path, member: str = None):
+    def extract(self, path: Path, member: str | None = None):  # type: ignore
         if member is not None:
             self.archive.extract(member, path)
         else:

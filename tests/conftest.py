@@ -3,6 +3,7 @@ import logging
 import os
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
 from zipfile import ZipFile
 
 import docker
@@ -19,7 +20,7 @@ logging.getLogger(docker.__name__).setLevel(logging.WARNING)
 logging.getLogger(urllib3.__name__).setLevel(logging.WARNING)
 LOG = logging.getLogger(pytest.__name__)
 
-TEST_DIR = os.getenv("TEST_DIR", Path(__file__).parent)
+TEST_DIR = Path(os.getenv("TEST_DIR", Path(__file__).parent))
 TEST_GIT_REPO = os.getenv("TEST_GIT_REPO")
 ARCHIVE_NAME = "repository.zip"
 
@@ -96,7 +97,7 @@ def test_docker():
     client = docker.from_env()
     try:
         yield client
-        containers = [c for c in client.containers.list() if c.name.startswith("trt-srv_test_")]
+        containers = [c for c in client.containers.list() if c.name.startswith("trt-srv_test_")]  # type: ignore
         for container in containers:
             LOG.info(f"Removing container {container.name}...")
             container.stop()
@@ -107,14 +108,14 @@ def test_docker():
 
 
 @pytest.fixture(scope="session")
-def make_zip() -> io.BytesIO:
+def make_zip() -> Callable:
     @contextmanager
     def _create_zip(
         archive_name: str = ARCHIVE_NAME,
-        include_models: list[str] = None,
-        exclude_models: list[str] = None,
-        include_files: list[str] = None,
-        exclude_files: list[str] = None,
+        include_models: list[str] | None = None,
+        exclude_models: list[str] | None = None,
+        include_files: list[str] | None = None,
+        exclude_files: list[str] | None = None,
     ):
         """Utility function to create a zip file with the given models/files.
 

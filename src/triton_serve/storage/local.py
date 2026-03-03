@@ -23,7 +23,7 @@ class LocalModelStorage(ModelStorage):
                 if not any(dir_path.iterdir()):
                     dir_path.rmdir()
 
-    def _contains_directory(self, path: Path, name: str = None) -> bool:
+    def _contains_directory(self, path: Path, name: str | None = None) -> bool:
         """Returns True if the given path contains a directory with the given name.
 
         Args:
@@ -39,7 +39,7 @@ class LocalModelStorage(ModelStorage):
                     return True
         return False
 
-    def load(self, model: ModelSchema, version: ModelVersionSchema) -> str:
+    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
         """Simply returns the model URI.
 
         Args:
@@ -160,4 +160,4 @@ class LocalModelStorage(ModelStorage):
 
     def close(self) -> None:
         """Not much to do here."""
-        self.base_path = None
+        return

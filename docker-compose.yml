@@ -1,38 +1,39 @@
 x-backend-base: &backend-base
-    build:
-      context: .
-      dockerfile: containers/backend/Dockerfile
-      args:
-      - TARGET=${TARGET:-dev}
-      - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-550.90.07}
-      - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
-      - PYTHON_VERSION=${PYTHON_VERSION:-3.10.12}
-    image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
-    hostname: backend
-    container_name: serve-backend
-    runtime: ${DOCKER_RUNTIME:-runc}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: ["gpu"]
-              driver: nvidia
-              count: all
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    env_file:
-      - .env
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.serve-backend.rule=PathPrefix(`/api`)
-      - traefik.http.routers.serve-backend.entrypoints=http
-      - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
-      - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/api
-    depends_on:
-      database:
-        condition: service_healthy
-      traefik:
-        condition: service_healthy
+  build:
+    context: .
+    dockerfile: containers/backend/Dockerfile
+    args:
+    - TARGET=${TARGET:-dev}
+    - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-550.90.07}
+    - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
+    - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+    - UV_VERSION=${UV_VERSION:-0.10.7}
+  image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
+  hostname: backend
+  container_name: serve-backend
+  runtime: ${DOCKER_RUNTIME:-runc}
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - capabilities: ["gpu"]
+            driver: nvidia
+            count: all
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  env_file:
+    - .env
+  labels:
+    - traefik.enable=true
+    - traefik.http.routers.serve-backend.rule=PathPrefix(`/api`)
+    - traefik.http.routers.serve-backend.entrypoints=http
+    - traefik.http.routers.serve-backend.middlewares=serve-backend-stripprefix
+    - traefik.http.middlewares.serve-backend-stripprefix.stripprefix.prefixes=/api
+  depends_on:
+    database:
+      condition: service_healthy
+    traefik:
+      condition: service_healthy
 
 volumes:
   psgdata:
@@ -40,21 +41,21 @@ volumes:
 
 services:
   database:
-      container_name: serve-database
-      image: postgres:16.1-alpine3.18
-      environment:
-        POSTGRES_USER: ${DATABASE_USER:-postgres}
-        POSTGRES_PASSWORD: ${DATABASE_PASS:-postgres}
-        POSTGRES_DB: ${POSTGRES_DB:-serve_db}
-      env_file:
-        - .env
-      volumes:
-        - psgdata:/var/lib/postgresql/data
-      healthcheck:
-        test: ["CMD-SHELL", "pg_isready -U $${DATABASE_USER:-postgres} -d $${POSTGRES_DB:-serve_db}"]
-        interval: 10s
-        timeout: 10s
-        retries: 5
+    container_name: serve-database
+    image: postgres:16.1-alpine3.18
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${DATABASE_PASS:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-serve_db}
+    env_file:
+      - .env
+    volumes:
+      - psgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${DATABASE_USER:-postgres} -d $${POSTGRES_DB:-serve_db}"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
 
   traefik:
     build:
@@ -79,6 +80,8 @@ services:
       dockerfile: containers/sentinel/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
+      - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+      - UV_VERSION=${UV_VERSION:-0.10.7}
     image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
       - ./src:/app/src
@@ -95,7 +98,7 @@ services:
   backend:
     <<: *backend-base
     profiles: ["gpu"]
-  
+
   backend-cpu:
     <<: *backend-base
     deploy: {}

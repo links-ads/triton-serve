@@ -17,30 +17,31 @@ app = Celery("serve-sentinel")
 app.config_from_object(Config)
 
 
-@app.on_after_configure.connect
+@app.on_after_configure.connect  # type: ignore
 def setup_periodic_tasks(sender, **_):
     """
     Setup periodic tasks
     """
     sender.add_periodic_task(
         settings.sentinel_poll_interval,
-        update_service_status.s(),
+        update_service_status.s(),  # type: ignore
         name="Update service status",
     )
 
     sender.add_periodic_task(
-        settings.queue_messages_purging_interval,
-        purge_queue_messages.s(),
+        settings.queue_messages_purging_interval,  # type: ignore
+        purge_queue_messages.s(),  # type: ignore
         name="Purge queue messages",
     )
 
 
 @app.task
-def update_service_status(client: Client = None) -> None:
+def update_service_status(client: Client | None = None) -> None:
     """
     Checks the status of the container.
     """
     client = client or worker_client
+    assert client is not None
     try:
         response = client.get("/services")
         json_response = response.json()
@@ -48,7 +49,10 @@ def update_service_status(client: Client = None) -> None:
             service = ServiceSchema(**service)
             if service.container_status != ServiceStatus.ACTIVE:
                 continue
-            up_time = (datetime.now(tz=timezone.utc) - service.last_active_time).total_seconds()
+            if not service.last_active_time:
+                up_time = 0
+            else:
+                up_time = (datetime.now(tz=timezone.utc) - service.last_active_time).total_seconds()
             LOG.debug("Service %s has been inactive for %s seconds", service.service_id, up_time)
             if up_time > service.inactivity_timeout:
                 LOG.info("Stopping service %s due to inactivity", service.service_id)
@@ -59,11 +63,12 @@ def update_service_status(client: Client = None) -> None:
 
 
 @app.task
-def purge_queue_messages(client: Client = None) -> None:
+def purge_queue_messages(client: Client | None) -> None:
     """
     Purge queue messages
     """
     client = client or worker_client
+    assert client is not None
     try:
         response = client.delete("queue/messages")
         LOG.debug("Purge of queue messages complete: %s", response.text)

@@ -36,7 +36,7 @@ class ModelSource(ABC):
         ...
 
     @abstractmethod
-    def extract(self) -> Path:
+    def extract(self, path: Path) -> Path:
         """Extracts the models from the source.
 
         Returns:
@@ -49,9 +49,9 @@ class ModelStorage(ABC):
     supported_formats = [".zip", ".tar", ".gz"]
 
     def __init__(self, base_path: Path) -> None:
-        self.base_path = base_path
+        self.base_path: Path = base_path
 
-    def location(self, model: ModelSchema, version: ModelVersionSchema) -> str:
+    def location(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
         """Constructs the absolute path to the package, starting from the base path
         and using both the artifact's name and the artifact's version.
 
