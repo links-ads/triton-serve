@@ -1,5 +1,10 @@
 name: triton-serve
 
+networks:
+  default:
+    external: true
+    name: serve-network
+
 volumes:
   configs:
   models:
@@ -32,6 +37,6 @@ services:
       # The Web UI (enabled by --api.insecure=true)
       - 127.0.0.1:7520:8080
     volumes:
-    # dynamic configurations
+      # dynamic configurations
       - configs:/etc/traefik/configs
     restart: unless-stopped

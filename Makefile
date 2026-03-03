@@ -47,40 +47,43 @@ typecheck: .pre-commit
 	uv run pyright src/
 
 .PHONY: config  ## Print the full configuration of the compose project
-config: check-target check-profile
+config: .check-target .check-profile
 	@echo "Printing config for target: $${TARGET} - profile: $(PROFILE)"
 	@export PROJECT_VERSION=$$(uv version --short)
 	@$(DOCKER_COMPOSE) config $${ARGS}
 
 .PHONY: build  ## Build the compose project
-build: check-target check-profile
+build: .check-target .check-profile
 	@echo "Building images with target: $${TARGET}"
 	@export PROJECT_VERSION=$$(uv version --short)
 	@$(DOCKER_COMPOSE) build $${ARGS}
 
 .PHONY: run  ## Launch the compose project
-run: check-target check-profile
+run: .check-target .check-profile
 	@echo "Starting containers with target: $${TARGET}"
 	@export PROJECT_VERSION=$$(uv version --short)
+	@if [ "$(TARGET)" = "prod" ] && ! docker network inspect serve-network >/dev/null 2>&1; \
+			then echo "ERROR: external network 'serve-network' does not exist. Run: docker network create serve-network"; \
+		exit 1; fi
 	@$(DOCKER_COMPOSE) up $${ARGS}
 
 .PHONY: stop  ## Stop the compose project
-stop: check-target check-profile
+stop: .check-target .check-profile
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stop $${ARGS}
 
 .PHONY: stats  ## Check runtime stats of the compose project
-stats: check-target check-profile
+stats: .check-target .check-profile
 	@echo "Checking stats with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stats $${ARGS}
 
 .PHONY: down  ## Dismantle containers (and volumes with -v) of the compose project
-down: check-target check-profile
+down: .check-target .check-profile
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
 
 .PHONY: migrate  ## Generate the database migrations.
-migrate: check-venv
+migrate: .uv
 	@echo "Symlinking .env file to local.env"
 	@if [ ! -f ./envs/local.env ]; then echo "File ./envs/local.env does not exist, please create it"; exit 1; fi
 	@ln -sf ./envs/local.env .env
