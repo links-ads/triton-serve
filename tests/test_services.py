@@ -4,6 +4,7 @@ import time
 import pytest
 import requests
 from docker.errors import NotFound
+
 from triton_serve.database.model import Device, Service, ServiceStatus
 from triton_serve.tasks import update_service_status
 
@@ -217,6 +218,7 @@ def test_triton_ping(name, test_settings):
     url = f"http://traefik/{name}/v2/health/ready"
     headers = {"X-API-Key": test_settings.api_keys[0]}
     # try three times to get a response, with a timeout of 60 seconds
+    response = None
     for _ in range(3):
         response = requests.get(url, timeout=60, headers=headers)
         LOG.debug(f"response: {response.text}")
@@ -224,7 +226,7 @@ def test_triton_ping(name, test_settings):
             break
         else:
             time.sleep(5)
-    assert response.status_code == 200
+    assert response and response.status_code == 200
 
 
 @pytest.mark.order(after="test_triton_ping")
@@ -234,13 +236,14 @@ def test_triton_models_ready(name, model, test_settings):
     headers = {"X-API-Key": test_settings.api_keys[0]}
 
     # try three times to get a response, with a timeout of 60 seconds
+    response = None
     for _ in range(3):
         response = requests.get(url, timeout=60, headers=headers)
         if response.status_code == 200:
             break
         else:
             time.sleep(5)
-    assert response.status_code == 200
+    assert response and response.status_code == 200
 
 
 @pytest.mark.order(after="test_triton_models_ready")

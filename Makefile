@@ -1,136 +1,86 @@
-.ONESHELL:
-PY_ENV=.venv
-PY_BIN=$(shell python -c "print('$(PY_ENV)/bin') if __import__('pathlib').Path('$(PY_ENV)/bin/python').exists() else print('')")
-
-# Define default variables
+# Simple and elegant Makefile derived from the almighty https://github.com/pydantic/pydantic
+.DEFAULT_GOAL := help
 .DEFAULT_GOAL := help
 PROFILE := gpu
 DOCKER_COMPOSE := docker compose --profile $(PROFILE) -f docker-compose.yml -f docker-compose.$(TARGET).yml
+sources = src tests
+.ONESHELL:
 
-.PHONY: help
-help:				## This help screen
-	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
+.PHONY: .uv  ## Check that uv is installed
+.uv:
+	@uv -V || echo 'Please install uv: https://docs.astral.sh/uv/getting-started/installation/'
 
+.PHONY: .pre-commit  ## Check that pre-commit is installed, or install it
+.pre-commit: .uv
+	@uv run pre-commit -V || uv pip install pre-commit
 
-.PHONY: check-venv
-check-venv:			## Check if the virtualenv exists.
-	@if [ "$(PY_BIN)" = "" ]; then echo "No virtualenv detected, create one using 'make virtualenv'"; exit 1; fi
-
-
-.PHONY: install
-install: check-venv		## Install the project in dev mode.
-	@$(PY_BIN)/pip install -e .[dev,docs,test]
-
-
-.PHONY: fmt
-fmt: check-venv			## Format code using ruff.
-	@$(PY_BIN)/ruff format .
-
-
-
-.PHONY: lint
-lint: check-venv		## Run ruff, mypy (optional).
-	@$(PY_BIN)/ruff check .
-	@$(PY_BIN)/ruff format --check .
-	@if [ -x "$(PY_BIN)/mypy" ]; then $(PY_BIN)/mypy project_name/; else echo "mypy not installed, skipping"; fi
-
-
-.PHONY: clean
-clean:				## Clean unused files (VENV=true to also remove the virtualenv).
-	@find ./ -name '*.pyc' -exec rm -f {} \;
-	@find ./ -name '__pycache__' -exec rm -rf {} \;
-	@find ./ -name 'Thumbs.db' -exec rm -f {} \;
-	@find ./ -name '*~' -exec rm -f {} \;
-	@rm -rf .cache
-	@rm -rf .pytest_cache
-	@rm -rf .mypy_cache
-	@rm -rf .ruff_cache
-	@rm -rf build
-	@rm -rf dist
-	@rm -rf *.egg-info
-	@rm -rf htmlcov
-	@rm -rf .tox/
-	@rm -rf docs/_build
-	@if [ "$(VENV)" != "" ]; then echo "Removing virtualenv..."; rm -rf $(PY_ENV); fi
-
-
-.PHONY: virtualenv
-virtualenv:			## Create a virtual environment.
-	@echo "creating virtualenv ..."
-	@if [ "$(PY_BIN)" != "" ]; then echo "virtualenv already exists, use 'make clean' to remove it."; exit; fi
-	@python3 -m venv $(PY_ENV)
-	@./$(PY_ENV)/bin/pip install -U pip
-	@echo
-	@echo "==| Please run 'source $(PY_ENV)/bin/activate' to enable the environment |=="
-
-
-.PHONY: release
-release:			## Create a new tag for release.
-	@echo "WARNING: This operation will create s version tag and push to github"
-	@read -p "Version? (provide the next x.y.z semver) : " TAG
-	@VER_FILE=$$(find src -maxdepth 2 -type f -name 'version.py' | head -n 1)
-	@echo "Updating version file :\n $${VER_FILE}"
-	@echo __version__ = \""$${TAG}"\" > $${VER_FILE}
-	@git add .
-	@git commit -m "release: version v$${TAG} 🚀"
-	@echo "creating git tag : v$${TAG}"
-	@git tag v$${TAG}
-	@git push -u origin HEAD --tags
-
-
-check-target:				## Check if TARGET variable is set.
+.PHONY: .check-target  # Check if the TARGET variable has been set
+.check-target:
 	@if [ -z "$(TARGET)" ]; then echo "TARGET is not set, launch the command setting TARGET=dev|prod"; exit 1; fi
 	@if [ "$(TARGET)" != "dev" ] && [ "$(TARGET)" != "prod" ]; then echo "TARGET must be either 'dev' or 'prod'"; exit 1; fi
 	@echo "Symlinking .env file to $${TARGET}.env"
 	@if [ ! -f ./envs/$${TARGET}.env ]; then echo "File ./envs/$${TARGET}.env does not exist, please create it"; exit 1; fi
 	@ln -sf ./envs/$${TARGET}.env .env
 
-
-check-profile:			    	## Check if PROFILE is set, if not set it to "gpu", if set check if it's either "gpu" or "cpu".
+.PHONY: .check-profile  ## Check if PROFILE is set, if not set it to "gpu", if set check if it's either "gpu" or "cpu".
+.check-profile:
 	@if [ -z "$(PROFILE)" ]; then echo "PROFILE is not set, launch it with either 'gpu' or 'cpu'"; exit 1; fi
 	@if [ "$(PROFILE)" != "gpu" ] && [ "$(PROFILE)" != "cpu" ]; then echo "PROFILE must be either 'gpu' or 'cpu'"; exit 1; fi
 
+.PHONY: install  ## Install the package, dependencies, and pre-commit for local development
+install: .uv
+	uv sync --frozen --all-extras
+	uv run pre-commit install --install-hooks
 
-.PHONY: config
-config: check-target check-profile	## Build the compose project.
+.PHONY: format  ## Auto-format python source files
+format: .uv
+	uv run ruff check --fix $(sources)
+	uv run ruff format $(sources)
+
+.PHONY: lint  ## Lint python source files
+lint: .uv
+	uv run ruff check $(sources)
+	uv run ruff format --check $(sources)
+
+.PHONY: typecheck  ## Perform type-checking
+typecheck: .pre-commit
+	uv run pyright src/
+
+.PHONY: config  ## Print the full configuration of the compose project
+config: check-target check-profile
 	@echo "Printing config for target: $${TARGET} - profile: $(PROFILE)"
-	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
+	@export PROJECT_VERSION=$$(uv version --short)
 	@$(DOCKER_COMPOSE) config $${ARGS}
 
-
-.PHONY: build
-build: check-target check-profile	## Print the compose configuration.
+.PHONY: build  ## Build the compose project
+build: check-target check-profile
 	@echo "Building images with target: $${TARGET}"
-	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
+	@export PROJECT_VERSION=$$(uv version --short)
 	@$(DOCKER_COMPOSE) build $${ARGS}
 
-
-.PHONY: run
-run: check-target check-profile		## Start the project.
+.PHONY: run  ## Launch the compose project
+run: check-target check-profile
 	@echo "Starting containers with target: $${TARGET}"
-	@export PROJECT_VERSION=$$(grep '__version__ =' $$(find ./src -name 'version.py') | cut -d '"' -f 2)
+	@export PROJECT_VERSION=$$(uv version --short)
 	@$(DOCKER_COMPOSE) up $${ARGS}
 
-
-.PHONY: stop
-stop: check-target check-profile	## Stop the project.
+.PHONY: stop  ## Stop the compose project
+stop: check-target check-profile
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stop $${ARGS}
 
-.PHONY: stats
-stats: check-target check-profile	## Check runtime stats.
+.PHONY: stats  ## Check runtime stats of the compose project
+stats: check-target check-profile
 	@echo "Checking stats with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) stats $${ARGS}
 
-
-.PHONY: down
-down: check-target check-profile	## Kill the project eliminating containers, use ARGS="-v" to remove volumes.
+.PHONY: down  ## Dismantle containers (and volumes with -v) of the compose project
+down: check-target check-profile
 	@echo "Stopping containers with target: $${TARGET}"
 	@$(DOCKER_COMPOSE) down $${ARGS}
 
-
-.PHONY: migrate
-migrate: check-venv			## Generate migrations.
+.PHONY: migrate  ## Generate the database migrations.
+migrate: check-venv
 	@echo "Symlinking .env file to local.env"
 	@if [ ! -f ./envs/local.env ]; then echo "File ./envs/local.env does not exist, please create it"; exit 1; fi
 	@ln -sf ./envs/local.env .env
@@ -139,9 +89,8 @@ migrate: check-venv			## Generate migrations.
 	@echo "Generating migrations..."
 	@$(PY_BIN)/alembic revision --autogenerate -m "$${MSG}"
 
-
-.PHONY: test
-test:					## Run tests.
+.PHONY: test  ## Run unit and integration tests in containers
+test:
 	@echo "Setting up test environment..."
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
@@ -165,3 +114,48 @@ test:					## Run tests.
 		--profile $(PROFILE) \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
+
+.PHONY: clean ## Clean unused files
+clean:
+	@find ./ -name '*.pyc' -exec rm -f {} \;
+	@find ./ -name '__pycache__' -exec rm -rf {} \;
+	@find ./ -name 'Thumbs.db' -exec rm -f {} \;
+	@find ./ -name '*~' -exec rm -f {} \;
+	@rm -rf .cache
+	@rm -rf .pytest_cache
+	@rm -rf .mypy_cache
+	@rm -rf .ruff_cache
+	@rm -rf build
+	@rm -rf dist
+	@rm -rf *.egg-info
+	@rm -rf htmlcov
+	@rm -rf .tox/
+	@rm -rf docs/_build
+
+.PHONY: release  ## Bump version, create git tag and commit (BUMP=major|minor|patch)
+release: .uv
+ifndef BUMP
+	$(error BUMP is not set. Usage: make release BUMP=major|minor|patch)
+endif
+	@echo "Current version: $$(uv version)"
+	@echo "Bumping $(BUMP) version..."
+	@uv version --bump $(BUMP)
+	@NEW_VERSION=$$(uv version --short)
+	@echo "New version: v$$NEW_VERSION"
+	@echo "Creating git commit and tag..."
+	@git add .
+	@git commit --no-verify -m "Bump version to $$NEW_VERSION"
+	@git tag -a "v$$NEW_VERSION" -m "Release v$$NEW_VERSION"
+	@git push
+	@git push origin tag v$$NEW_VERSION
+	@echo ""
+	@echo "✓ Version bumped to $$NEW_VERSION"
+	@echo "  You can now run 'uv publish' if necessary"
+
+.PHONY: help  ## Display this message
+help:
+	@grep -E \
+		'^.PHONY: .*?## .*$$' $(MAKEFILE_LIST) | \
+		grep -v '^.PHONY: \.' | \
+		sort | \
+		awk 'BEGIN {FS = ".PHONY: |## "}; {printf "\033[36m%-19s\033[0m %s\n", $$2, $$3}'

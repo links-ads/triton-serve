@@ -1,22 +1,15 @@
 ARG TARGET=dev
+ARG PYTHON_VERSION=3.12.12
+ARG UV_VERSION=0.10.7
 
-FROM python:3.10-slim-bullseye AS base
-LABEL author="LINKS Foundation"
-LABEL maintainer="LINKS Foundation"
-ARG TARGET
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS base
+
+FROM python:${PYTHON_VERSION}-slim-trixie
+COPY --from=base /uv /uvx /bin/
 
 WORKDIR /app
-
-# copy source, alembic dirs, pyproject.toml and other files
-COPY ./containers/sentinel/requirements.txt sentinel.txt
-RUN pip install  --no-cache-dir -r sentinel.txt
-
-
-# copy source, alembic dirs, pyproject.toml and other files
 COPY . ./
-# install dependencies: don't use cache to save space,
-# don't install dependencies since they are already installed (this saves build time)
-RUN pip install --no-cache --no-deps -e .
+RUN uv sync --locked
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh

@@ -118,8 +118,8 @@ def create_models_from_source(
                         )
                     old_model.model_type = instance.model_type
                     old_model.source = instance.source or models_origin
-                    old_model.dependencies = instance.dependencies
-                    old_model.version_policy = instance.version_policy
+                    old_model.dependencies = instance.dependencies  # type: ignore
+                    old_model.version_policy = instance.version_policy  # type: ignore
                     old_model.updated_at = timezone_aware_now()
                     # clean up the versions
                     for version in old_model.versions:
@@ -128,8 +128,8 @@ def create_models_from_source(
                     old_model.versions = []
                     # ... then update its versions
                     for version in instance.versions:
-                        version.model_id = old_model.model_id
-                        version.model_uri = str(storage.save(old_model, version, origin=tmp_repository))
+                        version.model_id = old_model.model_id  # type: ignore
+                        version.model_uri = str(storage.save(old_model, version, origin=tmp_repository))  # type: ignore
                         old_model.versions.append(ModelVersion(**version.model_dump()))
                     model = old_model
 
@@ -139,7 +139,7 @@ def create_models_from_source(
                     model_versions = []
                     instance.source = instance.source or models_origin
                     for version in instance.versions:
-                        version.model_uri = str(storage.save(instance, version, origin=tmp_repository))
+                        version.model_uri = str(storage.save(instance, version, origin=tmp_repository))  # type: ignore
                         model_versions.append(ModelVersion(**version.model_dump()))
 
                     model = Model(**{**instance.model_dump(), "versions": model_versions})

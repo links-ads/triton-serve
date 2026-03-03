@@ -6,11 +6,11 @@ from triton_serve.storage import LocalModelStorage
 
 
 @lru_cache(maxsize=1)
-def get_settings():
+def get_settings() -> AppSettings:
     """
     Istantiates the app settings, caching them for reuse.
     """
-    return AppSettings()
+    return AppSettings()  # type: ignore
 
 
 @lru_cache(maxsize=1)

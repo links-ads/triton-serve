@@ -11,7 +11,7 @@ from triton_serve.database.schema import DeviceCreateSchema
 def get_gpu_info(
     executable: str = "nvidia-smi",
     field_format: str = "csv,noheader,nounits",
-    fields: list[str] = None,
+    fields: list[str] | None = None,
 ) -> list[DeviceCreateSchema]:
     """Get the GPU information using nvidia-smi.
 
@@ -47,7 +47,7 @@ def get_machine_info() -> tuple[str, int, int]:
     Returns:
         tuple[str, int, int]: hostname, number of cpus, total memory.
     """
-    num_cpus = psutil.cpu_count(logical=True)
+    num_cpus = psutil.cpu_count(logical=True) or 1
     mem_info = psutil.virtual_memory()
     total_mem = mem_info.total >> 20
     hostname = socket.gethostname()

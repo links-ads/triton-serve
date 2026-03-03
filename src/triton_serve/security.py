@@ -8,7 +8,7 @@ from triton_serve.extensions import get_db
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 
-def retrieve_key(db: Session, key: str) -> APIKey:
+def retrieve_key(db: Session, key: str) -> APIKey | None:
     api_key = db.query(APIKey).filter_by(value=key).first()
     if api_key and api_key.expires_at > utcnow():
         return api_key

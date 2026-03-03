@@ -81,9 +81,9 @@ class ServiceCreateBody(BaseModel):
     name: str
     models: list[str]
     docker_image: str | None = None
-    environment: dict[str, str] | None = None
-    timeout: int | None = 3600  # in seconds
-    priority: int | None = 1  # higher number means higher priority
+    environment: dict[str, str] = Field(default_factory=dict)
+    timeout: int = 3600  # in seconds
+    priority: int = 1  # higher number means higher priority
     resources: ServiceCreateResources = ServiceCreateResources()
 
     @field_validator("name")

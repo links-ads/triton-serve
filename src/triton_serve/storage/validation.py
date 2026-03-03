@@ -141,7 +141,7 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
             assert config["name"] == model_name, f"Model name mismatch in {model_name}"
         # check if the model has a platform
         if not (platform := config.get("platform")):
-            version_files = version_dirs[0].iterdir()
+            version_files = list(version_dirs[0].iterdir())
             model_type = infer_model_type(model_name, version_files)
         else:
             model_type = ModelType(platform)
