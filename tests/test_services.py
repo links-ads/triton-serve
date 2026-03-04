@@ -160,6 +160,22 @@ def test_refresh_non_existent(test_client):
     assert response.status_code == 404
 
 
+@pytest.mark.order(after="test_restart_services")
+def test_refresh_force_recreate(test_client, test_docker, test_db):
+    """force_recreate should tear down and respawn the container regardless of current state."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc4").first()
+    service_id = service.service_id
+
+    response = test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 204
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+    container = test_docker.containers.get("trt-srv_test_svc4")
+    assert container.status == "running"
+
+
 @pytest.mark.order(after="test_refresh_services")
 def test_restart_services(test_docker, test_settings, test_client):
     # make sure it does not work without auth
@@ -262,6 +278,57 @@ def test_create_service_wrong_inputs(test_client, name, models, expected_status_
 
 
 @pytest.mark.order(after="test_create_service_wrong_inputs")
+def test_update_service(test_client, test_db):
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+
+    response = test_client.put(f"/services/{service_id}", json={"timeout": 7200, "priority": 2})
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["inactivity_timeout"] == 7200
+    assert data["priority"] == 2
+    test_db.refresh(service)
+    assert service.inactivity_timeout == 7200
+    assert service.priority == 2
+
+
+@pytest.mark.order(after="test_update_service")
+def test_update_service_recreate(test_client, test_docker, test_db):
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").first()
+    service_id = service.service_id
+    old_container_id = service.container_id
+
+    response = test_client.put(f"/services/{service_id}", params={"recreate": True}, json={"timeout": 5400})
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert data["inactivity_timeout"] == 5400
+    test_db.refresh(service)
+    assert service.inactivity_timeout == 5400
+    assert service.container_status == ServiceStatus.STARTING
+    assert service.container_id != old_container_id
+    container = test_docker.containers.get("trt-srv_test_svc2")
+    assert container.status == "running"
+
+
+@pytest.mark.order(after="test_create_service_wrong_inputs")
+@pytest.mark.parametrize(
+    "service_id, update_body, expected_status",
+    [
+        (-1, {"timeout": 100}, 404),
+        (-1, {"models": []}, 422),
+    ],
+)
+def test_update_service_wrong_inputs(test_client, service_id, update_body, expected_status):
+    response = test_client.put(f"/services/{service_id}", json=update_body)
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == expected_status
+
+
+@pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
     services = test_db.query(Service).all()
