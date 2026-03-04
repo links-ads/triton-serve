@@ -1,6 +1,6 @@
 [project]
 name = "triton-serve"
-version = "0.4.0"
+version = "0.4.1"
 authors = [
     { name = "Edoardo Arnaudo", email = "edoardo.arnaudo@linksfoundation.com" },
     { name = "Lorenzo D'Amico", email = "lorenzo.damico@linksfoundation.com" },
