@@ -77,6 +77,33 @@ class ServiceCreateResources(BaseModel):
         return value
 
 
+class ServiceUpdateResources(BaseModel):
+    """All fields optional — only provided fields are applied."""
+
+    gpus: float | None = Field(default=None, ge=0.0)
+    shm_size: int | None = Field(default=None, gt=0, le=65536)  # MB
+    mem_size: int | None = Field(default=None, gt=0, le=65536)  # MB
+    cpu_count: int | None = Field(default=None, gt=0)
+
+
+class ServiceUpdateBody(BaseModel):
+    """Partial-update body for PUT /services/{id}. `name` is intentionally absent — immutable."""
+
+    models: list[str] | None = None
+    docker_image: str | None = None
+    environment: dict[str, str] | None = None
+    timeout: int | None = None
+    priority: int | None = None
+    resources: ServiceUpdateResources | None = None
+
+    @field_validator("models")
+    @classmethod
+    def models_not_empty(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None and not v:
+            raise ValueError("models list cannot be empty if provided")
+        return v
+
+
 class ServiceCreateBody(BaseModel):
     name: str
     models: list[str]

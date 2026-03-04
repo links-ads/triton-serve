@@ -4,7 +4,7 @@ from docker import DockerClient
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceCreateBody
+from triton_serve.api.dto import ServiceCreateBody, ServiceUpdateBody
 from triton_serve.api.services import domain
 from triton_serve.config import (
     AppSettings,
@@ -235,6 +235,8 @@ def check_service_status(
 @router.post("/services/{service_id}/refresh", status_code=204, tags=["operations"])
 def refresh_service(
     service_id: int,
+    force_recreate: bool = Query(False),
+    settings: AppSettings = Depends(get_settings),
     docker: DockerClient = Depends(docker_client),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
@@ -244,6 +246,7 @@ def refresh_service(
 
     **Arguments:**
     - `service_id` (`int`): The id of the service to be refreshed.
+    - `force_recreate` (`bool`): If True, tears down and recreates the container. Recovers from ERROR/DELETED states.
 
     **Returns:**
     - `None`
@@ -252,4 +255,39 @@ def refresh_service(
         db=db,
         docker_client=docker,
         service_id=service_id,
+        service_network=settings.service_network,
+        service_models_volume=settings.service_volume,
+        force_recreate=force_recreate,
+    )
+
+
+@router.put("/services/{service_id}", status_code=200, tags=["services"], response_model=ServiceSchema)
+def update_service(
+    service_id: int,
+    update_params: ServiceUpdateBody,
+    recreate: bool = Query(False),
+    settings: AppSettings = Depends(get_settings),
+    docker: DockerClient = Depends(docker_client),
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_admin),
+):
+    """
+    Updates service parameters. Optionally recreates the container immediately.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to update.
+    - `update_params` (`ServiceUpdateBody`): Partial update payload (all fields optional).
+    - `recreate` (`bool`): If True, recreates the container after applying changes.
+
+    **Returns:**
+    - `Service`: The updated service.
+    """
+    return domain.update_service(
+        db=db,
+        client=docker,
+        service_id=service_id,
+        update_body=update_params,
+        service_network=settings.service_network,
+        service_models_volume=settings.service_volume,
+        recreate=recreate,
     )

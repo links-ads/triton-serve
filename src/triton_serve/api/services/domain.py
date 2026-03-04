@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceCreateResources
+from triton_serve.api.dto import ServiceCreateResources, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -621,7 +621,78 @@ def stop_service(
         raise HTTPException(status_code=500, detail=f"Error stopping service: {str(e)}")
 
 
-def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
+def recreate_service_container(
+    db: Session,
+    client: DockerClient,
+    service: Service,
+    service_network: str,
+    service_models_volume: str,
+) -> Service:
+    """Tears down the current container (if any) and spawns a fresh one from DB state.
+
+    Does not touch deleted_at, Traefik config, or device allocation records.
+
+    Args:
+        db (Session): The database session.
+        client (DockerClient): The Docker client.
+        service (Service): The service ORM object.
+        service_network (str): The Docker network name.
+        service_models_volume (str): The volume name or path for models.
+
+    Returns:
+        Service: The updated service.
+    """
+    try:
+        if service.container_id:
+            try:
+                client.containers.get(service.container_id).remove(force=True)
+            except NotFound:
+                pass
+            service.container_id = None  # type: ignore
+
+        image = get_service_image(client, service.service_image)
+        res = service.resources
+        device_objs = [alloc.device for alloc in service.device_allocations]
+
+        container_id = spawn_service_container(
+            client=client,
+            image_id=cast(str, image.id),
+            worker_name=service.service_name,
+            worker_network=service_network,
+            worker_volume=service_models_volume,
+            models=service.models,
+            resources=ServiceCreateResources(
+                gpus=0.0,
+                shm_size=res.shm_size,
+                mem_size=res.mem_size,
+                cpu_count=res.cpu_count,
+            ),
+            devices=device_objs,
+            environment=res.environment_variables or {},
+        )
+
+        service.container_id = str(container_id)
+        service.container_status = ServiceStatus.STARTING
+        db.commit()
+        db.refresh(service)
+        return service
+
+    except AssertionError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Error recreating service: {str(e)}") from e
+    except APIError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {str(e)}") from e
+
+
+def refresh_service(
+    db: Session,
+    service_id: int,
+    docker_client: DockerClient,
+    service_network: str,
+    service_models_volume: str,
+    force_recreate: bool = False,
+) -> None:
     if (service := get_service_by_id(db=db, service_id=service_id, docker_client=docker_client)) is None:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
 
@@ -631,6 +702,13 @@ def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
         service.service_id,
         service.container_status,
     )
+
+    if force_recreate:
+        if service.deleted_at is not None:
+            service.deleted_at = None  # type: ignore
+        recreate_service_container(db, docker_client, service, service_network, service_models_volume)
+        return
+
     # if service is either active, we need to stop and start it again
     if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
         stop_service(db=db, client=docker_client, service_id=service_id)
@@ -649,3 +727,95 @@ def refresh_service(db: Session, service_id: int, docker_client: DockerClient):
     # ServiceStatus.STOPPED case. We don't need to restart, it will refresh automatically when it will be called
     else:
         LOG.debug("No need to refresh")
+
+
+def update_service(
+    db: Session,
+    client: DockerClient,
+    service_id: int,
+    update_body: ServiceUpdateBody,
+    service_network: str,
+    service_models_volume: str,
+    recreate: bool = False,
+) -> Service:
+    """Updates a service's configuration and optionally recreates its container.
+
+    Args:
+        db (Session): The database session.
+        client (DockerClient): The Docker client.
+        service_id (int): The ID of the service to update.
+        update_body (ServiceUpdateBody): The partial update payload.
+        service_network (str): The Docker network name.
+        service_models_volume (str): The volume name or path for models.
+        recreate (bool): If True, recreate the container after updating. Defaults to False.
+
+    Returns:
+        Service: The updated service.
+    """
+    try:
+        service = get_service_by_id(db=db, service_id=service_id)
+        if service is None:
+            raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+        if service.deleted_at is not None:
+            raise HTTPException(status_code=409, detail="cannot update a deleted service")
+
+        if update_body.docker_image:
+            get_service_image(client, update_body.docker_image)
+            service.service_image = update_body.docker_image
+        if update_body.timeout is not None:
+            service.inactivity_timeout = update_body.timeout
+        if update_body.priority is not None:
+            service.priority = update_body.priority
+
+        gpu_changed = False
+        new_gpus = 0.0
+        if update_body.resources:
+            r = update_body.resources
+            if r.cpu_count is not None:
+                service.resources.cpu_count = r.cpu_count
+            if r.shm_size is not None:
+                service.resources.shm_size = r.shm_size
+            if r.mem_size is not None:
+                service.resources.mem_size = r.mem_size
+            if r.gpus is not None:
+                gpu_changed = True
+                new_gpus = r.gpus
+
+        if update_body.environment is not None:
+            service.resources.environment_variables = update_body.environment
+
+        if update_body.models is not None:
+            new_model_instances = [get_single_model(db, name) for name in update_body.models]
+            service.models.clear()
+            service.models.extend(new_model_instances)
+
+        if gpu_changed:
+            if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
+                stop_service(db=db, client=client, service_id=service_id)
+            for alloc in service.device_allocations:
+                db.delete(alloc)
+            db.flush()
+            device_infos, device_percent = get_allocable_devices(db, required_gpus=new_gpus)
+            create_device_allocations(db, service.service_id, device_infos, device_percent)
+
+        db.flush()
+
+        if recreate:
+            recreate_service_container(db, client, service, service_network, service_models_volume)
+        else:
+            db.commit()
+            db.refresh(service)
+
+        return service
+
+    except HTTPException:
+        raise
+    except AssertionError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=f"Error updating service: {str(e)}") from e
+    except APIError as e:
+        db.rollback()
+        raise HTTPException(status_code=e.status_code or 500, detail=f"Error updating service: {str(e)}") from e
+    except Exception as e:
+        db.rollback()
+        raise e
