@@ -86,6 +86,24 @@ def test_create_service(test_client, test_docker, test_db, name, models, resourc
 
 
 @pytest.mark.order(after="test_create_service")
+def test_get_service_config(test_client, test_db):
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    response = test_client.get(f"/services/{service.service_id}/config")
+    LOG.debug(f"response: {response.text}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["name"] == "trt-srv_test_svc3"
+    assert data["models"] == ["onnx"]
+    assert data["timeout"] == 3600
+    assert data["resources"]["shm_size"] == 256
+    assert data["resources"]["mem_size"] == 1024
+    assert data["resources"]["gpus"] == 0.0
+
+    # verify non-existent service returns 404
+    assert test_client.get("/services/-1/config").status_code == 404
+
+
+@pytest.mark.order(after="test_create_service")
 @pytest.mark.parametrize("name,", ["onnx"])
 def test_delete_model_in_use(name, test_client, test_settings):
     response = test_client.delete(f"/models/{name}")
