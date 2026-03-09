@@ -83,6 +83,31 @@ def get_service(
     return service
 
 
+@router.get(
+    "/services/{service_id}/config",
+    status_code=200,
+    tags=["services"],
+    response_model=ServiceCreateBody,
+)
+def get_service_config(
+    service_id: int,
+    db: Session = Depends(get_db),
+    _: Any = Depends(require_elevated),
+):
+    """
+    Returns the creation config of a service as a `ServiceCreateBody`.
+
+    The response can be used as-is (or modified) to recreate the same service via `POST /services`.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service.
+
+    **Returns:**
+    - `ServiceCreateBody`: The service creation config.
+    """
+    return domain.get_service_config(db=db, service_id=service_id)
+
+
 @router.post(
     "/services",
     status_code=201,

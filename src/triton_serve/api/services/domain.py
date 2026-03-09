@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceCreateResources, ServiceUpdateBody
+from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -90,6 +90,48 @@ def get_service_by_name(db: Session, service_name: str, docker_client: DockerCli
     if docker_client is not None:
         return check_service_status(db=db, docker_client=docker_client, service=service)
     return service
+
+
+def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
+    """Returns the creation config for a service, suitable for reuse with POST /services.
+
+    Args:
+        db (Session): The database session.
+        service_id (int): The id of the service.
+
+    Returns:
+        ServiceCreateBody: The service creation config.
+
+    Raises:
+        HTTPException: 404 if the service does not exist or is deleted.
+    """
+    service = db.get(Service, ident=service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+
+    allocations = service.device_allocations
+    if not allocations:
+        gpus = 0.0
+    elif allocations[0].allocation_percentage < 100.0:
+        gpus = round(allocations[0].allocation_percentage / 100, 2)
+    else:
+        gpus = float(len(allocations))
+
+    res = service.resources
+    return ServiceCreateBody(
+        name=service.service_name,
+        models=[m.model_name for m in service.models],
+        docker_image=service.service_image,
+        environment=res.environment_variables or {},
+        timeout=service.inactivity_timeout,
+        priority=service.priority,
+        resources=ServiceCreateResources(
+            gpus=gpus,
+            shm_size=res.shm_size,
+            mem_size=res.mem_size,
+            cpu_count=res.cpu_count,
+        ),
+    )
 
 
 def get_available_devices(db: Session, count: int, required_percentage: float = 100.0) -> list[Device]:
