@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from triton_serve.api import auth, models, operations, services
+from triton_serve.api import allocations, auth, models, operations, services
 from triton_serve.config import AppSettings
 from triton_serve.database import database_manager
 from triton_serve.database.validation import check_resources
@@ -76,3 +76,4 @@ def register_routers(app: FastAPI):
     app.include_router(services.router)
     app.include_router(auth.router)
     app.include_router(operations.router)
+    app.include_router(allocations.router)

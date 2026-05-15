@@ -143,3 +143,55 @@ class APIKeySchema(APIKeyBaseSchema):
 
 class QueueMessageDeleteResponseSchema(BaseModel):
     deleted_messages: int
+
+
+class ResourceUsageSchema(BaseModel):
+    allocated: int
+    in_use: int
+
+
+class DeviceServiceSchema(BaseModel):
+    service_id: int
+    service_name: str
+    container_status: ServiceStatus
+    allocation_percentage: float
+
+
+class DeviceAllocationSummarySchema(BaseModel):
+    allocated_pct: float
+    in_use_pct: float
+
+
+class DeviceAllocationViewSchema(BaseModel):
+    uuid: str
+    name: str
+    index: int
+    memory: int
+    allocation: DeviceAllocationSummarySchema
+    services: list[DeviceServiceSchema]
+
+
+class MachineAllocationSchema(BaseModel):
+    host_name: str
+    num_cpus: int
+    total_memory: int
+    cpu: ResourceUsageSchema
+    memory: ResourceUsageSchema
+    devices: list[DeviceAllocationViewSchema]
+
+
+class ServiceDeviceAllocationSchema(BaseModel):
+    uuid: str
+    name: str
+    index: int
+    memory: int
+    allocation_percentage: float
+
+
+class ServiceAllocationSchema(BaseModel):
+    service_id: int
+    service_name: str
+    container_status: ServiceStatus
+    cpu_count: int
+    mem_size: int
+    devices: list[ServiceDeviceAllocationSchema]
