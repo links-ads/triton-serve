@@ -262,7 +262,7 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
         db.commit()
         db.refresh(service)
         return service
-    except (NotFound, NullResource):
+    except NotFound, NullResource:
         if service.deleted_at is None:
             service.deleted_at = datetime.now(tz=timezone.utc)
         service.container_status = ServiceStatus.DELETED
