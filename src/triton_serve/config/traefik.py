@@ -79,6 +79,27 @@ class TraefikConfigManager:
         with open(yaml_file_name, "w") as file:
             yaml.dump(raw_data, file)
 
+    def sync_services(
+        self,
+        service_prefix: str,
+        services: list,
+        api_keys_by_service: dict[str, list[str]],
+    ) -> None:
+        """
+        Rewrites Traefik config files for all non-deleted services from database state.
+
+        Args:
+            service_prefix (str): The url prefix to use for services.
+            services (list[Service]): Non-deleted services to sync.
+            api_keys_by_service (dict[str, list[str]]): API keys keyed by service name.
+        """
+        for service in services:
+            self.add(
+                service_prefix=service_prefix,
+                service_name=service.service_name,
+                api_keys=api_keys_by_service.get(service.service_name, []),
+            )
+
     def add_service_key(self, service_name: str, key: str):
         """
         Adds a new API key to the service's configuration.
