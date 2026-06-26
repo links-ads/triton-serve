@@ -7,39 +7,21 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, operations, services
+from triton_serve.api.services.domain import rebuild_service_config
 from triton_serve.config import AppSettings, get_traefik
 from triton_serve.database import database_manager
-from triton_serve.database.model import APIKey, KeyType, Service, utcnow
+from triton_serve.database.model import Service
 from triton_serve.database.validation import check_resources
 
 log = logging.getLogger(uvicorn.__name__)
 
 
-def _collect_traefik_api_keys(session, service: Service, default_api_keys: list[str]) -> list[str]:
-    keys = list(default_api_keys)
-    associated_keys = (
-        session.query(APIKey)
-        .join(APIKey.services)
-        .filter(
-            Service.service_id == service.service_id,
-            APIKey.key_type == KeyType.SERVICE,
-            APIKey.expires_at > utcnow(),
-        )
-        .all()
-    )
-    for api_key in associated_keys:
-        if api_key.value not in keys:
-            keys.append(api_key.value)
-    return keys
-
-
 def sync_traefik_configs(session, settings: AppSettings) -> None:
+    """Rebuilds every non-deleted service's Traefik config from database truth."""
+    traefik = get_traefik()
     services = session.query(Service).filter(Service.deleted_at.is_(None)).all()
-    api_keys_by_service = {
-        service.service_name: _collect_traefik_api_keys(session, service, settings.api_keys)
-        for service in services
-    }
-    get_traefik().sync_services(settings.service_prefix, services, api_keys_by_service)
+    for service in services:
+        rebuild_service_config(session, traefik, service, settings.service_prefix, settings.api_keys)
 
 
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:

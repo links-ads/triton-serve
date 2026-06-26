@@ -16,15 +16,53 @@ from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, Serv
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
+    APIKey,
     Device,
     DeviceAllocation,
+    KeyType,
     Model,
     Service,
     ServiceResources,
     ServiceStatus,
+    utcnow,
 )
 
 LOG = logging.getLogger("uvicorn")
+
+
+def rebuild_service_config(
+    db: Session,
+    traefik: TraefikConfigManager,
+    service: Service,
+    service_prefix: str,
+    default_keys: list[str],
+) -> None:
+    """Rewrites a service's Traefik config file from database truth.
+
+    Single source of truth for a service's config: idempotent and safe to call on key
+    assignment, creation, refresh, and startup sync alike. The written key set is the
+    default (master) keys plus every non-expired service key associated with the service.
+
+    Args:
+        db (Session): The database session.
+        traefik (TraefikConfigManager): The Traefik config manager.
+        service (Service): The service whose config to rebuild.
+        service_prefix (str): The url prefix to use for the service.
+        default_keys (list[str]): The default/master keys always granted access.
+    """
+    keys = list(default_keys)
+    associated_keys = (
+        db.query(APIKey)
+        .join(APIKey.services)
+        .filter(
+            Service.service_id == service.service_id,
+            APIKey.key_type == KeyType.SERVICE,
+            APIKey.expires_at > utcnow(),
+        )
+        .all()
+    )
+    keys.extend(api_key.value for api_key in associated_keys if api_key.value not in keys)
+    traefik.add(service_prefix=service_prefix, service_name=service.service_name, api_keys=keys)
 
 
 def list_services(
@@ -525,13 +563,14 @@ def create_service(
             environment=service_environment,
         )
 
-        # Update service with container ID and configure Traefik
+        # Update service with container ID and configure Traefik from database truth
         service.container_id = str(container_id)
-        service_keys = service_api_keys or []
-        traefik.add(
+        rebuild_service_config(
+            db=db,
+            traefik=traefik,
+            service=service,
             service_prefix=service_url_prefix,
-            service_name=service.service_name,
-            api_keys=service_keys,
+            default_keys=service_api_keys or [],
         )
         # commit changes to be persisted
         db.commit()

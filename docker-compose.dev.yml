@@ -1,7 +1,7 @@
 name: serve-dev
 
 x-override: &override
-  volumes: 
+  volumes:
     - ./data/configs:/var/serve/configs
     - ./data/models:/var/serve/models
     - ./src/:/app/src:ro
@@ -12,7 +12,7 @@ x-override: &override
 services:
   backend:
     <<: *override
-  
+
   backend-cpu:
     <<: *override
 
