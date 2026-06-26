@@ -20,13 +20,13 @@ services:
 
   database:
     restart: unless-stopped
-  
+
   sentinel:
     restart: unless-stopped
 
   backend:
     <<: *override
-  
+
   backend-cpu:
     <<: *override
 

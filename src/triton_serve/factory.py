@@ -7,11 +7,21 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, operations, services
-from triton_serve.config import AppSettings
+from triton_serve.api.services.domain import rebuild_service_config
+from triton_serve.config import AppSettings, get_traefik
 from triton_serve.database import database_manager
+from triton_serve.database.model import Service
 from triton_serve.database.validation import check_resources
 
 log = logging.getLogger(uvicorn.__name__)
+
+
+def sync_traefik_configs(session, settings: AppSettings) -> None:
+    """Rebuilds every non-deleted service's Traefik config from database truth."""
+    traefik = get_traefik()
+    services = session.query(Service).filter(Service.deleted_at.is_(None)).all()
+    for service in services:
+        rebuild_service_config(session, traefik, service, settings.service_prefix, settings.api_keys)
 
 
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
@@ -36,6 +46,10 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
             except AssertionError as e:
                 log.warning("Validation error at startup: %s", str(e))
                 log.warning("Triton Serve may need to be reinitialized")
+            try:
+                sync_traefik_configs(session, settings)
+            except Exception as e:
+                log.warning("Failed to sync Traefik configs at startup: %s", e)
         yield
         database_manager.close()
 
