@@ -483,6 +483,25 @@ def test_status_endpoint_recreates_missing(test_client, test_docker, test_db):
     assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
 
 
+@pytest.mark.order(after="test_status_endpoint_recreates_missing")
+def test_sentinel_reconciles_missing(test_client, test_docker, test_db):
+    """The sentinel task recreates a MISSING container via /refresh."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    old_container_id = service.container_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    test_client.get(f"/services/{service_id}")  # observe -> MISSING
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.MISSING
+
+    update_service_status.apply(kwargs={"client": test_client})
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+    assert service.container_id != old_container_id
+
+
 @pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services

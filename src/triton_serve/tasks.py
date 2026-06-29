@@ -47,6 +47,11 @@ def update_service_status(client: Client | None = None) -> None:
         json_response = response.json()
         for service in json_response:
             service = ServiceSchema(**service)
+            if service.container_status == ServiceStatus.MISSING:
+                LOG.info("Reconciling missing service %s", service.service_id)
+                response = client.post(f"/services/{service.service_id}/refresh")
+                LOG.debug("Service %s reconcile requested: %s", service.service_id, response.text)
+                continue
             if service.container_status != ServiceStatus.ACTIVE:
                 continue
             if not service.last_active_time:
