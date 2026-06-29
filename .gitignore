@@ -164,3 +164,4 @@ cython_debug/
 *.tar.gz
 *.tgz
 CONTEXT.md
+docs/superpowers

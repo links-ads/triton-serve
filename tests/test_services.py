@@ -367,6 +367,28 @@ def test_update_service_wrong_inputs(test_client, service_id, update_body, expec
 
 
 @pytest.mark.order(after="test_update_service_recreate")
+def test_check_status_missing_is_observational(test_client, test_docker, test_db):
+    """A vanished container becomes MISSING, never DELETED, and is not auto-recreated by a read."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+
+    # remove the container out-of-band
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+
+    # a plain read must observe MISSING without spawning anything or deleting the service
+    response = test_client.get(f"/services/{service_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["container_status"] == ServiceStatus.MISSING.value
+    assert data["deleted_at"] is None
+    with pytest.raises(NotFound):
+        test_docker.containers.get("trt-srv_test_svc3")
+
+    # restore for the rest of the suite
+    test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+
+
+@pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
     services = test_db.query(Service).all()

@@ -259,18 +259,19 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
             service.container_status = ServiceStatus.STOPPED if exit_code == 0 else ServiceStatus.ERROR
         elif container.status == "running" and service.container_status != ServiceStatus.ACTIVE:
             service.container_status = ServiceStatus.ACTIVE
+            service.restart_attempts = 0
         db.commit()
         db.refresh(service)
         return service
     except NotFound, NullResource:
-        if service.deleted_at is None:
-            service.deleted_at = datetime.now(tz=timezone.utc)
-        service.container_status = ServiceStatus.DELETED
+        # the container object is gone; record it as MISSING (recoverable) without
+        # touching deleted_at — deletion is a user-only action.
+        service.container_status = ServiceStatus.MISSING
         db.commit()
         db.refresh(service)
         return service
     except APIError as e:
-        service.status = ServiceStatus.ERROR
+        service.container_status = ServiceStatus.ERROR
         db.commit()
         raise HTTPException(status_code=e.status_code or 500, detail=str(e)) from e
 
