@@ -388,6 +388,83 @@ def test_check_status_missing_is_observational(test_client, test_docker, test_db
     test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
 
 
+@pytest.mark.order(after="test_check_status_missing_is_observational")
+def test_missing_recreated_same_id_new_container(test_client, test_docker, test_db):
+    """A MISSING service is recreated with the same service_id and a fresh container_id."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    old_container_id = service.container_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    # mark MISSING via an observational read
+    test_client.get(f"/services/{service_id}")
+
+    response = test_client.post(f"/services/{service_id}/refresh")
+    assert response.status_code == 204
+
+    test_db.refresh(service)
+    assert service.service_id == service_id
+    assert service.container_status == ServiceStatus.STARTING
+    assert service.container_id != old_container_id
+    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
+
+
+@pytest.mark.order(after="test_missing_recreated_same_id_new_container")
+def test_missing_recreate_no_double_spawn(test_client, test_docker, test_db):
+    """Re-verify guard: status MISSING but container present -> reconcile must not spawn a new one."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    healthy_container_id = service.container_id
+    # force MISSING while the container is actually still running
+    service.container_status = ServiceStatus.MISSING
+    test_db.commit()
+
+    response = test_client.post(f"/services/{service_id}/refresh")
+    assert response.status_code == 204
+
+    test_db.refresh(service)
+    # re-verify guard saw the container present: no new container, reconciled back to a live status
+    assert service.container_id == healthy_container_id
+
+
+@pytest.mark.order(after="test_missing_recreate_no_double_spawn")
+def test_missing_exhaustion_to_error_then_recovery(test_client, test_docker, test_db):
+    """Repeated recreate failures land the service in ERROR, recoverable via force_recreate."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    good_image = service.service_image
+
+    # force every recreate attempt to fail by pointing at a bogus image
+    service.service_image = "ghcr.io/links-ads/does-not-exist:0"
+    service.container_status = ServiceStatus.MISSING
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+    try:
+        test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    except NotFound:
+        pass
+
+    # drive past the budget: max_restart_attempts (3) spawn attempts + 1 observation -> ERROR
+    for _ in range(5):
+        test_client.post(f"/services/{service_id}/refresh")
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.ERROR
+
+    # recover: restore a valid image and force_recreate
+    service.service_image = good_image
+    test_db.commit()
+    response = test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+    assert response.status_code == 204
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+
+    # leave a clean retry budget so downstream tests are not affected by exhaustion
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+
+
 @pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
