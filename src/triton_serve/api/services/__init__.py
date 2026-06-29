@@ -220,6 +220,7 @@ def stop_service(
 )
 def check_service_status(
     service_name: str,
+    settings: AppSettings = Depends(get_settings),
     db: Session = Depends(get_db),
     docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_service),
@@ -250,6 +251,20 @@ def check_service_status(
                 client=docker,
                 service=service,
             )
+            return 202
+        case ServiceStatus.MISSING:
+            domain.refresh_service(
+                db=db,
+                docker_client=docker,
+                service_id=service.service_id,
+                service_network=settings.service_network,
+                service_models_volume=settings.service_volume,
+                max_restart_attempts=settings.service_max_restart_attempts,
+                restart_cooldown=settings.service_restart_cooldown,
+            )
+            db.refresh(service)
+            if service.container_status == ServiceStatus.ERROR:
+                raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")
             return 202
         case ServiceStatus.ERROR:
             raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")

@@ -465,6 +465,24 @@ def test_missing_exhaustion_to_error_then_recovery(test_client, test_docker, tes
     test_db.commit()
 
 
+@pytest.mark.order(after="test_missing_exhaustion_to_error_then_recovery")
+def test_status_endpoint_recreates_missing(test_client, test_docker, test_db):
+    """GET /status on a MISSING service triggers recreation and returns 202."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    test_client.get(f"/services/{service_id}")  # observe -> MISSING
+
+    response = test_client.get("/status/trt-srv_test_svc3")
+    assert response.status_code == 200  # decorator status; body carries the signal
+    assert response.json() == 202
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
+
+
 @pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
