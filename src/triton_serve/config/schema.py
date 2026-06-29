@@ -36,6 +36,8 @@ class AppSettings(BaseSettings):
     service_network: str = "triton-serve_default"
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
+    service_max_restart_attempts: int = 3
+    service_restart_cooldown: int = 600  # seconds
 
     # database
     database_user: str

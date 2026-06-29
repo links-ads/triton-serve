@@ -11,6 +11,26 @@ from triton_serve.tasks import update_service_status
 LOG = logging.getLogger(pytest.__name__)
 
 
+def test_missing_status_and_retry_fields():
+    from triton_serve.config import get_settings
+    from triton_serve.database.schema import ServiceSchema
+
+    assert ServiceStatus.MISSING.value == "missing"
+    assert "restart_attempts" in ServiceSchema.model_fields
+    assert "last_attempt_at" in ServiceSchema.model_fields
+
+    settings = get_settings()
+    assert settings.service_max_restart_attempts == 3
+    assert settings.service_restart_cooldown == 600
+
+
+def test_retry_columns_exist(test_db):
+    from sqlalchemy import inspect
+
+    cols = {c["name"] for c in inspect(test_db.bind).get_columns("services")}
+    assert {"restart_attempts", "last_attempt_at"} <= cols
+
+
 @pytest.mark.order(after="test_auth.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, resources, timeout",

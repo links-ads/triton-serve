@@ -38,6 +38,7 @@ class ServiceStatus(enum.Enum):
     ERROR = "error"
     STOPPED = "stopped"
     DELETED = "deleted"
+    MISSING = "missing"
 
 
 class KeyType(enum.Enum):
@@ -141,6 +142,8 @@ class Service(Base):
     last_active_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     inactivity_timeout: Mapped[int] = mapped_column(nullable=False, default=3600)  # 1 hour
     priority: Mapped[int] = mapped_column(nullable=False)  # 0 is the lowest priority
+    restart_attempts: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
     models: Mapped[list["Model"]] = relationship(secondary=model_service_association, backref="services")
     device_allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="service")
