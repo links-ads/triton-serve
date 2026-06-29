@@ -9,7 +9,7 @@ from docker.errors import APIError, ImageNotFound, NotFound, NullResource
 from docker.models.images import Image
 from docker.types import DeviceRequest
 from fastapi import HTTPException
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import Engine, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceUpdateBody
@@ -785,48 +785,60 @@ def reconcile_missing_container(
     still counts toward the budget; exhaustion lands the service in a recoverable ERROR.
     """
     lock_key = service.service_id
-    acquired = db.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}).scalar()
-    if not acquired:
-        LOG.debug("Reconciliation already in progress for service %s, skipping", service.service_id)
-        return
-    try:
-        # lost-race / self-heal guard: if the container is back, just reconcile status
-        try:
-            client.containers.get(service.container_id)
-            check_service_status(db=db, docker_client=client, service=service)
+    # Hold the advisory lock on a dedicated AUTOCOMMIT connection for the whole critical
+    # section. A session-level lock is bound to its backend connection; the ORM session
+    # bounces connections on every commit (the mid-flight bookkeeping commit below), so the
+    # lock must NOT live on the session's connection or the finally-unlock could target a
+    # different backend and leak the lock.
+    # the session is bound to the Engine (sessionmaker(bind=engine)); narrow the
+    # Engine | Connection union accordingly for the dedicated lock connection.
+    engine = cast(Engine, db.get_bind())
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as lock_conn:
+        acquired = lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}).scalar()
+        if not acquired:
+            LOG.debug("Reconciliation already in progress for service %s, skipping", service.service_id)
             return
-        except NotFound, NullResource:
-            pass
+        try:
+            # lost-race / self-heal guard: if the container is back, just reconcile status
+            try:
+                client.containers.get(service.container_id)
+                check_service_status(db=db, docker_client=client, service=service)
+                return
+            except NotFound, NullResource:
+                pass
 
-        now = datetime.now(tz=timezone.utc)
-        if service.last_attempt_at is not None and (now - service.last_attempt_at).total_seconds() > restart_cooldown:
-            service.restart_attempts = 0
+            now = datetime.now(tz=timezone.utc)
+            if (
+                service.last_attempt_at is not None
+                and (now - service.last_attempt_at).total_seconds() > restart_cooldown
+            ):
+                service.restart_attempts = 0
 
-        if service.restart_attempts >= max_restart_attempts:
-            service.container_status = ServiceStatus.ERROR
+            if service.restart_attempts >= max_restart_attempts:
+                service.container_status = ServiceStatus.ERROR
+                db.commit()
+                db.refresh(service)
+                LOG.warning("Service %s exhausted restart budget, marking ERROR", service.service_id)
+                return
+
+            # record the attempt before spawning so a broken image cannot retry forever
+            service.restart_attempts += 1
+            service.last_attempt_at = now
             db.commit()
-            db.refresh(service)
-            LOG.warning("Service %s exhausted restart budget, marking ERROR", service.service_id)
-            return
 
-        # record the attempt before spawning so a broken image cannot retry forever
-        service.restart_attempts += 1
-        service.last_attempt_at = now
-        db.commit()
-
-        try:
-            recreate_service_container(db, client, service, service_network, service_models_volume)
-        except HTTPException as e:
-            # leave the service MISSING; the next attempt proceeds until the budget exhausts
-            db.rollback()
-            LOG.warning(
-                "Recreate attempt %d for service %s failed: %s",
-                service.restart_attempts,
-                service.service_id,
-                e.detail,
-            )
-    finally:
-        db.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+            try:
+                recreate_service_container(db, client, service, service_network, service_models_volume)
+            except HTTPException as e:
+                # leave the service MISSING; the next attempt proceeds until the budget exhausts
+                db.rollback()
+                LOG.warning(
+                    "Recreate attempt %d for service %s failed: %s",
+                    service.restart_attempts,
+                    service.service_id,
+                    e.detail,
+                )
+        finally:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
 
 
 def refresh_service(

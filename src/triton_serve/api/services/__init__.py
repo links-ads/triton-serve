@@ -224,7 +224,7 @@ def check_service_status(
     db: Session = Depends(get_db),
     docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_service),
-):
+) -> int:
     """
     Checks the status of a service, turning it on if it is stopped.
 

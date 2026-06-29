@@ -27,7 +27,7 @@ def test_missing_status_and_retry_fields():
 def test_retry_columns_exist(test_db):
     from sqlalchemy import inspect
 
-    cols = {c["name"] for c in inspect(test_db.bind).get_columns("services")}
+    cols = {c["name"] for c in inspect(test_db.connection()).get_columns("services")}
     assert {"restart_attempts", "last_attempt_at"} <= cols
 
 
@@ -410,21 +410,30 @@ def test_missing_recreated_same_id_new_container(test_client, test_docker, test_
 
 
 @pytest.mark.order(after="test_missing_recreated_same_id_new_container")
-def test_missing_recreate_no_double_spawn(test_client, test_docker, test_db):
-    """Re-verify guard: status MISSING but container present -> reconcile must not spawn a new one."""
+def test_missing_recreate_no_double_spawn(test_docker, test_db, test_settings):
+    """Re-verify guard: reconcile on a MISSING service whose container is actually present must not spawn a new one."""
+    from triton_serve.api.services import domain
+
     service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
     healthy_container_id = service.container_id
-    # force MISSING while the container is actually still running
+    # force MISSING while the container is genuinely still present
     service.container_status = ServiceStatus.MISSING
     test_db.commit()
 
-    response = test_client.post(f"/services/{service_id}/refresh")
-    assert response.status_code == 204
+    domain.reconcile_missing_container(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        service_network=test_settings.service_network,
+        service_models_volume=test_settings.service_volume,
+        max_restart_attempts=test_settings.service_max_restart_attempts,
+        restart_cooldown=test_settings.service_restart_cooldown,
+    )
 
     test_db.refresh(service)
-    # re-verify guard saw the container present: no new container, reconciled back to a live status
+    # the re-verify guard saw the container present -> no new container, no extra attempt
     assert service.container_id == healthy_container_id
+    assert service.container_status != ServiceStatus.MISSING
 
 
 @pytest.mark.order(after="test_missing_recreate_no_double_spawn")
