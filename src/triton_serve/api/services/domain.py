@@ -613,8 +613,9 @@ def delete_service(
     service_id: int,
 ) -> Service:
     """
-    Deletes a triton docker container and the traefik config for the service.
-    Marks the service as deleted, deallocates associated devices, and removes the Docker container.
+    Soft-deletes a service: removes its Docker container and Traefik config and stamps deleted_at.
+    Device allocations are retained on the row but ignored while deleted (the allocator filters
+    out deleted services), so capacity is effectively released without dropping the records.
 
     Args:
         db (Session): The database session.
