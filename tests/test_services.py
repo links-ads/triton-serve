@@ -511,6 +511,59 @@ def test_sentinel_reconciles_missing(test_client, test_docker, test_db):
     assert service.container_id != old_container_id
 
 
+@pytest.mark.order(after="test_sentinel_reconciles_missing")
+def test_check_status_preserves_terminal_states(test_client, test_docker, test_db):
+    """A vanished container must not drag a terminal ERROR/STOPPED service into MISSING."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    original_status = service.container_status
+
+    # remove the container out-of-band so the daemon reports it gone
+    try:
+        test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    except NotFound:
+        pass
+
+    # an observational read finds the container gone but must leave a terminal state intact:
+    # only a previously-running service (ACTIVE/STARTING) may transition to MISSING
+    for terminal in (ServiceStatus.ERROR, ServiceStatus.STOPPED):
+        service.container_status = terminal
+        test_db.commit()
+        data = test_client.get(f"/services/{service_id}").json()
+        assert data["container_status"] == terminal.value
+
+    # restore for downstream tests
+    service.container_status = original_status
+    test_db.commit()
+    test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+
+
+@pytest.mark.order(after="test_check_status_preserves_terminal_states")
+def test_deleted_service_excluded_from_listing(test_client, test_docker, test_db):
+    """Soft-deleted services must not appear in GET /services nor be revived by the sentinel."""
+    from datetime import datetime, timezone
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    original_deleted = service.deleted_at
+
+    # soft-delete the row (leave the container alone) and mark it MISSING as the daemon would
+    service.deleted_at = datetime.now(tz=timezone.utc)
+    service.container_status = ServiceStatus.MISSING
+    test_db.commit()
+
+    listing = test_client.get("/services").json()
+    assert all(s["service_id"] != service_id for s in listing)
+
+    # the sentinel polls the same listing, so a deleted service is never reconciled
+    update_service_status.apply(kwargs={"client": test_client})
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.MISSING
+
+    service.deleted_at = original_deleted
+    test_db.commit()
+
+
 @pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
