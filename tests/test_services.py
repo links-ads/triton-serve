@@ -562,6 +562,8 @@ def test_deleted_service_excluded_from_listing(test_client, test_docker, test_db
 
     service.deleted_at = original_deleted
     test_db.commit()
+
+
 @pytest.mark.order(after="test_deleted_service_excluded_from_listing")
 def test_reconcile_adopts_returned_container(test_docker, test_db, test_settings):
     """Reconcile adopts a container that is back under the service name (new id), without respawning."""
