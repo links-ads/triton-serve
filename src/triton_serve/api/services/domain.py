@@ -79,7 +79,7 @@ def list_services(
     Returns:
         list[Service]: The list of services.
     """
-    statement = db.query(Service)
+    statement = db.query(Service).filter(Service.deleted_at.is_(None))
     if names:
         statement = statement.filter(Service.service_name.in_(names))
     if statuses:
@@ -264,11 +264,14 @@ def check_service_status(db: Session, docker_client: DockerClient, service: Serv
         db.refresh(service)
         return service
     except NotFound, NullResource:
-        # the container object is gone; record it as MISSING (recoverable) without
-        # touching deleted_at — deletion is a user-only action.
-        service.container_status = ServiceStatus.MISSING
-        db.commit()
-        db.refresh(service)
+        # the container object is gone. only a previously-running service can go MISSING:
+        # transitioning from a terminal/managed state (ERROR, STOPPED) would let the sentinel
+        # revive services the user stopped or that already exhausted their restart budget.
+        # deleted_at is left untouched — deletion is a user-only action.
+        if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
+            service.container_status = ServiceStatus.MISSING
+            db.commit()
+            db.refresh(service)
         return service
     except APIError as e:
         service.container_status = ServiceStatus.ERROR
