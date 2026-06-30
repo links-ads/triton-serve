@@ -100,6 +100,8 @@ class ServiceBaseSchema(BaseModel):
     deleted_at: datetime | None = None
     inactivity_timeout: int = Field(default=3600, ge=0)
     priority: int = Field(default=0, ge=0)
+    restart_attempts: int = 0
+    last_attempt_at: datetime | None = None
     last_active_time: datetime | None = None
     resources: ServiceResourcesSchema
     models: list[ModelSchema] = Field(default_factory=list)

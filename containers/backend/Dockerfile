@@ -25,14 +25,18 @@ ENV PATH="/root/.local/bin/:$PATH"
 # install a specific python version
 RUN uv python install ${PYTHON_VERSION} && uv python pin ${PYTHON_VERSION}
 
-# Install git and SSH keys for private repositories
+# Install git and SSH keys for private repositories.
+# Trust github + hugging face via a static, version-controlled known_hosts instead of
+# ssh-keyscan: keyscan is non-deterministic and fails the build when a host's SSH
+# handshake is flaky or unreachable (hf.co in particular). Refresh the file if a
+# provider rotates its host keys.
 COPY .ssh /root/.ssh
+COPY containers/backend/known_hosts /root/.ssh/known_hosts
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git git-lfs openssh-client && \
     git lfs install && \
     chmod 600 /root/.ssh/id_rsa && \
-    ssh-keyscan github.com >> /root/.ssh/known_hosts && \
-    ssh-keyscan hf.co >> /root/.ssh/known_hosts
+    chmod 644 /root/.ssh/known_hosts
 
 # Change the working directory
 WORKDIR /app

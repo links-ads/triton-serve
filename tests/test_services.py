@@ -11,6 +11,26 @@ from triton_serve.tasks import update_service_status
 LOG = logging.getLogger(pytest.__name__)
 
 
+def test_missing_status_and_retry_fields():
+    from triton_serve.config import get_settings
+    from triton_serve.database.schema import ServiceSchema
+
+    assert ServiceStatus.MISSING.value == "missing"
+    assert "restart_attempts" in ServiceSchema.model_fields
+    assert "last_attempt_at" in ServiceSchema.model_fields
+
+    settings = get_settings()
+    assert settings.service_max_restart_attempts == 3
+    assert settings.service_restart_cooldown == 600
+
+
+def test_retry_columns_exist(test_db):
+    from sqlalchemy import inspect
+
+    cols = {c["name"] for c in inspect(test_db.connection()).get_columns("services")}
+    assert {"restart_attempts", "last_attempt_at"} <= cols
+
+
 @pytest.mark.order(after="test_auth.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, resources, timeout",
@@ -344,6 +364,151 @@ def test_update_service_wrong_inputs(test_client, service_id, update_body, expec
     response = test_client.put(f"/services/{service_id}", json=update_body)
     LOG.debug(f"response: {response.text}")
     assert response.status_code == expected_status
+
+
+@pytest.mark.order(after="test_update_service_recreate")
+def test_check_status_missing_is_observational(test_client, test_docker, test_db):
+    """A vanished container becomes MISSING, never DELETED, and is not auto-recreated by a read."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+
+    # remove the container out-of-band
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+
+    # a plain read must observe MISSING without spawning anything or deleting the service
+    response = test_client.get(f"/services/{service_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["container_status"] == ServiceStatus.MISSING.value
+    assert data["deleted_at"] is None
+    with pytest.raises(NotFound):
+        test_docker.containers.get("trt-srv_test_svc3")
+
+    # restore for the rest of the suite
+    test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+
+
+@pytest.mark.order(after="test_check_status_missing_is_observational")
+def test_missing_recreated_same_id_new_container(test_client, test_docker, test_db):
+    """A MISSING service is recreated with the same service_id and a fresh container_id."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    old_container_id = service.container_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    # mark MISSING via an observational read
+    test_client.get(f"/services/{service_id}")
+
+    response = test_client.post(f"/services/{service_id}/refresh")
+    assert response.status_code == 204
+
+    test_db.refresh(service)
+    assert service.service_id == service_id
+    assert service.container_status == ServiceStatus.STARTING
+    assert service.container_id != old_container_id
+    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
+
+
+@pytest.mark.order(after="test_missing_recreated_same_id_new_container")
+def test_missing_recreate_no_double_spawn(test_docker, test_db, test_settings):
+    """Re-verify guard: reconcile on a MISSING service whose container is actually present must not spawn a new one."""
+    from triton_serve.api.services import domain
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    healthy_container_id = service.container_id
+    # force MISSING while the container is genuinely still present
+    service.container_status = ServiceStatus.MISSING
+    test_db.commit()
+
+    domain.reconcile_missing_container(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        service_network=test_settings.service_network,
+        service_models_volume=test_settings.service_volume,
+        max_restart_attempts=test_settings.service_max_restart_attempts,
+        restart_cooldown=test_settings.service_restart_cooldown,
+    )
+
+    test_db.refresh(service)
+    # the re-verify guard saw the container present -> no new container, no extra attempt
+    assert service.container_id == healthy_container_id
+    assert service.container_status != ServiceStatus.MISSING
+
+
+@pytest.mark.order(after="test_missing_recreate_no_double_spawn")
+def test_missing_exhaustion_to_error_then_recovery(test_client, test_docker, test_db):
+    """Repeated recreate failures land the service in ERROR, recoverable via force_recreate."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    good_image = service.service_image
+
+    # force every recreate attempt to fail by pointing at a bogus image
+    service.service_image = "ghcr.io/links-ads/does-not-exist:0"
+    service.container_status = ServiceStatus.MISSING
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+    try:
+        test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    except NotFound:
+        pass
+
+    # drive past the budget: max_restart_attempts (3) spawn attempts + 1 observation -> ERROR
+    for _ in range(5):
+        test_client.post(f"/services/{service_id}/refresh")
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.ERROR
+
+    # recover: restore a valid image and force_recreate
+    service.service_image = good_image
+    test_db.commit()
+    response = test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+    assert response.status_code == 204
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+
+    # leave a clean retry budget so downstream tests are not affected by exhaustion
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+
+
+@pytest.mark.order(after="test_missing_exhaustion_to_error_then_recovery")
+def test_status_endpoint_recreates_missing(test_client, test_docker, test_db):
+    """GET /status on a MISSING service triggers recreation and returns 202."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    test_client.get(f"/services/{service_id}")  # observe -> MISSING
+
+    response = test_client.get("/status/trt-srv_test_svc3")
+    assert response.status_code == 200  # decorator status; body carries the signal
+    assert response.json() == 202
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
+
+
+@pytest.mark.order(after="test_status_endpoint_recreates_missing")
+def test_sentinel_reconciles_missing(test_client, test_docker, test_db):
+    """The sentinel task recreates a MISSING container via /refresh."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    service_id = service.service_id
+    old_container_id = service.container_id
+
+    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    test_client.get(f"/services/{service_id}")  # observe -> MISSING
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.MISSING
+
+    update_service_status.apply(kwargs={"client": test_client})
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING
+    assert service.container_id != old_container_id
 
 
 @pytest.mark.order(after="test_update_service_recreate")
