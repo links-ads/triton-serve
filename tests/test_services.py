@@ -562,6 +562,80 @@ def test_deleted_service_excluded_from_listing(test_client, test_docker, test_db
 
     service.deleted_at = original_deleted
     test_db.commit()
+@pytest.mark.order(after="test_deleted_service_excluded_from_listing")
+def test_reconcile_adopts_returned_container(test_docker, test_db, test_settings):
+    """Reconcile adopts a container that is back under the service name (new id), without respawning."""
+    from triton_serve.api.services import domain
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    name = service.service_name
+    real = test_docker.containers.get(name)
+    for _ in range(10):
+        real.reload()
+        if real.status == "running":
+            break
+        time.sleep(1)
+    assert real.status == "running"
+
+    # lose track of the id: MISSING with a stale container_id while the container is genuinely up
+    service.container_status = ServiceStatus.MISSING
+    service.container_id = "stale-id-0000"
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+
+    domain.reconcile_missing_container(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        service_network=test_settings.service_network,
+        service_models_volume=test_settings.service_volume,
+        max_restart_attempts=test_settings.service_max_restart_attempts,
+        restart_cooldown=test_settings.service_restart_cooldown,
+    )
+
+    test_db.refresh(service)
+    assert service.container_id == real.id  # adopted the existing container
+    assert service.container_status != ServiceStatus.MISSING
+    assert len([c for c in test_docker.containers.list(all=True) if c.name == name]) == 1
+
+
+@pytest.mark.order(after="test_reconcile_adopts_returned_container")
+def test_reconcile_clears_name_squatter(test_docker, test_db, test_settings):
+    """A stale/foreign container holding the name is removed so recreate doesn't 409."""
+    from triton_serve.api.services import domain
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
+    name = service.service_name
+    image = service.service_image
+
+    # tear down the real container and leave a foreign one squatting the name under a different id
+    try:
+        test_docker.containers.get(name).remove(force=True)
+    except NotFound:
+        pass
+    squatter = test_docker.containers.create(image=image, name=name)
+
+    service.container_status = ServiceStatus.MISSING
+    service.container_id = "stale-id-0000"
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    test_db.commit()
+
+    domain.reconcile_missing_container(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        service_network=test_settings.service_network,
+        service_models_volume=test_settings.service_volume,
+        max_restart_attempts=test_settings.service_max_restart_attempts,
+        restart_cooldown=test_settings.service_restart_cooldown,
+    )
+
+    test_db.refresh(service)
+    assert service.container_status == ServiceStatus.STARTING  # recreated cleanly, no 409
+    assert service.container_id not in ("stale-id-0000", squatter.id)
+    assert len([c for c in test_docker.containers.list(all=True) if c.name == name]) == 1
 
 
 @pytest.mark.order(after="test_update_service_recreate")
