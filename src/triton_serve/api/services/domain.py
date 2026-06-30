@@ -6,6 +6,7 @@ from typing import cast
 
 from docker import DockerClient
 from docker.errors import APIError, ImageNotFound, NotFound, NullResource
+from docker.models.containers import Container
 from docker.models.images import Image
 from docker.types import DeviceRequest
 from fastapi import HTTPException
@@ -28,6 +29,19 @@ from triton_serve.database.model import (
 )
 
 LOG = logging.getLogger("uvicorn")
+
+
+def get_container_by_name(client: DockerClient, name: str) -> Container | None:
+    """Returns the container currently holding `name` (in any state), or None if absent.
+
+    Lookup is by name rather than id: a MISSING service's stored container_id is exactly what
+    no longer resolves, while a container under the service name may still exist (e.g. it came
+    back under a new id after a host reboot, or a stale one is squatting the name).
+    """
+    try:
+        return client.containers.get(name)
+    except NotFound:
+        return None
 
 
 def rebuild_service_config(
@@ -312,7 +326,7 @@ def spawn_service_container(
         HTTPException: If the container could not be created.
     """
     # check if container with the same name already exists
-    if worker_name in [container.name for container in client.containers.list()]:
+    if worker_name in [container.name for container in client.containers.list(all=True)]:
         raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
 
     # prepare the requirements, if any
@@ -599,8 +613,9 @@ def delete_service(
     service_id: int,
 ) -> Service:
     """
-    Deletes a triton docker container and the traefik config for the service.
-    Marks the service as deleted, deallocates associated devices, and removes the Docker container.
+    Soft-deletes a service: removes its Docker container and Traefik config and stamps deleted_at.
+    Device allocations are retained on the row but ignored while deleted (the allocator filters
+    out deleted services), so capacity is effectively released without dropping the records.
 
     Args:
         db (Session): The database session.
@@ -735,6 +750,11 @@ def recreate_service_container(
                 pass
             service.container_id = None  # type: ignore
 
+        # a stale/foreign container may still hold the name under a different id (e.g. dirty
+        # docker after a host reboot); clear it by name so the spawn below cannot 409.
+        if (squatter := get_container_by_name(client, service.service_name)) is not None:
+            squatter.remove(force=True)
+
         image = get_service_image(client, service.service_image)
         res = service.resources
         device_objs = [alloc.device for alloc in service.device_allocations]
@@ -802,13 +822,15 @@ def reconcile_missing_container(
             LOG.debug("Reconciliation already in progress for service %s, skipping", service.service_id)
             return
         try:
-            # lost-race / self-heal guard: if the container is back, just reconcile status
-            try:
-                client.containers.get(service.container_id)
+            # self-heal guard: a container under this service's name may already be up. it can
+            # come back under a NEW id (host reboot), so look it up by name, not the stale id.
+            # adopt a running one and just reconcile status; a dead one is cleared on recreate.
+            existing = get_container_by_name(client, service.service_name)
+            if existing is not None and existing.status == "running":
+                if service.container_id != existing.id:
+                    service.container_id = existing.id  # type: ignore
                 check_service_status(db=db, docker_client=client, service=service)
                 return
-            except NotFound, NullResource:
-                pass
 
             now = datetime.now(tz=timezone.utc)
             if (
