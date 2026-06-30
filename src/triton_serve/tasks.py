@@ -29,7 +29,7 @@ def setup_periodic_tasks(sender, **_):
     )
 
     sender.add_periodic_task(
-        settings.queue_messages_purging_interval,  # type: ignore
+        settings.purge_message_schedule,
         purge_queue_messages.s(),  # type: ignore
         name="Purge queue messages",
     )
