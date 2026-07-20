@@ -31,6 +31,27 @@ def test_retry_columns_exist(test_db):
     assert {"restart_attempts", "last_attempt_at"} <= cols
 
 
+def test_lifecycle_enums_and_columns(test_db):
+    from sqlalchemy import inspect
+
+    from triton_serve.database.model import DesiredState, RuntimeStatus
+
+    assert {s.value for s in DesiredState} == {"available", "suspended", "retired"}
+    assert {s.value for s in RuntimeStatus} == {
+        "ready",
+        "warming",
+        "idle",
+        "recovering",
+        "failed",
+        "suspended",
+        "retired",
+    }
+    cols = {c["name"] for c in inspect(test_db.connection()).get_columns("services")}
+    assert {"desired_state", "runtime_status"} <= cols
+    # expand phase: the old column still exists; it is dropped in Task 6 once nothing reads it
+    assert "container_status" in cols
+
+
 @pytest.mark.order(after="test_auth.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, resources, timeout",
