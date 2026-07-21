@@ -4,11 +4,15 @@ from datetime import datetime, timezone
 from celery import Celery
 from httpx import Client
 
+from triton_serve.api.services.execute import execute
+from triton_serve.api.services.observe import observe
+from triton_serve.api.services.reconcile import decide
 from triton_serve.config import get_settings
 from triton_serve.config.celery import Config
 from triton_serve.config.celery import client as worker_client
-from triton_serve.database.model import ServiceStatus
-from triton_serve.database.schema import ServiceSchema
+from triton_serve.database import database_manager
+from triton_serve.database.model import DesiredState, RuntimeStatus, Service
+from triton_serve.extensions import get_reconciler_docker_client
 
 LOG = logging.getLogger(__name__)
 
@@ -35,36 +39,54 @@ def setup_periodic_tasks(sender, **_):
     )
 
 
+def _replica_target(service: Service, now: datetime) -> int:
+    """1 if within the inactivity window (recent traffic / wake), else 0. AVAILABLE only."""
+    idle_for = (now - service.last_active_time).total_seconds()
+    return 1 if idle_for < service.inactivity_timeout else 0
+
+
+def _backoff_seconds(attempts: int, base: int, cap: int) -> int:
+    return min(base * (2 ** max(attempts - 1, 0)), cap)
+
+
 @app.task
-def update_service_status(client: Client | None = None) -> None:
-    """
-    Checks the status of the container.
-    """
-    client = client or worker_client
-    assert client is not None
-    try:
-        response = client.get("/services")
-        json_response = response.json()
-        for service in json_response:
-            service = ServiceSchema(**service)
-            if service.container_status == ServiceStatus.MISSING:
-                LOG.info("Reconciling missing service %s", service.service_id)
-                response = client.post(f"/services/{service.service_id}/refresh")
-                LOG.debug("Service %s reconcile requested: %s", service.service_id, response.text)
-                continue
-            if service.container_status != ServiceStatus.ACTIVE:
-                continue
-            if not service.last_active_time:
-                up_time = 0
-            else:
-                up_time = (datetime.now(tz=timezone.utc) - service.last_active_time).total_seconds()
-            LOG.debug("Service %s has been inactive for %s seconds", service.service_id, up_time)
-            if up_time > service.inactivity_timeout:
-                LOG.info("Stopping service %s due to inactivity", service.service_id)
-                response = client.post(f"/services/{service.service_id}/stop")
-                LOG.debug("Service %s stopped: %s", service.service_id, response.text)
-    except Exception as e:
-        LOG.error("Error checking container status: %s", e)
+def update_service_status() -> None:
+    """Reconcile every non-retired service: observe -> decide -> execute. Reconciler owns Docker."""
+    client = get_reconciler_docker_client()
+    now = datetime.now(tz=timezone.utc)
+    with database_manager.session() as db:
+        services = db.query(Service).filter(Service.desired_state != DesiredState.RETIRED).all()
+        for service in services:
+            try:
+                # reset the crash budget once the cooldown has elapsed since the last attempt
+                if (
+                    service.last_attempt_at is not None
+                    and (now - service.last_attempt_at).total_seconds() > settings.service_restart_cooldown
+                ):
+                    service.restart_attempts = 0
+
+                # honor backoff: skip a service still cooling down between crash attempts
+                if (
+                    service.runtime_status == RuntimeStatus.RECOVERING
+                    and service.last_attempt_at is not None
+                    and (now - service.last_attempt_at).total_seconds()
+                    < _backoff_seconds(service.restart_attempts, base=10, cap=settings.service_restart_cooldown)
+                ):
+                    continue
+
+                target = _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
+                observed = observe(client, service, settings.service_boot_grace)
+                decision = decide(
+                    desired=service.desired_state,
+                    observed=observed,
+                    replica_target=target,
+                    attempts=service.restart_attempts,
+                    max_attempts=settings.service_max_restart_attempts,
+                )
+                execute(db=db, client=client, service=service, decision=decision, settings=settings)
+            except Exception as e:
+                LOG.error("Reconcile failed for service %s: %s", service.service_id, e)
+                db.rollback()
 
 
 @app.task

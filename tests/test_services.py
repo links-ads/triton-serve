@@ -187,7 +187,7 @@ def test_stop_service(
     time.sleep(5)
     # Manually execute the update service status task: one of the services should be stopped
     # due to the timeout, the other should be running.
-    update_service_status.apply(kwargs={"client": test_client})
+    update_service_status.apply()
     assert test_docker.containers.get(service_name).status == service_container_status
 
 
@@ -525,7 +525,7 @@ def test_sentinel_reconciles_missing(test_client, test_docker, test_db):
     test_db.refresh(service)
     assert service.container_status == ServiceStatus.MISSING
 
-    update_service_status.apply(kwargs={"client": test_client})
+    update_service_status.apply()
 
     test_db.refresh(service)
     assert service.container_status == ServiceStatus.STARTING
@@ -577,7 +577,7 @@ def test_deleted_service_excluded_from_listing(test_client, test_docker, test_db
     assert all(s["service_id"] != service_id for s in listing)
 
     # the sentinel polls the same listing, so a deleted service is never reconciled
-    update_service_status.apply(kwargs={"client": test_client})
+    update_service_status.apply()
     test_db.refresh(service)
     assert service.container_status == ServiceStatus.MISSING
 
@@ -682,6 +682,28 @@ def test_execute_recreates_absent(test_db, test_docker, test_settings):
     test_db.refresh(service)
     assert service.runtime_status == RuntimeStatus.WARMING
     assert test_docker.containers.get(service.service_name) is not None
+
+
+@pytest.mark.order(after="test_execute_recreates_absent")
+def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
+    """The reconciler scales an idle service to zero, then wakes it once it sees traffic again."""
+    from datetime import datetime, timezone
+
+    from triton_serve.database.model import DesiredState, RuntimeStatus
+
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc4").one()  # timeout=5s
+    svc.desired_state = DesiredState.AVAILABLE
+    test_db.commit()
+    time.sleep(6)  # exceed the 5s inactivity window
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.runtime_status == RuntimeStatus.IDLE  # scaled to zero, container stopped
+
+    svc.last_active_time = datetime.now(timezone.utc)
+    test_db.commit()
+    update_service_status.apply()  # target back to 1 -> start/recreate
+    test_db.refresh(svc)
+    assert svc.runtime_status in (RuntimeStatus.WARMING, RuntimeStatus.READY)
 
 
 @pytest.mark.order(after="test_update_service_recreate")
