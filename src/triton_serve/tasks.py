@@ -55,7 +55,7 @@ def update_service_status() -> None:
     client = get_reconciler_docker_client()
     now = datetime.now(tz=timezone.utc)
     with database_manager.session() as db:
-        services = db.query(Service).filter(Service.desired_state != DesiredState.RETIRED).all()
+        services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
         for service in services:
             try:
                 # reset the crash budget once the cooldown has elapsed since the last attempt
