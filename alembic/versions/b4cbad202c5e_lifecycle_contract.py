@@ -24,6 +24,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    old = sa.Enum("starting", "active", "error", "stopped", "deleted", "missing", name="servicestatus")
+    # the original servicestatus stored UPPERCASE member names (af7db8f0dc88_init) and gained
+    # MISSING in dd883257cf20; recreate it faithfully. prior status values are not recoverable and
+    # fall back to the server default.
+    old = sa.Enum("STARTING", "ACTIVE", "ERROR", "STOPPED", "DELETED", "MISSING", name="servicestatus")
     old.create(op.get_bind(), checkfirst=True)
-    op.add_column("services", sa.Column("container_status", old, nullable=False, server_default="starting"))
+    op.add_column("services", sa.Column("container_status", old, nullable=False, server_default="STARTING"))

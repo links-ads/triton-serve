@@ -41,15 +41,20 @@ def _available(observed: ObservedFact, target: int, attempts: int, max_attempts:
             return Decision(Action.NONE, RuntimeStatus.FAILED)
         return Decision(Action.NONE, RuntimeStatus.IDLE)
 
-    # target == 1: drive toward serving
+    # target == 1: drive toward serving. once the budget is spent every bring-up refuses, so
+    # FAILED stays terminal (even if the dead container is later removed) until /retry resets it
     match observed:
         case ObservedFact.RUNNING:
             return Decision(Action.NONE, RuntimeStatus.READY)
         case ObservedFact.BOOTING:
             return Decision(Action.NONE, RuntimeStatus.WARMING)
         case ObservedFact.EXITED_OK:
+            if exhausted:
+                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.START, RuntimeStatus.WARMING)
         case ObservedFact.ABSENT:
+            if exhausted:
+                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.RECREATE, RuntimeStatus.WARMING)
         case ObservedFact.CRASHED:
             if exhausted:

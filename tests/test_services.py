@@ -322,9 +322,9 @@ def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
 
     svc.last_active_time = datetime.now(timezone.utc)
     test_db.commit()
-    update_service_status.apply()  # target back to 1 -> start/recreate
-    test_db.refresh(svc)
-    assert svc.runtime_status in (RuntimeStatus.WARMING, RuntimeStatus.READY, RuntimeStatus.IDLE)
+    # target back to 1 -> the reconciler must actually bring it up; IDLE would mean it never woke
+    status = _drive_reconciler(test_db, svc, until={RuntimeStatus.WARMING, RuntimeStatus.READY}, ticks=6, delay=2)
+    assert status in (RuntimeStatus.WARMING, RuntimeStatus.READY), f"service did not wake, stuck at {status}"
 
 
 @pytest.mark.order(after="test_reconciler_idles_then_wakes")
@@ -342,3 +342,39 @@ def test_delete_is_db_only(test_client, test_db):
 
     listing = test_client.get("/services").json()
     assert listing == []
+
+
+@pytest.mark.order(after="test_delete_is_db_only")
+def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
+    """Spec headline guarantee: a bad image ref surfaces asynchronously as FAILED within the crash
+    budget, and the reconciler does not spin forever recreating (the C1 regression). Self-contained
+    (direct DB insert, no models) and ordered last so it cannot disturb the ordered lifecycle chain."""
+    from datetime import datetime, timedelta, timezone
+
+    from docker.errors import NotFound
+
+    name = "trt-srv_test_badimg"
+    svc = Service(
+        service_name=name,
+        service_image="ghcr.io/links-ads/does-not-exist:0",
+        priority=1,
+        last_active_time=datetime.now(timezone.utc),
+        desired_state=DesiredState.AVAILABLE,
+        runtime_status=RuntimeStatus.WARMING,
+    )
+    test_db.add(svc)
+    test_db.commit()
+
+    # C1: a failed pull spends the budget instead of looping at attempts=0 forever
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.restart_attempts >= 1, "failed pull did not advance the crash budget"
+
+    # exhaust the budget (bypass the real backoff wait) and confirm it lands terminal in FAILED
+    svc.restart_attempts = test_settings.service_max_restart_attempts
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=120)
+    test_db.commit()
+    status = _drive_reconciler(test_db, svc, until={RuntimeStatus.FAILED}, ticks=4, delay=2)
+    assert status == RuntimeStatus.FAILED, f"bad-image service did not reach FAILED, stuck at {status}"
+    with pytest.raises(NotFound):
+        test_docker.containers.get(name)

@@ -562,15 +562,17 @@ def create_service(
         raise e
 
 
-def delete_service(db: Session, service_id: int) -> None:
-    """Soft-deletes a service in the database only (Option A).
+def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) -> None:
+    """Soft-deletes a service (Option A): DB record plus synchronous Traefik teardown.
 
-    Stamps deleted_at and marks the service RETIRED. Capacity is released automatically because
-    allocation/capacity queries filter deleted_at IS NULL. The reconciler's REMOVE->FINALIZE path
-    tears down the container and Traefik config out of band.
+    Removes the Traefik config now (symmetric with create writing it synchronously), stamps
+    deleted_at, and marks the service RETIRED. Capacity is released automatically because
+    allocation/capacity queries filter deleted_at IS NULL. The reconciler removes the container
+    out of band on its next tick.
 
     Args:
         db (Session): The database session.
+        traefik (TraefikConfigManager): The Traefik config manager.
         service_id (int): The ID of the service.
 
     Raises:
@@ -579,9 +581,10 @@ def delete_service(db: Session, service_id: int) -> None:
     service = db.get(Service, service_id)
     if service is None or service.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    traefik.delete(service_name=service.service_name)
     service.deleted_at = datetime.now(tz=timezone.utc)
     service.desired_state = DesiredState.RETIRED
-    db.commit()  # reconciler REMOVE->FINALIZE tears down container + traefik out of band
+    db.commit()
 
 
 def update_active_time(db: Session, service: Service):

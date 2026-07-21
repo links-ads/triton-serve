@@ -151,11 +151,13 @@ def create_service(
 )
 def delete_service(
     service_id: int,
+    traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
     """
-    Soft-deletes a service (DB-only). The reconciler tears down the container and Traefik config.
+    Soft-deletes a service: removes its Traefik config now and marks it RETIRED; the reconciler
+    tears down the container out of band.
 
     **Arguments:**
     - `service_id` (`int`): The id of the service to be deleted.
@@ -163,7 +165,7 @@ def delete_service(
     **Returns:**
     - `None`
     """
-    domain.delete_service(db=db, service_id=service_id)
+    domain.delete_service(db=db, traefik=traefik, service_id=service_id)
 
 
 @router.post("/services/{service_id}/suspend", status_code=204, tags=["operations"])
@@ -187,7 +189,6 @@ def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depen
 @router.get("/status/{service_name}", tags=["operations"])
 def service_status(
     service_name: str,
-    response: Response,
     db: Session = Depends(get_db),
     _: Any = Depends(require_service),
 ) -> Response:

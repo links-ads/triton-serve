@@ -65,9 +65,12 @@ def update_service_status() -> None:
                 ):
                     service.restart_attempts = 0
 
-                # honor backoff: skip a service still cooling down between crash attempts
+                # honor backoff: skip a service mid-retry that is still cooling down between attempts.
+                # RECOVERING is the status the executor persists after any spent attempt (crash recreate
+                # or image pull), so image-pull failures draw on the same budget as crash loops
                 if (
                     service.runtime_status == RuntimeStatus.RECOVERING
+                    and service.restart_attempts > 0
                     and service.last_attempt_at is not None
                     and (now - service.last_attempt_at).total_seconds()
                     < _backoff_seconds(service.restart_attempts, base=10, cap=settings.service_restart_cooldown)

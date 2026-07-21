@@ -7,9 +7,8 @@ from sqlalchemy.orm import Session
 
 from triton_serve.api.services.domain import get_container_by_name, recreate_service_container
 from triton_serve.api.services.reconcile import Action, Decision
-from triton_serve.config import get_traefik
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import Service
+from triton_serve.database.model import RuntimeStatus, Service
 
 LOG = logging.getLogger("uvicorn")
 
@@ -50,13 +49,22 @@ def execute(
                     c.remove(force=True)
                 service.container_id = None  # type: ignore
             case Action.FINALIZE:
-                get_traefik().delete(service_name=service.service_name)
-                # allocation release + deleted_at handled by the existing delete path; see domain.delete_service
+                # terminal no-op: traefik config + allocation are torn down synchronously by
+                # domain.delete_service; nothing is left to do out of band
+                pass
             case Action.MARK_FAILED:
                 LOG.warning("Service %s exhausted restart budget -> FAILED", service.service_id)
     except Exception:
-        LOG.exception("Action %s failed for service %s; leaving status for next tick", action, service.service_id)
+        LOG.exception("Action %s failed for service %s", action, service.service_id)
         db.rollback()
+        # a budgeted action (recreate/pull) that raised must still spend the budget, or a broken
+        # image would retry forever; RECOVERING makes the next tick honor the backoff gate
+        if decision.increment_attempt:
+            service.restart_attempts += 1
+            service.last_attempt_at = datetime.now(timezone.utc)
+            service.runtime_status = RuntimeStatus.RECOVERING
+            db.commit()
+            db.refresh(service)
         return
 
     if decision.increment_attempt:

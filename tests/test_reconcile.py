@@ -63,6 +63,14 @@ def test_available_booting_target1_waits_warming():
     assert (d.action, d.status) == (Action.NONE, R.WARMING)
 
 
+def test_failed_is_terminal_when_exhausted_across_bringup_facts():
+    # a FAILED (budget-exhausted) service must not auto-revive, even once its dead container is
+    # removed (-> ABSENT) or a stale exited one lingers (-> EXITED_OK)
+    for observed in (A.ABSENT, A.EXITED_OK, A.CRASHED, A.IMAGE_MISSING):
+        d = decide(D.AVAILABLE, observed, replica_target=1, attempts=3, max_attempts=3)
+        assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
+
+
 @pytest.mark.parametrize("observed", list(ObservedFact))
 def test_suspended_stops_live_else_noop(observed):
     d = decide(D.SUSPENDED, observed, replica_target=0, attempts=0, max_attempts=3)
