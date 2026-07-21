@@ -16,21 +16,6 @@ def get_db():
         yield session
 
 
-def docker_client() -> docker.DockerClient:  # type: ignore
-    """Yields a docker client API instance safely.
-
-    :return: docker client instance
-    :rtype: docker.DockerClient
-    :yield: docker client, useful to interact with the system
-    :rtype: Iterator[docker.DockerClient]
-    """
-    client = docker.from_env()
-    try:
-        yield client  # type: ignore
-    finally:
-        client.close()
-
-
 def get_reconciler_docker_client() -> docker.DockerClient:
     """Long-lived Docker client for the reconciler ONLY. Short timeout so a slow daemon
     fails fast instead of blocking. Request handlers must not call Docker — read the DB."""

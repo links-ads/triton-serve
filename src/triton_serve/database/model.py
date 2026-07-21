@@ -33,15 +33,6 @@ class ModelType(enum.Enum):
     ENSEMBLE = "ensemble"
 
 
-class ServiceStatus(enum.Enum):
-    STARTING = "starting"
-    ACTIVE = "active"
-    ERROR = "error"
-    STOPPED = "stopped"
-    DELETED = "deleted"
-    MISSING = "missing"
-
-
 class DesiredState(enum.Enum):
     AVAILABLE = "available"  # serve; reconciler may scale to 0 on idle and wakes on request
     SUSPENDED = "suspended"  # operator forced off; no auto-wake
@@ -153,7 +144,6 @@ class Service(Base):
     service_name: Mapped[str] = mapped_column(nullable=False)
     service_image: Mapped[str] = mapped_column(nullable=False)
     container_id: Mapped[str] = mapped_column(nullable=True)
-    container_status: Mapped[ServiceStatus] = mapped_column(nullable=False, default=ServiceStatus.STARTING)
     # values_callable: the desiredstate/runtimestatus postgres enums store the lowercase .value
     # labels (see the lifecycle_redesign_expand migration), not the Python member names.
     desired_state: Mapped[DesiredState] = mapped_column(

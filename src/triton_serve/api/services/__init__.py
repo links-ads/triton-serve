@@ -11,7 +11,7 @@ from triton_serve.config import (
     get_settings,
     get_traefik,
 )
-from triton_serve.database.model import DesiredState, RuntimeStatus, ServiceStatus
+from triton_serve.database.model import DesiredState, RuntimeStatus
 from triton_serve.database.schema import ServiceSchema
 from triton_serve.extensions import get_db
 from triton_serve.security import require_admin, require_elevated, require_service
@@ -29,7 +29,7 @@ _RETRY_AFTER = "2"
 )
 def get_services(
     names: list[str] = Query(None),
-    statuses: list[ServiceStatus] = Query(None),
+    runtime_statuses: list[RuntimeStatus] = Query(None),
     db: Session = Depends(get_db),
     _: Any = Depends(require_elevated),
 ):
@@ -38,12 +38,12 @@ def get_services(
 
     **Arguments:**
     - `names` (`Optional[list[str]]`, optional): Names of the services to be retrieved. Defaults to `None`.
-    - `statuses` (`Optional[list[ServiceStatus]]`, optional): Status of the service. Defaults to `None`.
+    - `runtime_statuses` (`Optional[list[RuntimeStatus]]`, optional): Runtime status filter. Defaults to `None`.
 
     **Returns:**
     - `List[Service]`: A list of services.
     """
-    return domain.list_services(db=db, names=names, statuses=statuses)
+    return domain.list_services(db=db, names=names, runtime_statuses=runtime_statuses)
 
 
 @router.get(

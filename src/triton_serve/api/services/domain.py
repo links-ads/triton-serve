@@ -5,12 +5,12 @@ from itertools import chain
 from typing import cast
 
 from docker import DockerClient
-from docker.errors import APIError, ImageNotFound, NotFound, NullResource
+from docker.errors import APIError, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
 from docker.types import DeviceRequest
 from fastapi import HTTPException
-from sqlalchemy import Engine, func, or_, select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceUpdateBody
@@ -26,7 +26,6 @@ from triton_serve.database.model import (
     RuntimeStatus,
     Service,
     ServiceResources,
-    ServiceStatus,
     utcnow,
 )
 
@@ -84,7 +83,7 @@ def rebuild_service_config(
 def list_services(
     db: Session,
     names: list[str] | None = None,
-    statuses: list[ServiceStatus] | None = None,
+    runtime_statuses: list[RuntimeStatus] | None = None,
 ):
     """Returns all non-deleted services from the database.
 
@@ -93,7 +92,7 @@ def list_services(
     Args:
         db (Session): The database session.
         names (list[str] | None): Optional filter on service names.
-        statuses (list[ServiceStatus] | None): Optional filter on container status.
+        runtime_statuses (list[RuntimeStatus] | None): Optional filter on runtime status.
 
     Returns:
         list[Service]: The list of services.
@@ -101,8 +100,8 @@ def list_services(
     statement = db.query(Service).filter(Service.deleted_at.is_(None))
     if names:
         statement = statement.filter(Service.service_name.in_(names))
-    if statuses:
-        statement = statement.filter(Service.container_status.in_(statuses))
+    if runtime_statuses:
+        statement = statement.filter(Service.runtime_status.in_(runtime_statuses))
     return statement.all()
 
 
@@ -278,45 +277,6 @@ def get_service_image(docker_client: DockerClient, image_name: str) -> Image:
         raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
 
 
-def check_service_status(db: Session, docker_client: DockerClient, service: Service):
-    """Checks the status of a service, querying the docker daemon, and updating the database.
-
-    Args:
-        db (Session): The database session.
-        docker_client (DockerClient): The docker client.
-        service (Service): The service to check.
-    """
-    try:
-        container = docker_client.containers.get(service.container_id)
-        if container.status == "exited" and service.container_status not in (
-            ServiceStatus.STOPPED,
-            ServiceStatus.ERROR,
-        ):
-            state = docker_client.api.inspect_container(service.container_id).get("State")
-            exit_code = state.get("ExitCode", 0)
-            service.container_status = ServiceStatus.STOPPED if exit_code == 0 else ServiceStatus.ERROR
-        elif container.status == "running" and service.container_status != ServiceStatus.ACTIVE:
-            service.container_status = ServiceStatus.ACTIVE
-            service.restart_attempts = 0
-        db.commit()
-        db.refresh(service)
-        return service
-    except NotFound, NullResource:
-        # the container object is gone. only a previously-running service can go MISSING:
-        # transitioning from a terminal/managed state (ERROR, STOPPED) would let the sentinel
-        # revive services the user stopped or that already exhausted their restart budget.
-        # deleted_at is left untouched — deletion is a user-only action.
-        if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
-            service.container_status = ServiceStatus.MISSING
-            db.commit()
-            db.refresh(service)
-        return service
-    except APIError as e:
-        service.container_status = ServiceStatus.ERROR
-        db.commit()
-        raise HTTPException(status_code=e.status_code or 500, detail=str(e)) from e
-
-
 def spawn_service_container(
     client: DockerClient,
     image_id: str,
@@ -483,7 +443,6 @@ def create_service_entry(
         service_image=image_name,
         inactivity_timeout=service_timeout,
         priority=service_priority,
-        container_status=ServiceStatus.STARTING,
         created_at=datetime.now(tz=timezone.utc),
         last_active_time=datetime.now(tz=timezone.utc),
     )
@@ -625,25 +584,6 @@ def delete_service(db: Session, service_id: int) -> None:
     db.commit()  # reconciler REMOVE->FINALIZE tears down container + traefik out of band
 
 
-def start_service(
-    db: Session,
-    client: DockerClient,
-    service: Service,
-) -> None:
-    try:
-        LOG.debug(f"Starting service {service.service_id}...")
-        client.containers.get(service.container_id).start()
-        service.container_status = ServiceStatus.ACTIVE
-        service.last_active_time = datetime.now(tz=timezone.utc)
-        db.commit()
-    except NotFound:
-        raise HTTPException(status_code=404, detail="Service not found")
-    except Exception as e:
-        db.rollback()
-        LOG.debug(f"Error starting container: {str(e)}")
-        raise HTTPException(status_code=503, detail="Error restarting service")
-
-
 def update_active_time(db: Session, service: Service):
     """Updates the last active time of a service.
 
@@ -653,25 +593,6 @@ def update_active_time(db: Session, service: Service):
     """
     service.last_active_time = datetime.now(tz=timezone.utc)
     db.commit()
-
-
-def stop_service(
-    db: Session,
-    client: DockerClient,
-    service_id: int,
-) -> None:
-    try:
-        LOG.debug(f"Stopping service {service_id}...")
-        service = get_service_by_id(db=db, service_id=service_id)
-        assert service is not None, f"Service {service_id} could not be returned"
-        client.containers.get(service.container_id).stop()
-        service.container_status = ServiceStatus.STOPPED
-        db.commit()
-    except NotFound:
-        raise HTTPException(status_code=404, detail="Service not found")
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error stopping service: {str(e)}")
 
 
 def recreate_service_container(
@@ -730,7 +651,6 @@ def recreate_service_container(
         )
 
         service.container_id = str(container_id)
-        service.container_status = ServiceStatus.STARTING
         db.commit()
         db.refresh(service)
         return service
@@ -741,138 +661,6 @@ def recreate_service_container(
     except APIError as e:
         db.rollback()
         raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {str(e)}") from e
-
-
-def reconcile_missing_container(
-    db: Session,
-    client: DockerClient,
-    service: Service,
-    service_network: str,
-    service_models_volume: str,
-    max_restart_attempts: int,
-    restart_cooldown: int,
-) -> None:
-    """Recreates a MISSING container under a single-flight, budget-bounded policy.
-
-    Mechanism (the actual respawn) lives in recreate_service_container; this function
-    only decides *whether* to recreate. A session-level advisory lock guarantees a single
-    in-flight reconciliation per service so concurrent on-demand and background callers do
-    not double-spawn. The attempt counter is committed before spawning so a failing image
-    still counts toward the budget; exhaustion lands the service in a recoverable ERROR.
-    """
-    lock_key = service.service_id
-    # Hold the advisory lock on a dedicated AUTOCOMMIT connection for the whole critical
-    # section. A session-level lock is bound to its backend connection; the ORM session
-    # bounces connections on every commit (the mid-flight bookkeeping commit below), so the
-    # lock must NOT live on the session's connection or the finally-unlock could target a
-    # different backend and leak the lock.
-    # the session is bound to the Engine (sessionmaker(bind=engine)); narrow the
-    # Engine | Connection union accordingly for the dedicated lock connection.
-    engine = cast(Engine, db.get_bind())
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as lock_conn:
-        acquired = lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}).scalar()
-        if not acquired:
-            LOG.debug("Reconciliation already in progress for service %s, skipping", service.service_id)
-            return
-        try:
-            # self-heal guard: a container under this service's name may already be up. it can
-            # come back under a NEW id (host reboot), so look it up by name, not the stale id.
-            # adopt a running one and just reconcile status; a dead one is cleared on recreate.
-            existing = get_container_by_name(client, service.service_name)
-            if existing is not None and existing.status == "running":
-                if service.container_id != existing.id:
-                    service.container_id = existing.id  # type: ignore
-                check_service_status(db=db, docker_client=client, service=service)
-                return
-
-            now = datetime.now(tz=timezone.utc)
-            if (
-                service.last_attempt_at is not None
-                and (now - service.last_attempt_at).total_seconds() > restart_cooldown
-            ):
-                service.restart_attempts = 0
-
-            if service.restart_attempts >= max_restart_attempts:
-                service.container_status = ServiceStatus.ERROR
-                db.commit()
-                db.refresh(service)
-                LOG.warning("Service %s exhausted restart budget, marking ERROR", service.service_id)
-                return
-
-            # record the attempt before spawning so a broken image cannot retry forever
-            service.restart_attempts += 1
-            service.last_attempt_at = now
-            db.commit()
-
-            try:
-                recreate_service_container(db, client, service, service_network, service_models_volume)
-            except HTTPException as e:
-                # leave the service MISSING; the next attempt proceeds until the budget exhausts
-                db.rollback()
-                LOG.warning(
-                    "Recreate attempt %d for service %s failed: %s",
-                    service.restart_attempts,
-                    service.service_id,
-                    e.detail,
-                )
-        finally:
-            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
-
-
-def refresh_service(
-    db: Session,
-    service_id: int,
-    docker_client: DockerClient,
-    service_network: str,
-    service_models_volume: str,
-    force_recreate: bool = False,
-    max_restart_attempts: int = 3,
-    restart_cooldown: int = 600,
-) -> None:
-    if (service := get_service_by_id(db=db, service_id=service_id)) is None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
-
-    LOG.debug(
-        "Refreshing service %s (%d), status: %s",
-        service.service_name,
-        service.service_id,
-        service.container_status,
-    )
-
-    if force_recreate:
-        if service.deleted_at is not None:
-            service.deleted_at = None  # type: ignore
-        recreate_service_container(db, docker_client, service, service_network, service_models_volume)
-        return
-
-    # if service is either active, we need to stop and start it again
-    if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
-        stop_service(db=db, client=docker_client, service_id=service_id)
-        start_service(db=db, client=docker_client, service=service)
-        LOG.debug("Service %s with id %s has been refreshed", service.service_name, service.service_id)
-    elif service.container_status == ServiceStatus.MISSING:
-        reconcile_missing_container(
-            db=db,
-            client=docker_client,
-            service=service,
-            service_network=service_network,
-            service_models_volume=service_models_volume,
-            max_restart_attempts=max_restart_attempts,
-            restart_cooldown=restart_cooldown,
-        )
-    elif service.container_status in (ServiceStatus.DELETED, ServiceStatus.ERROR):
-        LOG.debug(
-            "Could not refresh the service %s with id %s: %s",
-            service.service_name,
-            service.service_id,
-            service.container_status,
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Service '{service.service_name}'status: {service.container_status}"
-        )
-    # ServiceStatus.STOPPED case. We don't need to restart, it will refresh automatically when it will be called
-    else:
-        LOG.debug("No need to refresh")
 
 
 def update_service(
