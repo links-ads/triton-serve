@@ -662,6 +662,29 @@ def test_reconcile_clears_name_squatter(test_docker, test_db, test_settings):
 
 
 @pytest.mark.order(after="test_update_service_recreate")
+def test_execute_recreates_absent(test_db, test_docker, test_settings):
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+    from triton_serve.database.model import RuntimeStatus, Service
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    # simulate a vanished container: point the record at a non-existent id
+    service.container_id = "deadbeefdead"
+    test_db.commit()
+
+    execute(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING),
+        settings=test_settings,
+    )
+    test_db.refresh(service)
+    assert service.runtime_status == RuntimeStatus.WARMING
+    assert test_docker.containers.get(service.service_name) is not None
+
+
+@pytest.mark.order(after="test_update_service_recreate")
 def test_delete_services(test_client, test_docker, test_db):
     # get all services
     services = test_db.query(Service).all()

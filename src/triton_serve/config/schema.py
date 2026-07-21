@@ -48,6 +48,8 @@ class AppSettings(BaseSettings):
 
     # worker params
     sentinel_poll_interval: int = 60
+    docker_timeout: int = 10  # seconds; reconciler Docker client, fail fast not 60s
+    service_boot_grace: int = 30  # seconds a no-healthcheck container is BOOTING
     backend_host: str
     backend_port: int
 
