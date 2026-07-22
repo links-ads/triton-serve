@@ -232,7 +232,7 @@ def test_update_service_wrong_inputs(test_client, service_id, update_body, expec
 
 
 @pytest.mark.order(after="test_update_service")
-def test_status_projection_codes(test_client, test_db):
+def test_status_projection_codes(test_client, test_db, test_settings):
     svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").one()
 
     svc.desired_state, svc.runtime_status = DesiredState.AVAILABLE, RuntimeStatus.READY
@@ -242,7 +242,8 @@ def test_status_projection_codes(test_client, test_db):
     svc.runtime_status = RuntimeStatus.IDLE
     test_db.commit()
     r = test_client.get("/status/trt-srv_test_svc3")
-    assert r.status_code == 503 and r.headers.get("Retry-After") == "2"
+    # Retry-After tracks the reconcile tick so a client polls about once per bring-up opportunity
+    assert r.status_code == 503 and r.headers.get("Retry-After") == str(test_settings.sentinel_poll_interval)
 
     svc.desired_state, svc.runtime_status = DesiredState.SUSPENDED, RuntimeStatus.SUSPENDED
     test_db.commit()
@@ -378,3 +379,53 @@ def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
     assert status == RuntimeStatus.FAILED, f"bad-image service did not reach FAILED, stuck at {status}"
     with pytest.raises(NotFound):
         test_docker.containers.get(name)
+
+
+@pytest.mark.order(after="test_bad_image_service_ends_failed")
+def test_failed_stays_terminal_after_cooldown(test_db, test_settings):
+    """FAILED is terminal: elapsed time must NOT resurrect a failed service by silently resetting
+    its crash budget. Before the fix, any FAILED service revived one cooldown after its last attempt;
+    only POST /retry may reset the budget now."""
+    from datetime import datetime, timedelta, timezone
+
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_badimg").one()
+    assert svc.runtime_status == RuntimeStatus.FAILED
+    # push the last attempt well past the reset window -- the old time-based reset would revive it
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    test_db.commit()
+
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.runtime_status == RuntimeStatus.FAILED, "an elapsed cooldown resurrected a FAILED service"
+    assert svc.restart_attempts == test_settings.service_max_restart_attempts, "crash budget was silently reset"
+
+
+@pytest.mark.order(after="test_failed_stays_terminal_after_cooldown")
+def test_budget_returns_after_sustained_ready(test_db, test_docker, test_settings):
+    """A recovered service that stays READY past the cooldown earns its crash budget back, but a
+    brief READY within the cooldown does not (so a fast crash-recover-crash flap cannot loop)."""
+    from datetime import datetime, timedelta, timezone
+
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_badimg").one()
+    ready = Decision(Action.NONE, RuntimeStatus.READY)
+
+    # within the cooldown: a fresh recovery attempt has not yet proven stable -> keep the budget spent
+    svc.restart_attempts = 2
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    svc.runtime_status = RuntimeStatus.RECOVERING
+    test_db.commit()
+    execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
+    test_db.refresh(svc)
+    assert svc.restart_attempts == 2
+
+    # past the cooldown: sustained health returns the budget
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    test_db.commit()
+    execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
+    test_db.refresh(svc)
+    assert svc.restart_attempts == 0
+    assert svc.last_attempt_at is None
+    assert svc.runtime_status == RuntimeStatus.READY

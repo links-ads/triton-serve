@@ -26,8 +26,10 @@ def upgrade() -> None:
     desired.create(bind, checkfirst=True)
     runtime.create(bind, checkfirst=True)
 
-    op.add_column("services", sa.Column("desired_state", desired, nullable=True))
-    op.add_column("services", sa.Column("runtime_status", runtime, nullable=True))
+    # server_default lets the still-running old code insert rows during the expand window
+    # (before contract flips ownership); the backfill below then corrects any placeholder rows
+    op.add_column("services", sa.Column("desired_state", desired, nullable=True, server_default="available"))
+    op.add_column("services", sa.Column("runtime_status", runtime, nullable=True, server_default="warming"))
 
     # backfill: intent from deleted_at; runtime projected from the old container_status
     op.execute(

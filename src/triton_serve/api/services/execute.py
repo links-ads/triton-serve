@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, timezone
 
 from docker import DockerClient
-from docker.errors import NotFound
 from sqlalchemy.orm import Session
 
 from triton_serve.api.services.domain import get_container_by_name, recreate_service_container
@@ -15,6 +14,25 @@ LOG = logging.getLogger("uvicorn")
 
 def _recreate(db: Session, client: DockerClient, service: Service, settings: AppSettings) -> None:
     recreate_service_container(db, client, service, settings.service_network, settings.service_volume)
+
+
+def _spend_attempt(service: Service) -> None:
+    service.restart_attempts += 1
+    service.last_attempt_at = datetime.now(timezone.utc)
+
+
+def _maybe_reset_budget(service: Service, cooldown: int) -> None:
+    """Return the crash budget once a recovered service has stayed READY past the cooldown.
+
+    last_attempt_at marks the last recovery attempt; a READY observation never stamps it, so a
+    READY service whose last attempt is older than the cooldown has been stably up and earns its
+    budget back. FAILED never reaches READY, so this can never revive a terminally failed service.
+    """
+    if service.restart_attempts and service.last_attempt_at is not None:
+        elapsed = (datetime.now(timezone.utc) - service.last_attempt_at).total_seconds()
+        if elapsed > cooldown:
+            service.restart_attempts = 0
+            service.last_attempt_at = None
 
 
 def execute(
@@ -34,9 +52,10 @@ def execute(
             case Action.NONE:
                 pass
             case Action.START:
-                try:
-                    client.containers.get(service.container_id).start()
-                except NotFound:
+                # resolve by name, not the (possibly stale) stored id; recreate if it vanished
+                if (c := get_container_by_name(client, service.service_name)) is not None:
+                    c.start()
+                else:
                     _recreate(db, client, service, settings)  # the outage fix: heal a vanished container
             case Action.RECREATE | Action.PULL:
                 # docker run pulls a missing image implicitly; PULL and RECREATE share the path
@@ -47,7 +66,7 @@ def execute(
             case Action.REMOVE:
                 if (c := get_container_by_name(client, service.service_name)) is not None:
                     c.remove(force=True)
-                service.container_id = None  # type: ignore
+                service.container_id = None
             case Action.FINALIZE:
                 # terminal no-op: traefik config + allocation are torn down synchronously by
                 # domain.delete_service; nothing is left to do out of band
@@ -60,16 +79,16 @@ def execute(
         # a budgeted action (recreate/pull) that raised must still spend the budget, or a broken
         # image would retry forever; RECOVERING makes the next tick honor the backoff gate
         if decision.increment_attempt:
-            service.restart_attempts += 1
-            service.last_attempt_at = datetime.now(timezone.utc)
+            _spend_attempt(service)
             service.runtime_status = RuntimeStatus.RECOVERING
             db.commit()
             db.refresh(service)
         return
 
     if decision.increment_attempt:
-        service.restart_attempts += 1
-        service.last_attempt_at = datetime.now(timezone.utc)
+        _spend_attempt(service)
+    elif decision.status == RuntimeStatus.READY:
+        _maybe_reset_budget(service, settings.service_restart_cooldown)
     service.runtime_status = decision.status
     db.commit()
     db.refresh(service)

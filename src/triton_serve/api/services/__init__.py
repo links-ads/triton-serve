@@ -18,7 +18,9 @@ from triton_serve.security import require_admin, require_elevated, require_servi
 
 router = APIRouter()
 
-_RETRY_AFTER = "2"
+# retry cadence handed to traefik/clients while a service is not yet ready: one reconcile tick,
+# so a caller retries roughly once per chance the reconciler has to bring the service up
+_RETRY_AFTER = str(get_settings().sentinel_poll_interval)
 
 
 @router.get(
@@ -186,7 +188,15 @@ def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depen
     domain.reset_and_wake(db=db, service_id=service_id)
 
 
-@router.get("/status/{service_name}", tags=["operations"])
+@router.get(
+    "/status/{service_name}",
+    tags=["operations"],
+    responses={
+        200: {"description": "Service is READY; forward the request."},
+        404: {"description": "No such service, or it is RETIRED."},
+        503: {"description": "Service is not ready (warming, idle, recovering, suspended, or failed)."},
+    },
+)
 def service_status(
     service_name: str,
     db: Session = Depends(get_db),
@@ -209,6 +219,9 @@ def service_status(
             domain.update_active_time(db=db, service=service)  # wake intent -> replica_target=1 next tick
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case RuntimeStatus.WARMING | RuntimeStatus.RECOVERING:
+            # a client still polling through a slow boot keeps the service wanted, so the
+            # reconciler does not scale it back to zero mid-wake once inactivity elapses
+            domain.update_active_time(db=db, service=service)
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case _:  # SUSPENDED, FAILED
             return Response(status_code=503)

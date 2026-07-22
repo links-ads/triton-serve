@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from docker import DockerClient
 from docker.errors import ImageNotFound, NotFound
+from docker.models.containers import Container
 
 from triton_serve.api.services.reconcile import ObservedFact
 from triton_serve.database.model import Service
@@ -15,22 +16,34 @@ def _image_present(client: DockerClient, image_ref: str) -> bool:
         return False
 
 
-def _running_fact(container, boot_grace_seconds: int) -> ObservedFact:
+def _uptime_seconds(state: dict) -> float | None:
+    """Seconds since the container started, or None if the timestamp is missing/unparseable."""
+    started_raw = state.get("StartedAt")
+    if not isinstance(started_raw, str):
+        return None
+    try:
+        started = datetime.fromisoformat(started_raw)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started).total_seconds()
+
+
+def _running_fact(container: Container, boot_grace_seconds: int) -> ObservedFact:
     state = container.attrs.get("State", {})
     health = (state.get("Health") or {}).get("Status")
     if health == "healthy":
         return ObservedFact.RUNNING
+    uptime = _uptime_seconds(state)
     if health in ("starting", "unhealthy"):
-        return ObservedFact.BOOTING
+        # still coming up within the grace window; a healthcheck still failing past it is a crash
+        if uptime is None:
+            return ObservedFact.BOOTING
+        return ObservedFact.BOOTING if uptime < boot_grace_seconds else ObservedFact.CRASHED
     # no healthcheck: treat as booting until it has been up past the boot grace
-    started_raw = state.get("StartedAt")
-    try:
-        started = datetime.fromisoformat(started_raw)
-    except TypeError, ValueError:
+    if uptime is None:
         return ObservedFact.RUNNING
-    if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    uptime = (datetime.now(timezone.utc) - started).total_seconds()
     return ObservedFact.RUNNING if uptime >= boot_grace_seconds else ObservedFact.BOOTING
 
 

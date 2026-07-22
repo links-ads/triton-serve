@@ -71,6 +71,23 @@ def test_running_health_starting_is_booting():
     assert observe(FakeClient(container=c), _svc(), 30) is ObservedFact.BOOTING
 
 
+def test_running_health_unhealthy_within_grace_is_booting():
+    c = _container("running", health="unhealthy", started=datetime.now(timezone.utc))
+    assert observe(FakeClient(container=c), _svc(), 30) is ObservedFact.BOOTING
+
+
+def test_running_health_stuck_past_grace_is_crashed():
+    # a container whose healthcheck never passes must not sit in BOOTING forever: past the boot
+    # grace it counts as crashed so the reconciler spends budget and eventually reaches FAILED
+    c = _container("running", health="unhealthy", started=datetime.now(timezone.utc) - timedelta(seconds=120))
+    assert observe(FakeClient(container=c), _svc(), 30) is ObservedFact.CRASHED
+
+
+def test_running_health_starting_past_grace_is_crashed():
+    c = _container("running", health="starting", started=datetime.now(timezone.utc) - timedelta(seconds=120))
+    assert observe(FakeClient(container=c), _svc(), 30) is ObservedFact.CRASHED
+
+
 def test_running_no_health_within_grace_is_booting():
     c = _container("running", started=datetime.now(timezone.utc))
     assert observe(FakeClient(container=c), _svc(), 30) is ObservedFact.BOOTING

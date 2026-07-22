@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from celery import Celery
 from httpx import Client
+from sqlalchemy import text
 
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
@@ -15,6 +16,10 @@ from triton_serve.database.model import DesiredState, RuntimeStatus, Service
 from triton_serve.extensions import get_reconciler_docker_client
 
 LOG = logging.getLogger(__name__)
+
+# single-flight guard: only one reconcile pass may touch Docker at a time. an overrunning tick
+# (slow daemon, image pull) must never run concurrently with the next and both decide RECREATE.
+_RECONCILE_LOCK_KEY = 0x7213_10CE
 
 settings = get_settings()
 app = Celery("serve-sentinel")
@@ -54,42 +59,51 @@ def update_service_status() -> None:
     """Reconcile every non-retired service: observe -> decide -> execute. Reconciler owns Docker."""
     client = get_reconciler_docker_client()
     now = datetime.now(tz=timezone.utc)
-    with database_manager.session() as db:
-        services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
-        for service in services:
-            try:
-                # reset the crash budget once the cooldown has elapsed since the last attempt
-                if (
-                    service.last_attempt_at is not None
-                    and (now - service.last_attempt_at).total_seconds() > settings.service_restart_cooldown
-                ):
-                    service.restart_attempts = 0
+    # single-flight across the whole pass: hold the advisory lock on a dedicated connection so it
+    # survives the per-service commits below -- an ORM session releases its connection on each commit,
+    # which would strand the lock on a pooled connection and unlock a different one
+    with database_manager.connect() as lock_conn:
+        if not lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _RECONCILE_LOCK_KEY}).scalar():
+            LOG.info("another reconcile pass holds the advisory lock; skipping this tick")
+            return
+        try:
+            with database_manager.session() as db:
+                services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
+                for service in services:
+                    try:
+                        # honor backoff: skip a service mid-retry still cooling down between attempts.
+                        # RECOVERING is the status the executor persists after any spent attempt (crash
+                        # recreate or image pull), so image-pull failures draw on the same crash budget
+                        if (
+                            service.runtime_status == RuntimeStatus.RECOVERING
+                            and service.restart_attempts > 0
+                            and service.last_attempt_at is not None
+                            and (now - service.last_attempt_at).total_seconds()
+                            < _backoff_seconds(
+                                service.restart_attempts,
+                                base=settings.service_restart_backoff_base,
+                                cap=settings.service_restart_cooldown,
+                            )
+                        ):
+                            continue
 
-                # honor backoff: skip a service mid-retry that is still cooling down between attempts.
-                # RECOVERING is the status the executor persists after any spent attempt (crash recreate
-                # or image pull), so image-pull failures draw on the same budget as crash loops
-                if (
-                    service.runtime_status == RuntimeStatus.RECOVERING
-                    and service.restart_attempts > 0
-                    and service.last_attempt_at is not None
-                    and (now - service.last_attempt_at).total_seconds()
-                    < _backoff_seconds(service.restart_attempts, base=10, cap=settings.service_restart_cooldown)
-                ):
-                    continue
-
-                target = _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
-                observed = observe(client, service, settings.service_boot_grace)
-                decision = decide(
-                    desired=service.desired_state,
-                    observed=observed,
-                    replica_target=target,
-                    attempts=service.restart_attempts,
-                    max_attempts=settings.service_max_restart_attempts,
-                )
-                execute(db=db, client=client, service=service, decision=decision, settings=settings)
-            except Exception as e:
-                LOG.error("Reconcile failed for service %s: %s", service.service_id, e)
-                db.rollback()
+                        target = (
+                            _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
+                        )
+                        observed = observe(client, service, settings.service_boot_grace)
+                        decision = decide(
+                            desired=service.desired_state,
+                            observed=observed,
+                            replica_target=target,
+                            attempts=service.restart_attempts,
+                            max_attempts=settings.service_max_restart_attempts,
+                        )
+                        execute(db=db, client=client, service=service, decision=decision, settings=settings)
+                    except Exception as e:
+                        LOG.error("Reconcile failed for service %s: %s", service.service_id, e)
+                        db.rollback()
+        finally:
+            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _RECONCILE_LOCK_KEY})
 
 
 @app.task

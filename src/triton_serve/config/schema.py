@@ -37,7 +37,8 @@ class AppSettings(BaseSettings):
     service_volume: str = "triton-serve_models"
     service_prefix: str = ""
     service_max_restart_attempts: int = 3
-    service_restart_cooldown: int = 600  # seconds
+    service_restart_cooldown: int = 600  # seconds; also the READY window that earns the budget back
+    service_restart_backoff_base: int = 10  # seconds; base of the exponential retry backoff
 
     # database
     database_user: str
@@ -47,7 +48,7 @@ class AppSettings(BaseSettings):
     database_name: str = "serve_db"
 
     # worker params
-    sentinel_poll_interval: int = 60
+    sentinel_poll_interval: int = 10  # reconcile tick; the loop is a cheap DB read + docker inspect
     docker_timeout: int = 10  # seconds; reconciler Docker client, fail fast not 60s
     service_boot_grace: int = 30  # seconds a no-healthcheck container is BOOTING
     backend_host: str

@@ -118,29 +118,6 @@ def get_service_by_id(db: Session, service_id: int) -> Service | None:
     return db.get(Service, ident=service_id)
 
 
-def get_service_by_name(db: Session, service_name: str) -> Service:
-    """Returns a specific non-deleted service by name. Read-only, no Docker call.
-
-    Args:
-        db (Session): The database session.
-        service_name (str): The name of the service.
-
-    Returns:
-        Service: The requested service.
-    """
-    service = (
-        db.query(Service)
-        .filter(
-            Service.service_name == service_name,
-            Service.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"No active service named '{service_name}'")
-    return service
-
-
 def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
     """Pure DB lookup for the status projection hook. No Docker call."""
     return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
@@ -625,7 +602,7 @@ def recreate_service_container(
                 client.containers.get(service.container_id).remove(force=True)
             except NotFound:
                 pass
-            service.container_id = None  # type: ignore
+            service.container_id = None
 
         # a stale/foreign container may still hold the name under a different id (e.g. dirty
         # docker after a host reboot); clear it by name so the spawn below cannot 409.

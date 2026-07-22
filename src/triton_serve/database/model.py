@@ -143,18 +143,20 @@ class Service(Base):
     service_id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(nullable=False)
     service_image: Mapped[str] = mapped_column(nullable=False)
-    container_id: Mapped[str] = mapped_column(nullable=True)
+    container_id: Mapped[str | None] = mapped_column(default=None)
     # values_callable: the desiredstate/runtimestatus postgres enums store the lowercase .value
     # labels (see the lifecycle_redesign_expand migration), not the Python member names.
     desired_state: Mapped[DesiredState] = mapped_column(
         Enum(DesiredState, name="desiredstate", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=DesiredState.AVAILABLE,
+        server_default=DesiredState.AVAILABLE.value,
     )
     runtime_status: Mapped[RuntimeStatus] = mapped_column(
         Enum(RuntimeStatus, name="runtimestatus", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
         nullable=False,
         default=RuntimeStatus.WARMING,
+        server_default=RuntimeStatus.WARMING.value,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
