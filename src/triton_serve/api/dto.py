@@ -58,6 +58,31 @@ class ModelUpdateBody(BaseModel):
         return v
 
 
+class ServiceHealthcheck(BaseModel):
+    """Optional container healthcheck. Without one a service is judged READY purely on uptime
+    (`service_boot_grace`), so a slow-booting image is reported ready before it can serve."""
+
+    test: list[str] = Field(
+        description="Docker healthcheck test, e.g. ['CMD', 'curl', '-f', 'http://localhost:8000/v2/health/ready']",
+        min_length=1,
+    )
+    interval: int = Field(gt=0, default=10, description="Seconds between probes")
+    timeout: int = Field(gt=0, default=5, description="Seconds before a probe is considered failed")
+    retries: int = Field(gt=0, default=3, description="Consecutive failures before the container is unhealthy")
+    start_period: int = Field(
+        ge=0,
+        default=60,
+        description="Grace seconds before failures start counting toward retries",
+    )
+
+    @field_validator("test")
+    @classmethod
+    def validate_test(cls, v: list[str]) -> list[str]:
+        if v[0] not in ("CMD", "CMD-SHELL", "NONE"):
+            raise ValueError("test must start with 'CMD', 'CMD-SHELL' or 'NONE'")
+        return v
+
+
 class ServiceCreateResources(BaseModel):
     gpus: float = Field(ge=0.0, default=0.0, description="Number of GPUs, float for fractional GPUs")
     shm_size: int = Field(gt=0, le=65536, default=256, description="Shared memory size in MB")
@@ -95,6 +120,7 @@ class ServiceUpdateBody(BaseModel):
     timeout: int | None = None
     priority: int | None = None
     resources: ServiceUpdateResources | None = None
+    healthcheck: ServiceHealthcheck | None = None
 
     @field_validator("models")
     @classmethod
@@ -112,6 +138,7 @@ class ServiceCreateBody(BaseModel):
     timeout: int = 3600  # in seconds
     priority: int = 1  # higher number means higher priority
     resources: ServiceCreateResources = ServiceCreateResources()
+    healthcheck: ServiceHealthcheck | None = None
 
     @field_validator("name")
     @classmethod

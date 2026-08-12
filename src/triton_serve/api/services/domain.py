@@ -5,26 +5,27 @@ from itertools import chain
 from typing import cast
 
 from docker import DockerClient
-from docker.errors import APIError, ImageNotFound, NotFound, NullResource
+from docker.errors import APIError, ImageNotFound, NotFound
 from docker.models.containers import Container
 from docker.models.images import Image
 from docker.types import DeviceRequest
 from fastapi import HTTPException
-from sqlalchemy import Engine, func, or_, select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceUpdateBody
+from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceHealthcheck, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
     APIKey,
+    DesiredState,
     Device,
     DeviceAllocation,
     KeyType,
     Model,
+    RuntimeStatus,
     Service,
     ServiceResources,
-    ServiceStatus,
     utcnow,
 )
 
@@ -81,14 +82,17 @@ def rebuild_service_config(
 
 def list_services(
     db: Session,
-    docker_client: DockerClient,
     names: list[str] | None = None,
-    statuses: list[ServiceStatus] | None = None,
+    runtime_statuses: list[RuntimeStatus] | None = None,
 ):
-    """Returns a list of all services.
+    """Returns all non-deleted services from the database.
+
+    Read-only: returns the persisted runtime_status without touching Docker.
 
     Args:
         db (Session): The database session.
+        names (list[str] | None): Optional filter on service names.
+        runtime_statuses (list[RuntimeStatus] | None): Optional filter on runtime status.
 
     Returns:
         list[Service]: The list of services.
@@ -96,52 +100,48 @@ def list_services(
     statement = db.query(Service).filter(Service.deleted_at.is_(None))
     if names:
         statement = statement.filter(Service.service_name.in_(names))
-    if statuses:
-        statement = statement.filter(Service.container_status.in_(statuses))
-    services = statement.all()
-    return [check_service_status(db=db, docker_client=docker_client, service=service) for service in services]
+    if runtime_statuses:
+        statement = statement.filter(Service.runtime_status.in_(runtime_statuses))
+    return statement.all()
 
 
-def get_service_by_id(db: Session, service_id: int, docker_client: DockerClient | None = None):
-    """Returns a specific service by id, if present.
+def get_service_by_id(db: Session, service_id: int) -> Service | None:
+    """Returns a specific service by id, if present. Read-only, no Docker call.
 
     Args:
         db (Session): The database session.
         service_id (int): The id of the service.
 
     Returns:
-        Service: The requested service.
+        Service | None: The requested service, or None if absent.
     """
-    service = db.get(Service, ident=service_id)
-    if docker_client is not None and service is not None:
-        return check_service_status(db=db, docker_client=docker_client, service=service)
-    return service
+    return db.get(Service, ident=service_id)
 
 
-def get_service_by_name(db: Session, service_name: str, docker_client: DockerClient | None = None):
-    """Returns a specific service by name, if present.
+def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
+    """Pure DB lookup for the status projection hook. No Docker call."""
+    return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
 
-    Args:
-        db (Session): The database session.
-        service_name (str): The name of the service.
 
-    Returns:
-        Service: The requested service.
-    """
-    # get any service with the specified name, not deleted
-    service = (
-        db.query(Service)
-        .filter(
-            Service.service_name == service_name,
-            Service.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"No active service named '{service_name}'")
-    if docker_client is not None:
-        return check_service_status(db=db, docker_client=docker_client, service=service)
-    return service
+def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:
+    service = db.get(Service, service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service.desired_state = desired
+    if wake:
+        service.last_active_time = datetime.now(tz=timezone.utc)
+    db.commit()
+
+
+def reset_and_wake(db: Session, service_id: int) -> None:
+    service = db.get(Service, service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service.restart_attempts = 0
+    service.last_attempt_at = None
+    service.last_active_time = datetime.now(tz=timezone.utc)
+    service.runtime_status = RuntimeStatus.RECOVERING
+    db.commit()
 
 
 def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
@@ -177,6 +177,7 @@ def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
         environment=res.environment_variables or {},
         timeout=service.inactivity_timeout,
         priority=service.priority,
+        healthcheck=ServiceHealthcheck(**res.healthcheck) if res.healthcheck else None,
         resources=ServiceCreateResources(
             gpus=gpus,
             shm_size=res.shm_size,
@@ -254,43 +255,22 @@ def get_service_image(docker_client: DockerClient, image_name: str) -> Image:
         raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
 
 
-def check_service_status(db: Session, docker_client: DockerClient, service: Service):
-    """Checks the status of a service, querying the docker daemon, and updating the database.
+def docker_healthcheck(healthcheck: dict | None) -> dict | None:
+    """Converts a stored healthcheck (seconds, snake_case) to the docker API shape (ns, PascalCase).
 
-    Args:
-        db (Session): The database session.
-        docker_client (DockerClient): The docker client.
-        service (Service): The service to check.
+    Services store the user-facing shape so it round-trips through the API unchanged; docker only
+    accepts durations in nanoseconds. Returns None when the service has no healthcheck configured,
+    which leaves the container without one and falls back to the boot-grace timer in `observe`.
     """
-    try:
-        container = docker_client.containers.get(service.container_id)
-        if container.status == "exited" and service.container_status not in (
-            ServiceStatus.STOPPED,
-            ServiceStatus.ERROR,
-        ):
-            state = docker_client.api.inspect_container(service.container_id).get("State")
-            exit_code = state.get("ExitCode", 0)
-            service.container_status = ServiceStatus.STOPPED if exit_code == 0 else ServiceStatus.ERROR
-        elif container.status == "running" and service.container_status != ServiceStatus.ACTIVE:
-            service.container_status = ServiceStatus.ACTIVE
-            service.restart_attempts = 0
-        db.commit()
-        db.refresh(service)
-        return service
-    except NotFound, NullResource:
-        # the container object is gone. only a previously-running service can go MISSING:
-        # transitioning from a terminal/managed state (ERROR, STOPPED) would let the sentinel
-        # revive services the user stopped or that already exhausted their restart budget.
-        # deleted_at is left untouched — deletion is a user-only action.
-        if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
-            service.container_status = ServiceStatus.MISSING
-            db.commit()
-            db.refresh(service)
-        return service
-    except APIError as e:
-        service.container_status = ServiceStatus.ERROR
-        db.commit()
-        raise HTTPException(status_code=e.status_code or 500, detail=str(e)) from e
+    if not healthcheck:
+        return None
+    return {
+        "Test": healthcheck["test"],
+        "Interval": int(healthcheck["interval"] * 1e9),
+        "Timeout": int(healthcheck["timeout"] * 1e9),
+        "Retries": healthcheck["retries"],
+        "StartPeriod": int(healthcheck["start_period"] * 1e9),
+    }
 
 
 def spawn_service_container(
@@ -303,6 +283,7 @@ def spawn_service_container(
     resources: ServiceCreateResources,
     devices: list | None = None,
     environment: dict[str, str] | None = None,
+    healthcheck: dict | None = None,
 ):
     """Spawns a triton worker container.
 
@@ -318,6 +299,7 @@ def spawn_service_container(
         resources (ServiceCreateResources): The resources to use for the container.
         devices (list[str], optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
+        healthcheck (dict, optional): The stored healthcheck config, or None for no healthcheck.
 
     Returns:
         str: The id of the created container.
@@ -347,7 +329,9 @@ def spawn_service_container(
             DeviceRequest(device_ids=[str(gpu.uuid)], capabilities=[["gpu", "nvidia", "compute"]]) for gpu in devices
         ]
 
-    policy = {"MaximumRetryCount": 3, "Name": "on-failure"}
+    # no restart_policy: the reconciler owns restarts. a docker-level on-failure policy would
+    # restart the container behind its back, showing up as `restarting` (-> BOOTING) and silently
+    # multiplying the crash budget by the policy's retry count.
     container = client.containers.run(
         detach=True,
         remove=False,
@@ -357,7 +341,7 @@ def spawn_service_container(
         network=worker_network,
         volumes=volumes,
         environment=environment,
-        restart_policy=policy,  # type: ignore
+        healthcheck=docker_healthcheck(healthcheck),  # type: ignore
         runtime=runtime,
         device_requests=gpus,
         nano_cpus=int(resources.cpu_count * 1e9),
@@ -437,6 +421,7 @@ def create_service_entry(
     service_resources: ServiceCreateResources,
     service_environment: dict,
     model_instances: list[Model],
+    service_healthcheck: ServiceHealthcheck | None = None,
 ) -> Service:
     """
     Creates a new service entry in the database.
@@ -450,6 +435,7 @@ def create_service_entry(
         service_resources (ServiceResources): The resources allocated to the service.
         service_environment (dict): The environment variables for the service.
         model_instances (list): The list of model instances associated with the service.
+        service_healthcheck (ServiceHealthcheck, optional): The container healthcheck, if any.
 
     Returns:
         Service: The created service entry.
@@ -459,7 +445,6 @@ def create_service_entry(
         service_image=image_name,
         inactivity_timeout=service_timeout,
         priority=service_priority,
-        container_status=ServiceStatus.STARTING,
         created_at=datetime.now(tz=timezone.utc),
         last_active_time=datetime.now(tz=timezone.utc),
     )
@@ -470,6 +455,7 @@ def create_service_entry(
         mem_size=service_resources.mem_size,
         shm_size=service_resources.shm_size,
         environment_variables=service_environment,
+        healthcheck=service_healthcheck.model_dump() if service_healthcheck else None,
     )
     service.resources = resources
 
@@ -504,12 +490,9 @@ def create_device_allocations(
 
 def create_service(
     db: Session,
-    client: DockerClient,
     traefik: TraefikConfigManager,
     service_name: str,
     image_name: str,
-    service_network: str,
-    service_models_volume: str,
     service_url_prefix: str,
     service_environment: dict[str, str],
     service_resources: ServiceCreateResources,
@@ -517,40 +500,38 @@ def create_service(
     service_priority: int,
     model_infos: list[str],
     service_api_keys: list[str] | None = None,
+    service_healthcheck: ServiceHealthcheck | None = None,
 ) -> Service:
-    """
-    Creates a Triton docker container loading the specified models.
+    """Declaratively creates a service record; the reconciler spawns the container out of band.
+
+    No Docker call in the request path: the API is a desired-state store. The record persists
+    with desired_state=AVAILABLE and runtime_status=WARMING, and the reconciler pulls the image
+    and spawns the container on its next tick (surfacing a bad image ref as FAILED, not a 4xx here).
 
     Args:
         db (Session): The database session.
-        client (DockerClient): The Docker client.
         traefik (TraefikConfigManager): The Traefik config manager.
         service_name (str): The name of the service.
         image_name (str): The name of the Docker image to use.
-        service_network (str): The name of the Docker network to use.
-        service_models_volume (Path): The path to the model repository or a volume name.
         service_url_prefix (str): The URL prefix to use for the service.
         service_environment (dict[str, str]): The environment variables to pass to the container.
         service_resources (ServiceCreateResources): The resources to use for the container.
         service_timeout (int): The timeout for the service.
         service_priority (int): The priority for the service.
-        service_api_keys (list[str], optional): The list of API keys to use for the service.
         model_infos (list): The list of models to load.
+        service_api_keys (list[str], optional): The list of API keys to use for the service.
+        service_healthcheck (ServiceHealthcheck, optional): The container healthcheck, if any.
 
     Returns:
         Service: The created service.
 
     Raises:
-        HTTPException: If the service could not be created.
+        HTTPException: If capacity validation fails or the service could not be created.
     """
     try:
-        # Validate image
         assert image_name, "No image specified"
-        image = get_service_image(client, image_name)
-        assert image.id is not None, f"Invalid image ID for {image_name}"
         model_instances = validate_models(db, model_infos)
         device_infos, device_percent = get_allocable_devices(db, required_gpus=service_resources.gpus)
-        # Create service entry in database
         service = create_service_entry(
             db=db,
             service_name=service_name,
@@ -560,29 +541,14 @@ def create_service(
             service_resources=service_resources,
             service_environment=service_environment,
             model_instances=model_instances,
+            service_healthcheck=service_healthcheck,
         )
-        # Create device allocations
         create_device_allocations(
             db=db,
             service_id=service.service_id,
             device_infos=device_infos,
             device_percent=device_percent,
         )
-        # Spawn docker container
-        container_id = spawn_service_container(
-            client=client,
-            image_id=image.id,
-            worker_name=service_name,
-            worker_network=service_network,
-            worker_volume=service_models_volume,
-            models=model_instances,
-            devices=device_infos,
-            resources=service_resources,
-            environment=service_environment,
-        )
-
-        # Update service with container ID and configure Traefik from database truth
-        service.container_id = str(container_id)
         rebuild_service_config(
             db=db,
             traefik=traefik,
@@ -590,7 +556,6 @@ def create_service(
             service_prefix=service_url_prefix,
             default_keys=service_api_keys or [],
         )
-        # commit changes to be persisted
         db.commit()
         db.refresh(service)
         return service
@@ -598,97 +563,34 @@ def create_service(
     except AssertionError as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
-    except APIError as e:
-        db.rollback()
-        raise HTTPException(status_code=e.status_code or 500, detail=f"Error creating service: {str(e)}") from e
     except Exception as e:
         db.rollback()
         raise e
 
 
-def delete_service(
-    db: Session,
-    client: DockerClient,
-    traefik: TraefikConfigManager,
-    service_id: int,
-) -> Service:
-    """
-    Soft-deletes a service: removes its Docker container and Traefik config and stamps deleted_at.
-    Device allocations are retained on the row but ignored while deleted (the allocator filters
-    out deleted services), so capacity is effectively released without dropping the records.
+def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) -> None:
+    """Soft-deletes a service: DB record plus synchronous Traefik teardown.
+
+    Removes the Traefik config now (symmetric with create writing it synchronously), stamps
+    deleted_at, and marks the service RETIRED. Capacity is released automatically because
+    allocation/capacity queries filter deleted_at IS NULL. The reconciler removes the container
+    out of band on its next tick.
 
     Args:
         db (Session): The database session.
-        client (DockerClient): The docker client.
-        traefik (TraefikConfigManager): The traefik config manager.
+        traefik (TraefikConfigManager): The Traefik config manager.
         service_id (int): The ID of the service.
 
-    Returns:
-        Service: The deleted service.
-
     Raises:
-        HTTPException: If the service doesn't exist or if there's an error during deletion.
+        HTTPException: If the service does not exist or is already deleted.
     """
-    try:
-        # check if service exists
-        if (service := get_service_by_id(db=db, docker_client=client, service_id=service_id)) is None:
-            raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
-
-        current_time = datetime.now(tz=timezone.utc)
-
-        # Handle the Docker container
-        if service.container_id:
-            try:
-                container = client.containers.get(service.container_id)
-                container.remove(force=True)  # This stops and removes the container
-            except NotFound:
-                LOG.warning(f"Container for service {service_id} not found. It may have been already removed.")
-            except APIError as e:
-                LOG.error(f"Error removing Docker container for service {service_id}: {str(e)}")
-                service.container_status = ServiceStatus.ERROR
-                raise HTTPException(status_code=500, detail=f"Error removing Docker container: {str(e)}.")
-
-        # Update service status
-        service.deleted_at = current_time
-        service.container_status = ServiceStatus.DELETED
-        service.container_id = None  # type: ignore - Clear the container ID as it's been removed
-
-        # Remove traefik config
-        try:
-            traefik.delete(service_name=service.service_name)
-        except Exception as e:
-            LOG.error(f"Error removing Traefik config for service {service_id}: {str(e)}")
-
-        # Commit the changes
-        db.commit()
-        db.refresh(service)
-        return service
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        LOG.exception(f"Unexpected error while deleting service {service_id}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error deleting service: {str(e)}")
-
-
-def start_service(
-    db: Session,
-    client: DockerClient,
-    service: Service,
-) -> None:
-    try:
-        LOG.debug(f"Starting service {service.service_id}...")
-        client.containers.get(service.container_id).start()
-        service.container_status = ServiceStatus.ACTIVE
-        service.last_active_time = datetime.now(tz=timezone.utc)
-        db.commit()
-    except NotFound:
-        raise HTTPException(status_code=404, detail="Service not found")
-    except Exception as e:
-        db.rollback()
-        LOG.debug(f"Error starting container: {str(e)}")
-        raise HTTPException(status_code=503, detail="Error restarting service")
+    service = db.get(Service, service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    traefik.delete(service_name=service.service_name)
+    service.deleted_at = datetime.now(tz=timezone.utc)
+    service.desired_state = DesiredState.RETIRED
+    db.commit()
 
 
 def update_active_time(db: Session, service: Service):
@@ -700,25 +602,6 @@ def update_active_time(db: Session, service: Service):
     """
     service.last_active_time = datetime.now(tz=timezone.utc)
     db.commit()
-
-
-def stop_service(
-    db: Session,
-    client: DockerClient,
-    service_id: int,
-) -> None:
-    try:
-        LOG.debug(f"Stopping service {service_id}...")
-        service = get_service_by_id(db=db, docker_client=client, service_id=service_id)
-        assert service is not None, f"Service {service_id} could not be returned"
-        client.containers.get(service.container_id).stop()
-        service.container_status = ServiceStatus.STOPPED
-        db.commit()
-    except NotFound:
-        raise HTTPException(status_code=404, detail="Service not found")
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error stopping service: {str(e)}")
 
 
 def recreate_service_container(
@@ -748,7 +631,7 @@ def recreate_service_container(
                 client.containers.get(service.container_id).remove(force=True)
             except NotFound:
                 pass
-            service.container_id = None  # type: ignore
+            service.container_id = None
 
         # a stale/foreign container may still hold the name under a different id (e.g. dirty
         # docker after a host reboot); clear it by name so the spawn below cannot 409.
@@ -774,10 +657,10 @@ def recreate_service_container(
             ),
             devices=device_objs,
             environment=res.environment_variables or {},
+            healthcheck=res.healthcheck,
         )
 
         service.container_id = str(container_id)
-        service.container_status = ServiceStatus.STARTING
         db.commit()
         db.refresh(service)
         return service
@@ -790,157 +673,20 @@ def recreate_service_container(
         raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {str(e)}") from e
 
 
-def reconcile_missing_container(
-    db: Session,
-    client: DockerClient,
-    service: Service,
-    service_network: str,
-    service_models_volume: str,
-    max_restart_attempts: int,
-    restart_cooldown: int,
-) -> None:
-    """Recreates a MISSING container under a single-flight, budget-bounded policy.
-
-    Mechanism (the actual respawn) lives in recreate_service_container; this function
-    only decides *whether* to recreate. A session-level advisory lock guarantees a single
-    in-flight reconciliation per service so concurrent on-demand and background callers do
-    not double-spawn. The attempt counter is committed before spawning so a failing image
-    still counts toward the budget; exhaustion lands the service in a recoverable ERROR.
-    """
-    lock_key = service.service_id
-    # Hold the advisory lock on a dedicated AUTOCOMMIT connection for the whole critical
-    # section. A session-level lock is bound to its backend connection; the ORM session
-    # bounces connections on every commit (the mid-flight bookkeeping commit below), so the
-    # lock must NOT live on the session's connection or the finally-unlock could target a
-    # different backend and leak the lock.
-    # the session is bound to the Engine (sessionmaker(bind=engine)); narrow the
-    # Engine | Connection union accordingly for the dedicated lock connection.
-    engine = cast(Engine, db.get_bind())
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as lock_conn:
-        acquired = lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}).scalar()
-        if not acquired:
-            LOG.debug("Reconciliation already in progress for service %s, skipping", service.service_id)
-            return
-        try:
-            # self-heal guard: a container under this service's name may already be up. it can
-            # come back under a NEW id (host reboot), so look it up by name, not the stale id.
-            # adopt a running one and just reconcile status; a dead one is cleared on recreate.
-            existing = get_container_by_name(client, service.service_name)
-            if existing is not None and existing.status == "running":
-                if service.container_id != existing.id:
-                    service.container_id = existing.id  # type: ignore
-                check_service_status(db=db, docker_client=client, service=service)
-                return
-
-            now = datetime.now(tz=timezone.utc)
-            if (
-                service.last_attempt_at is not None
-                and (now - service.last_attempt_at).total_seconds() > restart_cooldown
-            ):
-                service.restart_attempts = 0
-
-            if service.restart_attempts >= max_restart_attempts:
-                service.container_status = ServiceStatus.ERROR
-                db.commit()
-                db.refresh(service)
-                LOG.warning("Service %s exhausted restart budget, marking ERROR", service.service_id)
-                return
-
-            # record the attempt before spawning so a broken image cannot retry forever
-            service.restart_attempts += 1
-            service.last_attempt_at = now
-            db.commit()
-
-            try:
-                recreate_service_container(db, client, service, service_network, service_models_volume)
-            except HTTPException as e:
-                # leave the service MISSING; the next attempt proceeds until the budget exhausts
-                db.rollback()
-                LOG.warning(
-                    "Recreate attempt %d for service %s failed: %s",
-                    service.restart_attempts,
-                    service.service_id,
-                    e.detail,
-                )
-        finally:
-            lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
-
-
-def refresh_service(
-    db: Session,
-    service_id: int,
-    docker_client: DockerClient,
-    service_network: str,
-    service_models_volume: str,
-    force_recreate: bool = False,
-    max_restart_attempts: int = 3,
-    restart_cooldown: int = 600,
-) -> None:
-    if (service := get_service_by_id(db=db, service_id=service_id, docker_client=docker_client)) is None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
-
-    LOG.debug(
-        "Refreshing service %s (%d), status: %s",
-        service.service_name,
-        service.service_id,
-        service.container_status,
-    )
-
-    if force_recreate:
-        if service.deleted_at is not None:
-            service.deleted_at = None  # type: ignore
-        recreate_service_container(db, docker_client, service, service_network, service_models_volume)
-        return
-
-    # if service is either active, we need to stop and start it again
-    if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
-        stop_service(db=db, client=docker_client, service_id=service_id)
-        start_service(db=db, client=docker_client, service=service)
-        LOG.debug("Service %s with id %s has been refreshed", service.service_name, service.service_id)
-    elif service.container_status == ServiceStatus.MISSING:
-        reconcile_missing_container(
-            db=db,
-            client=docker_client,
-            service=service,
-            service_network=service_network,
-            service_models_volume=service_models_volume,
-            max_restart_attempts=max_restart_attempts,
-            restart_cooldown=restart_cooldown,
-        )
-    elif service.container_status in (ServiceStatus.DELETED, ServiceStatus.ERROR):
-        LOG.debug(
-            "Could not refresh the service %s with id %s: %s",
-            service.service_name,
-            service.service_id,
-            service.container_status,
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Service '{service.service_name}'status: {service.container_status}"
-        )
-    # ServiceStatus.STOPPED case. We don't need to restart, it will refresh automatically when it will be called
-    else:
-        LOG.debug("No need to refresh")
-
-
 def update_service(
     db: Session,
-    client: DockerClient,
     service_id: int,
     update_body: ServiceUpdateBody,
-    service_network: str,
-    service_models_volume: str,
-    recreate: bool = False,
 ) -> Service:
-    """Updates a service's configuration and optionally recreates its container.
+    """Applies a partial configuration change to a service record (declarative, no Docker).
+
+    Container-affecting changes land in the record and take effect the next time the reconciler
+    (re)creates the container; there is no synchronous recreate in the request path.
 
     Args:
         db (Session): The database session.
-        client (DockerClient): The Docker client.
         service_id (int): The ID of the service to update.
         update_body (ServiceUpdateBody): The partial update payload.
-        service_network (str): The Docker network name.
-        service_models_volume (str): The volume name or path for models.
-        recreate (bool): If True, recreate the container after updating. Defaults to False.
 
     Returns:
         Service: The updated service.
@@ -953,7 +699,6 @@ def update_service(
             raise HTTPException(status_code=409, detail="cannot update a deleted service")
 
         if update_body.docker_image:
-            get_service_image(client, update_body.docker_image)
             service.service_image = update_body.docker_image
         if update_body.timeout is not None:
             service.inactivity_timeout = update_body.timeout
@@ -977,28 +722,23 @@ def update_service(
         if update_body.environment is not None:
             service.resources.environment_variables = update_body.environment
 
+        if update_body.healthcheck is not None:
+            service.resources.healthcheck = update_body.healthcheck.model_dump()
+
         if update_body.models is not None:
             new_model_instances = [get_single_model(db, name) for name in update_body.models]
             service.models.clear()
             service.models.extend(new_model_instances)
 
         if gpu_changed:
-            if service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING):
-                stop_service(db=db, client=client, service_id=service_id)
             for alloc in service.device_allocations:
                 db.delete(alloc)
             db.flush()
             device_infos, device_percent = get_allocable_devices(db, required_gpus=new_gpus)
             create_device_allocations(db, service.service_id, device_infos, device_percent)
 
-        db.flush()
-
-        if recreate:
-            recreate_service_container(db, client, service, service_network, service_models_volume)
-        else:
-            db.commit()
-            db.refresh(service)
-
+        db.commit()
+        db.refresh(service)
         return service
 
     except HTTPException:
@@ -1006,9 +746,6 @@ def update_service(
     except AssertionError as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=f"Error updating service: {str(e)}") from e
-    except APIError as e:
-        db.rollback()
-        raise HTTPException(status_code=e.status_code or 500, detail=f"Error updating service: {str(e)}") from e
     except Exception as e:
         db.rollback()
         raise e

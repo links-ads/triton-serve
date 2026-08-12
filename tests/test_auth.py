@@ -65,7 +65,7 @@ def test_create_api_key(test_client, key_type):
     assert "expires_at" in data
 
 
-@pytest.mark.order(after="test_services.py::test_delete_services")
+@pytest.mark.order(after="test_services.py::test_delete_is_db_only")
 def test_create_service_key(test_client, test_settings):
     service_name = "trt-srv_test_test_service"
     # First, create a service
@@ -195,7 +195,9 @@ def test_add_service_to_key(
 
 
 @pytest.mark.order(after="test_add_service_to_key")
-def test_check_service_status(test_client):
+def test_status_endpoint_auth(test_client, test_db):
+    from triton_serve.database.model import RuntimeStatus, Service
+
     # using the client, get the service key associated with test project
     response = test_client.get("/keys", params={"project": "status_check"})
     LOG.debug("Response: %s", response.text)
@@ -203,6 +205,11 @@ def test_check_service_status(test_client):
     data = response.json()
     assert len(data) > 0
     key = data[0]["value"]
+
+    # mark the service READY so a passing key projects to 200 (the request path never spawns)
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    test_db.commit()
 
     # Test with user key
     response = test_client.get(

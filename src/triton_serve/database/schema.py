@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from triton_serve.database.model import KeyType, ModelType, ServiceStatus
+from triton_serve.database.model import DesiredState, KeyType, ModelType, RuntimeStatus
 
 
 def timezone_aware_now():
@@ -84,6 +84,7 @@ class ServiceResourcesSchema(BaseModel):
     shm_size: int = Field(gt=0)
     mem_size: int = Field(gt=0)
     environment_variables: dict | None = None
+    healthcheck: dict | None = None
 
 
 class DeviceAllocationSchema(BaseModel):
@@ -95,7 +96,6 @@ class ServiceBaseSchema(BaseModel):
     service_name: str
     service_image: str
     container_id: str | None = None
-    container_status: ServiceStatus = ServiceStatus.STARTING
     created_at: datetime = Field(default_factory=timezone_aware_now)
     deleted_at: datetime | None = None
     inactivity_timeout: int = Field(default=3600, ge=0)
@@ -112,7 +112,7 @@ class ServiceInfoSchema(BaseModel):
     service_id: int
     service_name: str
     container_id: str | None = None
-    container_status: ServiceStatus
+    runtime_status: RuntimeStatus
 
 
 class ServiceCreateSchema(ServiceBaseSchema):
@@ -122,6 +122,8 @@ class ServiceCreateSchema(ServiceBaseSchema):
 class ServiceSchema(ServiceBaseSchema):
     model_config = ConfigDict(from_attributes=True)
     service_id: int
+    desired_state: DesiredState
+    runtime_status: RuntimeStatus
 
 
 class APIKeyBaseSchema(BaseModel):
@@ -155,7 +157,7 @@ class ResourceUsageSchema(BaseModel):
 class DeviceServiceSchema(BaseModel):
     service_id: int
     service_name: str
-    container_status: ServiceStatus
+    runtime_status: RuntimeStatus
     allocation_percentage: float
 
 
@@ -193,7 +195,7 @@ class ServiceDeviceAllocationSchema(BaseModel):
 class ServiceAllocationSchema(BaseModel):
     service_id: int
     service_name: str
-    container_status: ServiceStatus
+    runtime_status: RuntimeStatus
     cpu_count: int
     mem_size: int
     devices: list[ServiceDeviceAllocationSchema]

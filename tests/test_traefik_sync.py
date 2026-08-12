@@ -11,7 +11,6 @@ from triton_serve.database.model import (
     Base,
     KeyType,
     Service,
-    ServiceStatus,
     key_service_association,
     utcnow,
 )
@@ -38,7 +37,6 @@ def service(db_session):
     svc = Service(
         service_name="demo",
         service_image="img",
-        container_status=ServiceStatus.ACTIVE,
         last_active_time=utcnow(),
         priority=0,
     )

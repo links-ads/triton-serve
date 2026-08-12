@@ -1,7 +1,6 @@
 from typing import Any
 
-from docker import DockerClient
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody, ServiceUpdateBody
@@ -12,12 +11,16 @@ from triton_serve.config import (
     get_settings,
     get_traefik,
 )
-from triton_serve.database.model import ServiceStatus
+from triton_serve.database.model import DesiredState, RuntimeStatus
 from triton_serve.database.schema import ServiceSchema
-from triton_serve.extensions import docker_client, get_db
+from triton_serve.extensions import get_db
 from triton_serve.security import require_admin, require_elevated, require_service
 
 router = APIRouter()
+
+# retry cadence handed to traefik/clients while a service is not yet ready: one reconcile tick,
+# so a caller retries roughly once per chance the reconciler has to bring the service up
+_RETRY_AFTER = str(get_settings().sentinel_poll_interval)
 
 
 @router.get(
@@ -28,9 +31,8 @@ router = APIRouter()
 )
 def get_services(
     names: list[str] = Query(None),
-    statuses: list[ServiceStatus] = Query(None),
+    runtime_statuses: list[RuntimeStatus] = Query(None),
     db: Session = Depends(get_db),
-    docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_elevated),
 ):
     """
@@ -38,18 +40,12 @@ def get_services(
 
     **Arguments:**
     - `names` (`Optional[list[str]]`, optional): Names of the services to be retrieved. Defaults to `None`.
-    - `statuses` (`Optional[list[ServiceStatus]]`, optional): Status of the service. Defaults to `None`.
+    - `runtime_statuses` (`Optional[list[RuntimeStatus]]`, optional): Runtime status filter. Defaults to `None`.
 
     **Returns:**
     - `List[Service]`: A list of services.
     """
-    services = domain.list_services(
-        db=db,
-        docker_client=docker,
-        names=names,
-        statuses=statuses,
-    )
-    return services
+    return domain.list_services(db=db, names=names, runtime_statuses=runtime_statuses)
 
 
 @router.get(
@@ -61,23 +57,18 @@ def get_services(
 def get_service(
     service_id: int,
     db: Session = Depends(get_db),
-    docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_elevated),
 ):
     """
-    Retrieves a specific service by name, if present.
+    Retrieves a specific service by id, if present.
 
     **Arguments:**
-    - `name` (`str`): The name of the service.
+    - `service_id` (`int`): The id of the service.
 
     **Returns:**
     - `Service`: The requested service.
     """
-    service = domain.get_service_by_id(
-        db=db,
-        docker_client=docker,
-        service_id=service_id,
-    )
+    service = domain.get_service_by_id(db=db, service_id=service_id)
     if service is None:
         raise HTTPException(status_code=404, detail=f"Service with ID={service_id} does not exist")
     return service
@@ -117,60 +108,62 @@ def get_service_config(
 def create_service(
     service_params: ServiceCreateBody,
     settings: AppSettings = Depends(get_settings),
-    docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
     """
-    Creates a new service with the specified models.
+    Declaratively creates a new service. The reconciler spawns the container out of band.
+
+    Returns `201` before the container exists; the service comes up on the reconciler's next tick.
+    A bad image reference surfaces asynchronously as a `FAILED` runtime status, not a create error.
 
     **Arguments:**
     - `name` (`string`): The name of the service to be created.
     - `models` (`list[Model]`): The models to be served by the service.
-    - `docker_image` (`Optional[str]`): The docker image to be used for the service. Defaults to `tritonserver:23.07-py3`.
+    - `docker_image` (`Optional[str]`): The docker image to be used for the service.
     - `environment` (`Optional[dict]`): Environment variables to be passed to the service. Defaults to `{}`.
     - `resources` (`Optional[ServiceResources]`): Resources to be allocated to the service.
     - `timeout` (`Optional[int]`): Timeout for the service. Defaults to `3600`.
     - `priority` (`Optional[int]`): Priority of the service. Defaults to `1`.
+    - `healthcheck` (`Optional[ServiceHealthcheck]`): Container healthcheck. Without one, the service
+      is reported `READY` once it has been up for `service_boot_grace` seconds, regardless of whether
+      it can actually serve.
 
     **Returns:**
-    - `Service` (`ServiceCreateSchema`): Information about the created service.
+    - `Service` (`ServiceSchema`): Information about the created service.
     """
     docker_image = service_params.docker_image or settings.service_default_image
     return domain.create_service(
         db=db,
-        client=docker,
         traefik=traefik,
         service_name=service_params.name,
         image_name=docker_image,
-        service_network=settings.service_network,
         service_url_prefix=settings.service_prefix,
-        service_models_volume=settings.service_volume,
         service_environment=service_params.environment,
         service_resources=service_params.resources,
         service_timeout=service_params.timeout,
         service_priority=service_params.priority,
         model_infos=service_params.models,
         service_api_keys=settings.api_keys,
+        service_healthcheck=service_params.healthcheck,
     )
 
 
 @router.delete(
     "/services/{service_id}",
-    status_code=202,
+    status_code=204,
     tags=["services"],
-    response_model=ServiceSchema,
 )
 def delete_service(
     service_id: int,
-    docker: DockerClient = Depends(docker_client),
     traefik: TraefikConfigManager = Depends(get_traefik),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
     """
-    Deletes a service with the specified name.
+    Soft-deletes a service: removes its Traefik config now and marks it RETIRED; the reconciler
+    tears down the container out of band.
 
     **Arguments:**
     - `service_id` (`int`): The id of the service to be deleted.
@@ -178,156 +171,105 @@ def delete_service(
     **Returns:**
     - `None`
     """
-    return domain.delete_service(
-        db=db,
-        client=docker,
-        traefik=traefik,
-        service_id=service_id,
-    )
+    domain.delete_service(db=db, traefik=traefik, service_id=service_id)
 
 
-@router.post(
-    "/services/{service_id}/stop",
-    status_code=204,
-    tags=["operations"],
-)
-def stop_service(
-    service_id: int,
-    docker: DockerClient = Depends(docker_client),
-    db: Session = Depends(get_db),
-    _: Any = Depends(require_admin),
-):
+@router.post("/services/{service_id}/suspend", status_code=204, tags=["operations"])
+def suspend_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
     """
-    Stops the container of a service with the specified id.
+    Operator intent: keep the service off (no auto-wake). The reconciler stops it.
 
     **Arguments:**
-    - `service_id` (`int`): The id of the service to be stopped.
+    - `service_id` (`int`): The id of the service to suspend.
 
     **Returns:**
     - `None`
     """
-    domain.stop_service(
-        db=db,
-        client=docker,
-        service_id=service_id,
-    )
+    domain.set_desired_state(db=db, service_id=service_id, desired=DesiredState.SUSPENDED)
+
+
+@router.post("/services/{service_id}/resume", status_code=204, tags=["operations"])
+def resume_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
+    """
+    Operator intent: make the service available again; records a wake so it comes up.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to resume.
+
+    **Returns:**
+    - `None`
+    """
+    domain.set_desired_state(db=db, service_id=service_id, desired=DesiredState.AVAILABLE, wake=True)
+
+
+@router.post("/services/{service_id}/retry", status_code=204, tags=["operations"])
+def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
+    """
+    Manual escape hatch for a FAILED service: reset the crash budget and wake it.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to retry.
+
+    **Returns:**
+    - `None`
+    """
+    domain.reset_and_wake(db=db, service_id=service_id)
 
 
 @router.get(
     "/status/{service_name}",
-    status_code=200,
     tags=["operations"],
+    responses={
+        200: {"description": "Service is READY; forward the request."},
+        404: {"description": "No such service, or it is RETIRED."},
+        503: {"description": "Service is not ready (warming, idle, recovering, suspended, or failed)."},
+    },
 )
-def check_service_status(
+def service_status(
     service_name: str,
-    settings: AppSettings = Depends(get_settings),
     db: Session = Depends(get_db),
-    docker: DockerClient = Depends(docker_client),
     _: Any = Depends(require_service),
-) -> int:
-    """
-    Checks the status of a service, turning it on if it is stopped.
+) -> Response:
+    """traefik forwardAuth hook. Reads the persisted runtime_status ONLY -- never Docker.
 
-    **Returns:**
-    - `200` if the service is running,
-    - `202` if the service is starting,
-    - `503` if the service is cannot be started.
+    Not-ready never returns 2XX (a 2XX makes forwardAuth forward to a dead backend).
+    IDLE additionally records wake intent; the reconciler brings the service up out of band.
     """
-    service = domain.get_service_by_name(
-        db=db,
-        service_name=service_name,
-        docker_client=docker,
-    )
-    match service.container_status:
-        case ServiceStatus.ACTIVE:
+    service = domain.get_service_record_by_name(db=db, service_name=service_name)
+    if service is None or service.runtime_status == RuntimeStatus.RETIRED:
+        return Response(status_code=404)
+
+    match service.runtime_status:
+        case RuntimeStatus.READY:
             domain.update_active_time(db=db, service=service)
-            return 200
-        case ServiceStatus.STARTING:
+            return Response(status_code=200)
+        case RuntimeStatus.IDLE:
+            domain.update_active_time(db=db, service=service)  # wake intent -> replica_target=1 next tick
+            return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
+        case RuntimeStatus.WARMING | RuntimeStatus.RECOVERING:
+            # a client still polling through a slow boot keeps the service wanted, so the
+            # reconciler does not scale it back to zero mid-wake once inactivity elapses
             domain.update_active_time(db=db, service=service)
-            return 202
-        case ServiceStatus.STOPPED:
-            domain.start_service(
-                db=db,
-                client=docker,
-                service=service,
-            )
-            return 202
-        case ServiceStatus.MISSING:
-            domain.refresh_service(
-                db=db,
-                docker_client=docker,
-                service_id=service.service_id,
-                service_network=settings.service_network,
-                service_models_volume=settings.service_volume,
-                max_restart_attempts=settings.service_max_restart_attempts,
-                restart_cooldown=settings.service_restart_cooldown,
-            )
-            db.refresh(service)
-            if service.container_status == ServiceStatus.ERROR:
-                raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")
-            return 202
-        case ServiceStatus.ERROR:
-            raise HTTPException(status_code=503, detail=f"Service '{service_name}' is in error state")
-        case _:
-            raise HTTPException(status_code=503, detail=f"Service '{service_name}' is unavailable")
-
-
-@router.post("/services/{service_id}/refresh", status_code=204, tags=["operations"])
-def refresh_service(
-    service_id: int,
-    force_recreate: bool = Query(False),
-    settings: AppSettings = Depends(get_settings),
-    docker: DockerClient = Depends(docker_client),
-    db: Session = Depends(get_db),
-    _: Any = Depends(require_admin),
-):
-    """
-    Refreshes the service with the specified id.
-
-    **Arguments:**
-    - `service_id` (`int`): The id of the service to be refreshed.
-    - `force_recreate` (`bool`): If True, tears down and recreates the container. Recovers from ERROR/DELETED states.
-
-    **Returns:**
-    - `None`
-    """
-    domain.refresh_service(
-        db=db,
-        docker_client=docker,
-        service_id=service_id,
-        service_network=settings.service_network,
-        service_models_volume=settings.service_volume,
-        force_recreate=force_recreate,
-    )
+            return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
+        case _:  # SUSPENDED, FAILED
+            return Response(status_code=503)
 
 
 @router.put("/services/{service_id}", status_code=200, tags=["services"], response_model=ServiceSchema)
 def update_service(
     service_id: int,
     update_params: ServiceUpdateBody,
-    recreate: bool = Query(False),
-    settings: AppSettings = Depends(get_settings),
-    docker: DockerClient = Depends(docker_client),
     db: Session = Depends(get_db),
     _: Any = Depends(require_admin),
 ):
     """
-    Updates service parameters. Optionally recreates the container immediately.
+    Updates service parameters (declarative). Changes take effect on the next (re)create.
 
     **Arguments:**
     - `service_id` (`int`): The id of the service to update.
     - `update_params` (`ServiceUpdateBody`): Partial update payload (all fields optional).
-    - `recreate` (`bool`): If True, recreates the container after applying changes.
 
     **Returns:**
     - `Service`: The updated service.
     """
-    return domain.update_service(
-        db=db,
-        client=docker,
-        service_id=service_id,
-        update_body=update_params,
-        service_network=settings.service_network,
-        service_models_volume=settings.service_volume,
-        recreate=recreate,
-    )
+    return domain.update_service(db=db, service_id=service_id, update_body=update_params)

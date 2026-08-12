@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from triton_serve.database.model import Machine, Service, ServiceStatus
+from triton_serve.database.model import Machine, RuntimeStatus, Service
 from triton_serve.database.schema import (
     DeviceAllocationSummarySchema,
     DeviceAllocationViewSchema,
@@ -12,7 +12,8 @@ from triton_serve.database.schema import (
     ServiceDeviceAllocationSchema,
 )
 
-_IN_USE = {ServiceStatus.STARTING, ServiceStatus.ACTIVE}
+# a service occupies its allocated resources whenever the reconciler intends a container up
+_IN_USE = {RuntimeStatus.READY, RuntimeStatus.WARMING, RuntimeStatus.RECOVERING}
 
 
 def get_resource_overview(db: Session) -> MachineAllocationSchema:
@@ -23,15 +24,15 @@ def get_resource_overview(db: Session) -> MachineAllocationSchema:
     all_services = db.query(Service).filter(Service.deleted_at.is_(None)).all()
 
     cpu_allocated = sum(s.resources.cpu_count for s in all_services if s.resources)
-    cpu_in_use = sum(s.resources.cpu_count for s in all_services if s.resources and s.container_status in _IN_USE)
+    cpu_in_use = sum(s.resources.cpu_count for s in all_services if s.resources and s.runtime_status in _IN_USE)
     mem_allocated = sum(s.resources.mem_size for s in all_services if s.resources)
-    mem_in_use = sum(s.resources.mem_size for s in all_services if s.resources and s.container_status in _IN_USE)
+    mem_in_use = sum(s.resources.mem_size for s in all_services if s.resources and s.runtime_status in _IN_USE)
 
     devices = []
     for device in machine.devices:
         active_allocs = [a for a in device.allocations if a.service.deleted_at is None]
         allocated_pct = sum(a.allocation_percentage for a in active_allocs)
-        in_use_pct = sum(a.allocation_percentage for a in active_allocs if a.service.container_status in _IN_USE)
+        in_use_pct = sum(a.allocation_percentage for a in active_allocs if a.service.runtime_status in _IN_USE)
 
         devices.append(
             DeviceAllocationViewSchema(
@@ -44,7 +45,7 @@ def get_resource_overview(db: Session) -> MachineAllocationSchema:
                     DeviceServiceSchema(
                         service_id=a.service_id,
                         service_name=a.service.service_name,
-                        container_status=a.service.container_status,
+                        runtime_status=a.service.runtime_status,
                         allocation_percentage=a.allocation_percentage,
                     )
                     for a in active_allocs
@@ -71,7 +72,7 @@ def get_service_allocation(db: Session, service_id: int) -> ServiceAllocationSch
     return ServiceAllocationSchema(
         service_id=service.service_id,
         service_name=service.service_name,
-        container_status=service.container_status,
+        runtime_status=service.runtime_status,
         cpu_count=res.cpu_count,
         mem_size=res.mem_size,
         devices=[

@@ -3,21 +3,33 @@ import time
 
 import pytest
 import requests
-from docker.errors import NotFound
 
-from triton_serve.database.model import Device, Service, ServiceStatus
+from triton_serve.database.model import DesiredState, Device, RuntimeStatus, Service
 from triton_serve.tasks import update_service_status
 
 LOG = logging.getLogger(pytest.__name__)
 
 
-def test_missing_status_and_retry_fields():
+def _drive_reconciler(test_db, service, until, ticks=24, delay=5):
+    """Manually tick the reconciler (no celery beat in test mode) until `service` reaches a
+    target runtime_status, refreshing the ORM object between ticks. Returns the final status."""
+    for _ in range(ticks):
+        update_service_status.apply()
+        test_db.refresh(service)
+        if service.runtime_status in until:
+            break
+        time.sleep(delay)
+    return service.runtime_status
+
+
+def test_lifecycle_fields_and_settings():
     from triton_serve.config import get_settings
     from triton_serve.database.schema import ServiceSchema
 
-    assert ServiceStatus.MISSING.value == "missing"
     assert "restart_attempts" in ServiceSchema.model_fields
     assert "last_attempt_at" in ServiceSchema.model_fields
+    assert "runtime_status" in ServiceSchema.model_fields
+    assert "desired_state" in ServiceSchema.model_fields
 
     settings = get_settings()
     assert settings.service_max_restart_attempts == 3
@@ -31,78 +43,65 @@ def test_retry_columns_exist(test_db):
     assert {"restart_attempts", "last_attempt_at"} <= cols
 
 
+def test_lifecycle_enums_and_columns(test_db):
+    from sqlalchemy import inspect
+
+    assert {s.value for s in DesiredState} == {"available", "suspended", "retired"}
+    assert {s.value for s in RuntimeStatus} == {
+        "ready",
+        "warming",
+        "idle",
+        "recovering",
+        "failed",
+        "suspended",
+        "retired",
+    }
+    cols = {c["name"] for c in inspect(test_db.connection()).get_columns("services")}
+    assert {"desired_state", "runtime_status"} <= cols
+
+
 @pytest.mark.order(after="test_auth.py::test_api_key_authorized")
 @pytest.mark.parametrize(
     "name, models, resources, timeout",
     [
-        (
-            "trt-srv_test_svc1",
-            ["squeezenet"],
-            {"gpus": 0.5, "shm_size": 256, "mem_size": 1024},
-            3600,
-        ),
-        (
-            "trt-srv_test_svc6",
-            ["squeezenet"],
-            {"gpus": 0.4, "shm_size": 256, "mem_size": 256},
-            3600,
-        ),
-        (
-            "trt-srv_test_svc4",
-            ["ensemble_py_step", "ensemble"],
-            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
-            5,  # set timeout low to test stopping the service
-        ),
-        (
-            "trt-srv_test_svc3",
-            ["onnx"],
-            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
-            3600,
-        ),
-        (
-            "trt-srv_test_svc2",
-            ["onnx"],
-            {"gpus": 0, "shm_size": 256, "mem_size": 1024},
-            3600,
-        ),
+        ("trt-srv_test_svc1", ["squeezenet"], {"gpus": 0.5, "shm_size": 256, "mem_size": 1024}, 3600),
+        ("trt-srv_test_svc6", ["squeezenet"], {"gpus": 0.4, "shm_size": 256, "mem_size": 256}, 3600),
+        ("trt-srv_test_svc4", ["ensemble_py_step", "ensemble"], {"gpus": 0, "shm_size": 256, "mem_size": 1024}, 5),
+        ("trt-srv_test_svc3", ["onnx"], {"gpus": 0, "shm_size": 256, "mem_size": 1024}, 3600),
+        ("trt-srv_test_svc2", ["onnx"], {"gpus": 0, "shm_size": 256, "mem_size": 1024}, 3600),
     ],
 )
-def test_create_service(test_client, test_docker, test_db, name, models, resources, timeout):
-    # get the devices to also check creation when no GPU is available
+def test_create_service(test_client, test_db, name, models, resources, timeout):
+    """Create is declarative: a 201 record with runtime_status=WARMING and no container yet."""
     devices = set(test_db.query(Device.uuid).all())
 
     response = test_client.post(
         "/services",
-        json={
-            "name": name,
-            "models": models,
-            "resources": resources,
-            "timeout": timeout,
-        },
+        json={"name": name, "models": models, "resources": resources, "timeout": timeout},
     )
     LOG.debug(f"response: {response.text}")
     if resources["gpus"] and not devices:
         assert response.status_code == 409
-    else:
-        assert response.status_code == 201
-        data = response.json()
-        assert data["service_name"] == name
-        assert data["created_at"] is not None
-        # check if container is running
-        container = test_docker.containers.get(name)
-        assert container.status == "running", f"Container {name} is not created"
+        return
 
-        # check if service is in db
-        service = test_db.get(Service, ident=data["service_id"])
-        assert service.resources is not None
-        assert service.resources.shm_size == resources["shm_size"]
-        assert service.resources.mem_size == resources["mem_size"]
-        assert service.service_name == name
-        LOG.debug(f"assigned device: {service.device_allocations}")
-        if resources["gpus"]:
-            assert service.device_allocations is not None
-        else:
-            assert not service.device_allocations
+    assert response.status_code == 201
+    data = response.json()
+    assert data["service_name"] == name
+    assert data["created_at"] is not None
+    # declarative contract: warming intent, container spawned by the reconciler out of band
+    assert data["runtime_status"] == RuntimeStatus.WARMING.value
+    assert data["desired_state"] == DesiredState.AVAILABLE.value
+    assert data["container_id"] is None
+
+    service = test_db.get(Service, ident=data["service_id"])
+    assert service.resources is not None
+    assert service.resources.shm_size == resources["shm_size"]
+    assert service.resources.mem_size == resources["mem_size"]
+    assert service.service_name == name
+    if resources["gpus"]:
+        assert service.device_allocations
+    else:
+        assert not service.device_allocations
 
 
 @pytest.mark.order(after="test_create_service")
@@ -119,7 +118,6 @@ def test_get_service_config(test_client, test_db):
     assert data["resources"]["mem_size"] == 1024
     assert data["resources"]["gpus"] == 0.0
 
-    # verify non-existent service returns 404
     assert test_client.get("/services/-1/config").status_code == 404
 
 
@@ -133,153 +131,43 @@ def test_delete_model_in_use(name, test_client, test_settings):
     assert expected_path.exists()
 
 
-@pytest.mark.order(after="test_create_service")
-@pytest.mark.parametrize(
-    "service_name, service_container_status",
-    [
-        ("trt-srv_test_svc4", "exited"),
-        ("trt-srv_test_svc2", "running"),
-    ],
-)
-def test_stop_service(
-    test_client,
-    test_docker,
-    test_db,
-    service_name,
-    service_container_status,
-):
-    # make sure the service is running
-    for _ in range(3):
-        container_status = test_docker.containers.get(service_name).status
-        LOG.debug(f"container status: {container_status}")
-        if container_status == "running":
-            break
-        LOG.debug(f"{service_name} is not {service_container_status} yet ...")
-
-    # assert that the initial status is indeed "running"
-    init_status = test_docker.containers.get(service_name).status
-    init_service = test_db.query(Service).filter(Service.service_name == service_name).first()
-    LOG.debug(f"service: {init_service}")
-    assert init_status == "running"
-    assert init_service.container_status in (ServiceStatus.ACTIVE, ServiceStatus.STARTING)
-    # make sure we update the service status once the timeout has passed
-    time.sleep(5)
-    # Manually execute the update service status task: one of the services should be stopped
-    # due to the timeout, the other should be running.
-    update_service_status.apply(kwargs={"client": test_client})
-    assert test_docker.containers.get(service_name).status == service_container_status
-
-
-@pytest.mark.order(after="test_stop_service")
-@pytest.mark.parametrize(
-    "service_name, service_container_status, expected_status",
-    [
-        ("trt-srv_test_svc4", "exited", 204),
-        ("trt-srv_test_svc3", "running", 204),
-    ],
-)
-def test_refresh_services(test_docker, test_db, test_client, service_name, service_container_status, expected_status):
-    service = test_db.query(Service).filter(Service.service_name == service_name).first()
-    initial_srv_status = service.container_status
-    service_id = service.service_id if service else -1
-    response = test_client.post(f"/services/{service_id}/refresh")
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == expected_status
-    # check if the container status is the same as the expected status
-    assert test_docker.containers.get(service_name).status == service_container_status
-    service = test_db.query(Service).filter(Service.service_name == service_name).first()
-    assert service.container_status == initial_srv_status
-
-
-@pytest.mark.order(after="test_refresh_services")
-def test_refresh_non_existent(test_client):
-    response = test_client.post("/services/-1/refresh")
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == 404
-
-
-@pytest.mark.order(after="test_restart_services")
-def test_refresh_force_recreate(test_client, test_docker, test_db):
-    """force_recreate should tear down and respawn the container regardless of current state."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc4").first()
-    service_id = service.service_id
-
-    response = test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == 204
-
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.STARTING
-    container = test_docker.containers.get("trt-srv_test_svc4")
+@pytest.mark.order(after="test_get_service_config")
+def test_reconciler_brings_service_ready(test_db, test_docker):
+    """The reconciler spawns and readies a declaratively-created service on its ticks."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    status = _drive_reconciler(test_db, service, until={RuntimeStatus.READY}, ticks=36, delay=5)
+    assert status == RuntimeStatus.READY, f"service did not become READY, stuck at {status}"
+    container = test_docker.containers.get("trt-srv_test_svc2")
     assert container.status == "running"
 
 
-@pytest.mark.order(after="test_refresh_services")
-def test_restart_services(test_docker, test_settings, test_client):
-    # make sure it does not work without auth
-    response = requests.get("http://traefik/trt-srv_test_svc4/v2/health/ready")
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == 403
-    # make sure it returns a 404 for a non-existent service
-    headers = {"X-API-Key": test_settings.api_keys[0]}
-    response = requests.get(
-        "http://traefik/whatever/v2/health/ready",
-        headers=headers,
-    )
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == 404
-    # we need to 'manually' restart the service since there's no backed running
-    test_client.get("status/trt-srv_test_svc4")
-    # attempt a couple of times to get a response != 50x using traefik
-    for _ in range(3):
-        response = requests.get(
-            "http://traefik/trt-srv_test_svc4/v2/health/ready",
-            headers=headers,
-        )
-        LOG.debug(f"headers: {response.headers}")
-        LOG.debug(f"response: {response.text}")
-        if response.status_code not in (502, 503):
-            break
-        time.sleep(5)
-
-    assert response.status_code == 200
-    container = test_docker.containers.get("trt-srv_test_svc4")
-    assert container.status == "running"
-
-
-@pytest.mark.order(after="test_check_service_status")
-@pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
-def test_triton_ping_unathorized(name):
+@pytest.mark.order(after="test_reconciler_brings_service_ready")
+@pytest.mark.parametrize("name", ["trt-srv_test_svc2"])
+def test_triton_ping_unauthorized(name):
     url = f"http://traefik/{name}/v2/health/ready"
     response = requests.get(url)
-    # try three times to get a response, with a timeout of 60 seconds
     for _ in range(3):
         response = requests.get(url, timeout=60)
         LOG.debug(f"response: {response.text}")
         if response.status_code != 404:
             break
-        else:
-            time.sleep(5)
-
+        time.sleep(5)
     assert response.status_code == 403
-    data = response.json()
-    assert "Invalid API Key" in data["message"]
+    assert "Invalid API Key" in response.json()["message"]
 
 
-@pytest.mark.order(after="test_triton_ping_unathorized")
-@pytest.mark.parametrize("name", ["trt-srv_test_svc2", "trt-srv_test_svc3"])
+@pytest.mark.order(after="test_triton_ping_unauthorized")
+@pytest.mark.parametrize("name", ["trt-srv_test_svc2"])
 def test_triton_ping(name, test_settings):
     url = f"http://traefik/{name}/v2/health/ready"
     headers = {"X-API-Key": test_settings.api_keys[0]}
-    # try three times to get a response, with a timeout of 60 seconds
     response = None
-    for _ in range(3):
+    for _ in range(6):
         response = requests.get(url, timeout=60, headers=headers)
         LOG.debug(f"response: {response.text}")
         if response.status_code == 200:
             break
-        else:
-            time.sleep(5)
+        time.sleep(5)
     assert response and response.status_code == 200
 
 
@@ -288,15 +176,12 @@ def test_triton_ping(name, test_settings):
 def test_triton_models_ready(name, model, test_settings):
     url = f"http://traefik/{name}/v2/models/{model}/ready"
     headers = {"X-API-Key": test_settings.api_keys[0]}
-
-    # try three times to get a response, with a timeout of 60 seconds
     response = None
-    for _ in range(3):
+    for _ in range(6):
         response = requests.get(url, timeout=60, headers=headers)
         if response.status_code == 200:
             break
-        else:
-            time.sleep(5)
+        time.sleep(5)
     assert response and response.status_code == 200
 
 
@@ -332,26 +217,6 @@ def test_update_service(test_client, test_db):
     assert service.priority == 2
 
 
-@pytest.mark.order(after="test_update_service")
-def test_update_service_recreate(test_client, test_docker, test_db):
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").first()
-    service_id = service.service_id
-    old_container_id = service.container_id
-
-    response = test_client.put(f"/services/{service_id}", params={"recreate": True}, json={"timeout": 5400})
-    LOG.debug(f"response: {response.text}")
-    assert response.status_code == 200
-
-    data = response.json()
-    assert data["inactivity_timeout"] == 5400
-    test_db.refresh(service)
-    assert service.inactivity_timeout == 5400
-    assert service.container_status == ServiceStatus.STARTING
-    assert service.container_id != old_container_id
-    container = test_docker.containers.get("trt-srv_test_svc2")
-    assert container.status == "running"
-
-
 @pytest.mark.order(after="test_create_service_wrong_inputs")
 @pytest.mark.parametrize(
     "service_id, update_body, expected_status",
@@ -366,291 +231,201 @@ def test_update_service_wrong_inputs(test_client, service_id, update_body, expec
     assert response.status_code == expected_status
 
 
-@pytest.mark.order(after="test_update_service_recreate")
-def test_check_status_missing_is_observational(test_client, test_docker, test_db):
-    """A vanished container becomes MISSING, never DELETED, and is not auto-recreated by a read."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
+@pytest.mark.order(after="test_update_service")
+def test_status_projection_codes(test_client, test_db, test_settings):
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").one()
 
-    # remove the container out-of-band
-    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
+    svc.desired_state, svc.runtime_status = DesiredState.AVAILABLE, RuntimeStatus.READY
+    test_db.commit()
+    assert test_client.get("/status/trt-srv_test_svc3").status_code == 200
 
-    # a plain read must observe MISSING without spawning anything or deleting the service
-    response = test_client.get(f"/services/{service_id}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["container_status"] == ServiceStatus.MISSING.value
-    assert data["deleted_at"] is None
-    with pytest.raises(NotFound):
-        test_docker.containers.get("trt-srv_test_svc3")
+    svc.runtime_status = RuntimeStatus.IDLE
+    test_db.commit()
+    r = test_client.get("/status/trt-srv_test_svc3")
+    # Retry-After tracks the reconcile tick so a client polls about once per bring-up opportunity
+    assert r.status_code == 503 and r.headers.get("Retry-After") == str(test_settings.sentinel_poll_interval)
 
-    # restore for the rest of the suite
-    test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
+    svc.desired_state, svc.runtime_status = DesiredState.SUSPENDED, RuntimeStatus.SUSPENDED
+    test_db.commit()
+    r = test_client.get("/status/trt-srv_test_svc3")
+    assert r.status_code == 503 and "Retry-After" not in r.headers
 
+    svc.runtime_status = RuntimeStatus.RETIRED
+    test_db.commit()
+    assert test_client.get("/status/trt-srv_test_svc3").status_code == 404
 
-@pytest.mark.order(after="test_check_status_missing_is_observational")
-def test_missing_recreated_same_id_new_container(test_client, test_docker, test_db):
-    """A MISSING service is recreated with the same service_id and a fresh container_id."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-    old_container_id = service.container_id
-
-    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
-    # mark MISSING via an observational read
-    test_client.get(f"/services/{service_id}")
-
-    response = test_client.post(f"/services/{service_id}/refresh")
-    assert response.status_code == 204
-
-    test_db.refresh(service)
-    assert service.service_id == service_id
-    assert service.container_status == ServiceStatus.STARTING
-    assert service.container_id != old_container_id
-    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
-
-
-@pytest.mark.order(after="test_missing_recreated_same_id_new_container")
-def test_missing_recreate_no_double_spawn(test_docker, test_db, test_settings):
-    """Re-verify guard: reconcile on a MISSING service whose container is actually present must not spawn a new one."""
-    from triton_serve.api.services import domain
-
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    healthy_container_id = service.container_id
-    # force MISSING while the container is genuinely still present
-    service.container_status = ServiceStatus.MISSING
+    # restore so downstream tests see an available service
+    svc.desired_state, svc.runtime_status = DesiredState.AVAILABLE, RuntimeStatus.READY
     test_db.commit()
 
-    domain.reconcile_missing_container(
+
+@pytest.mark.order(after="test_status_projection_codes")
+def test_suspend_and_resume_set_intent(test_client, test_db):
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").one()
+
+    assert test_client.post(f"/services/{svc.service_id}/suspend").status_code == 204
+    test_db.refresh(svc)
+    assert svc.desired_state == DesiredState.SUSPENDED
+
+    assert test_client.post(f"/services/{svc.service_id}/resume").status_code == 204
+    test_db.refresh(svc)
+    assert svc.desired_state == DesiredState.AVAILABLE
+
+
+@pytest.mark.order(after="test_suspend_and_resume_set_intent")
+def test_retry_resets_budget_and_recovers(test_client, test_db):
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").one()
+    svc.restart_attempts = 3
+    svc.runtime_status = RuntimeStatus.FAILED
+    test_db.commit()
+
+    assert test_client.post(f"/services/{svc.service_id}/retry").status_code == 204
+    test_db.refresh(svc)
+    assert svc.restart_attempts == 0
+    assert svc.last_attempt_at is None
+    assert svc.runtime_status == RuntimeStatus.RECOVERING
+
+
+@pytest.mark.order(after="test_retry_resets_budget_and_recovers")
+def test_execute_recreates_absent(test_db, test_docker, test_settings):
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    # simulate a vanished container: point the record at a non-existent id
+    service.container_id = "deadbeefdead"
+    test_db.commit()
+
+    execute(
         db=test_db,
         client=test_docker,
         service=service,
-        service_network=test_settings.service_network,
-        service_models_volume=test_settings.service_volume,
-        max_restart_attempts=test_settings.service_max_restart_attempts,
-        restart_cooldown=test_settings.service_restart_cooldown,
+        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING),
+        settings=test_settings,
     )
-
     test_db.refresh(service)
-    # the re-verify guard saw the container present -> no new container, no extra attempt
-    assert service.container_id == healthy_container_id
-    assert service.container_status != ServiceStatus.MISSING
+    assert service.runtime_status == RuntimeStatus.WARMING
+    assert test_docker.containers.get(service.service_name) is not None
 
 
-@pytest.mark.order(after="test_missing_recreate_no_double_spawn")
-def test_missing_exhaustion_to_error_then_recovery(test_client, test_docker, test_db):
-    """Repeated recreate failures land the service in ERROR, recoverable via force_recreate."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-    good_image = service.service_image
-
-    # force every recreate attempt to fail by pointing at a bogus image
-    service.service_image = "ghcr.io/links-ads/does-not-exist:0"
-    service.container_status = ServiceStatus.MISSING
-    service.restart_attempts = 0
-    service.last_attempt_at = None
-    test_db.commit()
-    try:
-        test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
-    except NotFound:
-        pass
-
-    # drive past the budget: max_restart_attempts (3) spawn attempts + 1 observation -> ERROR
-    for _ in range(5):
-        test_client.post(f"/services/{service_id}/refresh")
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.ERROR
-
-    # recover: restore a valid image and force_recreate
-    service.service_image = good_image
-    test_db.commit()
-    response = test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
-    assert response.status_code == 204
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.STARTING
-
-    # leave a clean retry budget so downstream tests are not affected by exhaustion
-    service.restart_attempts = 0
-    service.last_attempt_at = None
-    test_db.commit()
-
-
-@pytest.mark.order(after="test_missing_exhaustion_to_error_then_recovery")
-def test_status_endpoint_recreates_missing(test_client, test_docker, test_db):
-    """GET /status on a MISSING service triggers recreation and returns 202."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-
-    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
-    test_client.get(f"/services/{service_id}")  # observe -> MISSING
-
-    response = test_client.get("/status/trt-srv_test_svc3")
-    assert response.status_code == 200  # decorator status; body carries the signal
-    assert response.json() == 202
-
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.STARTING
-    assert test_docker.containers.get("trt-srv_test_svc3").status in ("running", "created")
-
-
-@pytest.mark.order(after="test_status_endpoint_recreates_missing")
-def test_sentinel_reconciles_missing(test_client, test_docker, test_db):
-    """The sentinel task recreates a MISSING container via /refresh."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-    old_container_id = service.container_id
-
-    test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
-    test_client.get(f"/services/{service_id}")  # observe -> MISSING
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.MISSING
-
-    update_service_status.apply(kwargs={"client": test_client})
-
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.STARTING
-    assert service.container_id != old_container_id
-
-
-@pytest.mark.order(after="test_sentinel_reconciles_missing")
-def test_check_status_preserves_terminal_states(test_client, test_docker, test_db):
-    """A vanished container must not drag a terminal ERROR/STOPPED service into MISSING."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-    original_status = service.container_status
-
-    # remove the container out-of-band so the daemon reports it gone
-    try:
-        test_docker.containers.get("trt-srv_test_svc3").remove(force=True)
-    except NotFound:
-        pass
-
-    # an observational read finds the container gone but must leave a terminal state intact:
-    # only a previously-running service (ACTIVE/STARTING) may transition to MISSING
-    for terminal in (ServiceStatus.ERROR, ServiceStatus.STOPPED):
-        service.container_status = terminal
-        test_db.commit()
-        data = test_client.get(f"/services/{service_id}").json()
-        assert data["container_status"] == terminal.value
-
-    # restore for downstream tests
-    service.container_status = original_status
-    test_db.commit()
-    test_client.post(f"/services/{service_id}/refresh", params={"force_recreate": True})
-
-
-@pytest.mark.order(after="test_check_status_preserves_terminal_states")
-def test_deleted_service_excluded_from_listing(test_client, test_docker, test_db):
-    """Soft-deleted services must not appear in GET /services nor be revived by the sentinel."""
+@pytest.mark.order(after="test_execute_recreates_absent")
+def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
+    """The reconciler scales an idle service to zero, then wakes it once it sees traffic again."""
     from datetime import datetime, timezone
 
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    service_id = service.service_id
-    original_deleted = service.deleted_at
-
-    # soft-delete the row (leave the container alone) and mark it MISSING as the daemon would
-    service.deleted_at = datetime.now(tz=timezone.utc)
-    service.container_status = ServiceStatus.MISSING
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc4").one()  # timeout=5s
+    svc.desired_state = DesiredState.AVAILABLE
     test_db.commit()
+    time.sleep(6)  # exceed the 5s inactivity window
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.runtime_status == RuntimeStatus.IDLE  # scaled to zero, container stopped
+
+    svc.last_active_time = datetime.now(timezone.utc)
+    test_db.commit()
+    # target back to 1 -> the reconciler must actually bring it up; IDLE would mean it never woke
+    status = _drive_reconciler(test_db, svc, until={RuntimeStatus.WARMING, RuntimeStatus.READY}, ticks=6, delay=2)
+    assert status in (RuntimeStatus.WARMING, RuntimeStatus.READY), f"service did not wake, stuck at {status}"
+
+
+@pytest.mark.order(after="test_reconciler_idles_then_wakes")
+def test_delete_is_db_only(test_client, test_db):
+    """Delete is DB-only: it tombstones the record and drops it from listings; the reconciler
+    tears down the container out of band."""
+    services = test_db.query(Service).filter(Service.deleted_at.is_(None)).all()
+    for service in services:
+        service_id = service.service_id
+        response = test_client.delete(f"/services/{service_id}")
+        assert response.status_code == 204
+        test_db.refresh(service)
+        assert service.deleted_at is not None
+        assert service.desired_state == DesiredState.RETIRED
 
     listing = test_client.get("/services").json()
-    assert all(s["service_id"] != service_id for s in listing)
-
-    # the sentinel polls the same listing, so a deleted service is never reconciled
-    update_service_status.apply(kwargs={"client": test_client})
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.MISSING
-
-    service.deleted_at = original_deleted
-    test_db.commit()
+    assert listing == []
 
 
-@pytest.mark.order(after="test_deleted_service_excluded_from_listing")
-def test_reconcile_adopts_returned_container(test_docker, test_db, test_settings):
-    """Reconcile adopts a container that is back under the service name (new id), without respawning."""
-    from triton_serve.api.services import domain
+@pytest.mark.order(after="test_delete_is_db_only")
+def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
+    """Spec headline guarantee: a bad image ref surfaces asynchronously as FAILED within the crash
+    budget, and the reconciler does not spin forever recreating (the C1 regression). Self-contained
+    (direct DB insert, no models) and ordered last so it cannot disturb the ordered lifecycle chain."""
+    from datetime import datetime, timedelta, timezone
 
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    name = service.service_name
-    real = test_docker.containers.get(name)
-    for _ in range(10):
-        real.reload()
-        if real.status == "running":
-            break
-        time.sleep(1)
-    assert real.status == "running"
+    from docker.errors import NotFound
 
-    # lose track of the id: MISSING with a stale container_id while the container is genuinely up
-    service.container_status = ServiceStatus.MISSING
-    service.container_id = "stale-id-0000"
-    service.restart_attempts = 0
-    service.last_attempt_at = None
-    test_db.commit()
-
-    domain.reconcile_missing_container(
-        db=test_db,
-        client=test_docker,
-        service=service,
-        service_network=test_settings.service_network,
-        service_models_volume=test_settings.service_volume,
-        max_restart_attempts=test_settings.service_max_restart_attempts,
-        restart_cooldown=test_settings.service_restart_cooldown,
+    name = "trt-srv_test_badimg"
+    svc = Service(
+        service_name=name,
+        service_image="ghcr.io/links-ads/does-not-exist:0",
+        priority=1,
+        last_active_time=datetime.now(timezone.utc),
+        desired_state=DesiredState.AVAILABLE,
+        runtime_status=RuntimeStatus.WARMING,
     )
-
-    test_db.refresh(service)
-    assert service.container_id == real.id  # adopted the existing container
-    assert service.container_status != ServiceStatus.MISSING
-    assert len([c for c in test_docker.containers.list(all=True) if c.name == name]) == 1
-
-
-@pytest.mark.order(after="test_reconcile_adopts_returned_container")
-def test_reconcile_clears_name_squatter(test_docker, test_db, test_settings):
-    """A stale/foreign container holding the name is removed so recreate doesn't 409."""
-    from triton_serve.api.services import domain
-
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc3").first()
-    name = service.service_name
-    image = service.service_image
-
-    # tear down the real container and leave a foreign one squatting the name under a different id
-    try:
-        test_docker.containers.get(name).remove(force=True)
-    except NotFound:
-        pass
-    squatter = test_docker.containers.create(image=image, name=name)
-
-    service.container_status = ServiceStatus.MISSING
-    service.container_id = "stale-id-0000"
-    service.restart_attempts = 0
-    service.last_attempt_at = None
+    test_db.add(svc)
     test_db.commit()
 
-    domain.reconcile_missing_container(
-        db=test_db,
-        client=test_docker,
-        service=service,
-        service_network=test_settings.service_network,
-        service_models_volume=test_settings.service_volume,
-        max_restart_attempts=test_settings.service_max_restart_attempts,
-        restart_cooldown=test_settings.service_restart_cooldown,
-    )
+    # C1: a failed pull spends the budget instead of looping at attempts=0 forever
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.restart_attempts >= 1, "failed pull did not advance the crash budget"
 
-    test_db.refresh(service)
-    assert service.container_status == ServiceStatus.STARTING  # recreated cleanly, no 409
-    assert service.container_id not in ("stale-id-0000", squatter.id)
-    assert len([c for c in test_docker.containers.list(all=True) if c.name == name]) == 1
+    # exhaust the budget (bypass the real backoff wait) and confirm it lands terminal in FAILED
+    svc.restart_attempts = test_settings.service_max_restart_attempts
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=120)
+    test_db.commit()
+    status = _drive_reconciler(test_db, svc, until={RuntimeStatus.FAILED}, ticks=4, delay=2)
+    assert status == RuntimeStatus.FAILED, f"bad-image service did not reach FAILED, stuck at {status}"
+    with pytest.raises(NotFound):
+        test_docker.containers.get(name)
 
 
-@pytest.mark.order(after="test_update_service_recreate")
-def test_delete_services(test_client, test_docker, test_db):
-    # get all services
-    services = test_db.query(Service).all()
-    for service in services:
-        query_params = {"delete_container": True}
-        response = test_client.delete(f"/services/{service.service_id}", params=query_params)
-        data = response.json()
-        assert response.status_code == 202
-        assert data["service_id"] == service.service_id
-        assert data["deleted_at"] is not None
-        # check if container has been deleted
-        with pytest.raises(NotFound):
-            test_docker.containers.get(service.container_id)
+@pytest.mark.order(after="test_bad_image_service_ends_failed")
+def test_failed_stays_terminal_after_cooldown(test_db, test_settings):
+    """FAILED is terminal: elapsed time must NOT resurrect a failed service by silently resetting
+    its crash budget. Before the fix, any FAILED service revived one cooldown after its last attempt;
+    only POST /retry may reset the budget now."""
+    from datetime import datetime, timedelta, timezone
+
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_badimg").one()
+    assert svc.runtime_status == RuntimeStatus.FAILED
+    # push the last attempt well past the reset window -- the old time-based reset would revive it
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    test_db.commit()
+
+    update_service_status.apply()
+    test_db.refresh(svc)
+    assert svc.runtime_status == RuntimeStatus.FAILED, "an elapsed cooldown resurrected a FAILED service"
+    assert svc.restart_attempts == test_settings.service_max_restart_attempts, "crash budget was silently reset"
+
+
+@pytest.mark.order(after="test_failed_stays_terminal_after_cooldown")
+def test_budget_returns_after_sustained_ready(test_db, test_docker, test_settings):
+    """A recovered service that stays READY past the cooldown earns its crash budget back, but a
+    brief READY within the cooldown does not (so a fast crash-recover-crash flap cannot loop)."""
+    from datetime import datetime, timedelta, timezone
+
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+
+    svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_badimg").one()
+    ready = Decision(Action.NONE, RuntimeStatus.READY)
+
+    # within the cooldown: a fresh recovery attempt has not yet proven stable -> keep the budget spent
+    svc.restart_attempts = 2
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    svc.runtime_status = RuntimeStatus.RECOVERING
+    test_db.commit()
+    execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
+    test_db.refresh(svc)
+    assert svc.restart_attempts == 2
+
+    # past the cooldown: sustained health returns the budget
+    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    test_db.commit()
+    execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
+    test_db.refresh(svc)
+    assert svc.restart_attempts == 0
+    assert svc.last_attempt_at is None
+    assert svc.runtime_status == RuntimeStatus.READY

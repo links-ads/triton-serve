@@ -62,8 +62,12 @@ check_gpus() {
 
 start_sentinel() {
     echo "Starting Sentinel..."
-    local worker_args=("--loglevel=${LOG_LEVEL:-info}")
-    if [ "$TARGET" != "test" ]; then
+    # --concurrency=1: the reconciler owns Docker; a single worker slot keeps one reconcile pass
+    # in flight at a time, alongside the task's pg advisory lock
+    # strip any surrounding quotes: env_file may pass TARGET as the literal string "test"
+    local target="${TARGET//\"/}"
+    local worker_args=("--loglevel=${LOG_LEVEL:-info}" "--concurrency=1")
+    if [ "$target" != "test" ]; then
         worker_args+=("--beat")
     fi
     exec uv run celery -A triton_serve.tasks worker "${worker_args[@]}"
