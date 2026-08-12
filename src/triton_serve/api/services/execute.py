@@ -9,7 +9,7 @@ from triton_serve.api.services.reconcile import Action, Decision
 from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import RuntimeStatus, Service
 
-LOG = logging.getLogger("uvicorn")
+LOG = logging.getLogger(__name__)
 
 
 def _recreate(db: Session, client: DockerClient, service: Service, settings: AppSettings) -> None:
@@ -45,6 +45,13 @@ def execute(
     """Apply a Decision's Action to Docker, then persist the projected runtime_status.
 
     The only place reconciliation Actions become Docker side effects.
+
+    Args:
+        db (Session): The database session.
+        client (DockerClient): The docker client.
+        service (Service): The service the decision was taken for.
+        decision (Decision): The action to apply and the status to project.
+        settings (AppSettings): The application settings.
     """
     action = decision.action
     try:
@@ -56,9 +63,10 @@ def execute(
                 if (c := get_container_by_name(client, service.service_name)) is not None:
                     c.start()
                 else:
-                    _recreate(db, client, service, settings)  # the outage fix: heal a vanished container
+                    _recreate(db, client, service, settings)
             case Action.RECREATE | Action.PULL:
-                # docker run pulls a missing image implicitly; PULL and RECREATE share the path
+                # PULL and RECREATE share the path: recreate resolves the image through
+                # get_service_image, which falls back to images.pull when it is not present locally
                 _recreate(db, client, service, settings)
             case Action.STOP:
                 if (c := get_container_by_name(client, service.service_name)) is not None:
@@ -72,7 +80,9 @@ def execute(
                 # domain.delete_service; nothing is left to do out of band
                 pass
             case Action.MARK_FAILED:
-                LOG.warning("Service %s exhausted restart budget -> FAILED", service.service_id)
+                # decide() returns MARK_FAILED on every tick a failed service is still wanted
+                if service.runtime_status != RuntimeStatus.FAILED:
+                    LOG.warning("Service %s exhausted restart budget -> FAILED", service.service_id)
     except Exception:
         LOG.exception("Action %s failed for service %s", action, service.service_id)
         db.rollback()

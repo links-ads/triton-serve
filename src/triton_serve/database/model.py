@@ -185,6 +185,7 @@ class ServiceResources(Base):
     shm_size: Mapped[int] = mapped_column(nullable=False)
     mem_size: Mapped[int] = mapped_column(nullable=False)
     environment_variables: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    healthcheck: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     service: Mapped[Service] = relationship(back_populates="resources")
 
     __table_args__ = (

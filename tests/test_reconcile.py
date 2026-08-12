@@ -1,9 +1,9 @@
 import pytest
 
-from triton_serve.api.services.reconcile import Action, ObservedFact, decide
+from triton_serve.api.services.reconcile import Action, ObservedState, decide
 from triton_serve.database.model import DesiredState, RuntimeStatus
 
-A = ObservedFact
+A = ObservedState
 D = DesiredState
 R = RuntimeStatus
 
@@ -71,7 +71,7 @@ def test_failed_is_terminal_when_exhausted_across_bringup_facts():
         assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
 
 
-@pytest.mark.parametrize("observed", list(ObservedFact))
+@pytest.mark.parametrize("observed", list(ObservedState))
 def test_suspended_stops_live_else_noop(observed):
     d = decide(D.SUSPENDED, observed, replica_target=0, attempts=0, max_attempts=3)
     assert d.status == R.SUSPENDED
@@ -81,7 +81,7 @@ def test_suspended_stops_live_else_noop(observed):
         assert d.action == Action.NONE
 
 
-@pytest.mark.parametrize("observed", list(ObservedFact))
+@pytest.mark.parametrize("observed", list(ObservedState))
 def test_retired_removes_or_finalizes(observed):
     d = decide(D.RETIRED, observed, replica_target=0, attempts=0, max_attempts=3)
     assert d.status == R.RETIRED
@@ -93,6 +93,6 @@ def test_retired_removes_or_finalizes(observed):
 
 def test_decide_is_total():
     for desired in DesiredState:
-        for observed in ObservedFact:
+        for observed in ObservedState:
             for target in (0, 1):
                 assert decide(desired, observed, target, attempts=0, max_attempts=3) is not None

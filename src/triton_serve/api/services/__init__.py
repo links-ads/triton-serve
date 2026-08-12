@@ -126,6 +126,9 @@ def create_service(
     - `resources` (`Optional[ServiceResources]`): Resources to be allocated to the service.
     - `timeout` (`Optional[int]`): Timeout for the service. Defaults to `3600`.
     - `priority` (`Optional[int]`): Priority of the service. Defaults to `1`.
+    - `healthcheck` (`Optional[ServiceHealthcheck]`): Container healthcheck. Without one, the service
+      is reported `READY` once it has been up for `service_boot_grace` seconds, regardless of whether
+      it can actually serve.
 
     **Returns:**
     - `Service` (`ServiceSchema`): Information about the created service.
@@ -143,6 +146,7 @@ def create_service(
         service_priority=service_params.priority,
         model_infos=service_params.models,
         service_api_keys=settings.api_keys,
+        service_healthcheck=service_params.healthcheck,
     )
 
 
@@ -172,19 +176,43 @@ def delete_service(
 
 @router.post("/services/{service_id}/suspend", status_code=204, tags=["operations"])
 def suspend_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
-    """Operator intent: keep the service off (no auto-wake). The reconciler stops it."""
+    """
+    Operator intent: keep the service off (no auto-wake). The reconciler stops it.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to suspend.
+
+    **Returns:**
+    - `None`
+    """
     domain.set_desired_state(db=db, service_id=service_id, desired=DesiredState.SUSPENDED)
 
 
 @router.post("/services/{service_id}/resume", status_code=204, tags=["operations"])
 def resume_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
-    """Operator intent: make the service available again; records a wake so it comes up."""
+    """
+    Operator intent: make the service available again; records a wake so it comes up.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to resume.
+
+    **Returns:**
+    - `None`
+    """
     domain.set_desired_state(db=db, service_id=service_id, desired=DesiredState.AVAILABLE, wake=True)
 
 
 @router.post("/services/{service_id}/retry", status_code=204, tags=["operations"])
 def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depends(require_admin)):
-    """Manual escape hatch for a FAILED service: reset the crash budget and wake it."""
+    """
+    Manual escape hatch for a FAILED service: reset the crash budget and wake it.
+
+    **Arguments:**
+    - `service_id` (`int`): The id of the service to retry.
+
+    **Returns:**
+    - `None`
+    """
     domain.reset_and_wake(db=db, service_id=service_id)
 
 

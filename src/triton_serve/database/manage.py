@@ -25,10 +25,11 @@ class DatabaseManager:
         self._sessionmaker = None
 
     @contextlib.contextmanager
-    def connect(self):
+    def connect(self, isolation_level: str | None = None):
         if self._engine is None:
             raise Exception("DatabaseSessionManager is not initialized")
-        with self._engine.begin() as connection:
+        engine = self._engine.execution_options(isolation_level=isolation_level) if isolation_level else self._engine
+        with engine.begin() as connection:
             try:
                 yield connection
             except Exception:

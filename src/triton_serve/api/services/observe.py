@@ -4,7 +4,7 @@ from docker import DockerClient
 from docker.errors import ImageNotFound, NotFound
 from docker.models.containers import Container
 
-from triton_serve.api.services.reconcile import ObservedFact
+from triton_serve.api.services.reconcile import ObservedState
 from triton_serve.database.model import Service
 
 
@@ -30,33 +30,48 @@ def _uptime_seconds(state: dict) -> float | None:
     return (datetime.now(timezone.utc) - started).total_seconds()
 
 
-def _running_fact(container: Container, boot_grace_seconds: int) -> ObservedFact:
+def _running_fact(container: Container, boot_grace_seconds: int) -> ObservedState:
+    """Health verdict for a running container. Docker owns it whenever a healthcheck is configured.
+
+    Docker holds `starting` for the whole start period and only flips to `unhealthy` after the
+    configured retries, so a second timer here could only ever fire early on a container docker
+    still considers healthy. The boot grace is left to the no-healthcheck case, which has no
+    other signal that the container has settled.
+    """
     state = container.attrs.get("State", {})
-    health = (state.get("Health") or {}).get("Status")
-    if health == "healthy":
-        return ObservedFact.RUNNING
-    uptime = _uptime_seconds(state)
-    if health in ("starting", "unhealthy"):
-        # still coming up within the grace window; a healthcheck still failing past it is a crash
-        if uptime is None:
-            return ObservedFact.BOOTING
-        return ObservedFact.BOOTING if uptime < boot_grace_seconds else ObservedFact.CRASHED
-    # no healthcheck: treat as booting until it has been up past the boot grace
-    if uptime is None:
-        return ObservedFact.RUNNING
-    return ObservedFact.RUNNING if uptime >= boot_grace_seconds else ObservedFact.BOOTING
+    match (state.get("Health") or {}).get("Status"):
+        case "healthy":
+            return ObservedState.RUNNING
+        case "unhealthy":
+            return ObservedState.CRASHED
+        case "starting":
+            return ObservedState.BOOTING
+        case _:
+            uptime = _uptime_seconds(state)
+            if uptime is None:
+                return ObservedState.RUNNING
+            return ObservedState.RUNNING if uptime >= boot_grace_seconds else ObservedState.BOOTING
 
 
-def observe(client: DockerClient, service: Service, boot_grace_seconds: int) -> ObservedFact:
-    """Derive the current observed fact for a service from the Docker daemon (read-only)."""
+def observe(client: DockerClient, service: Service, boot_grace_seconds: int) -> ObservedState:
+    """Derive the current observed fact for a service from the Docker daemon (read-only).
+
+    Args:
+        client (DockerClient): The docker client.
+        service (Service): The service to observe.
+        boot_grace_seconds (int): How long a container without a healthcheck stays BOOTING.
+
+    Returns:
+        ObservedState: The fact the reconciler decides on.
+    """
     try:
         container = client.containers.get(service.service_name)
     except NotFound:
-        return ObservedFact.ABSENT if _image_present(client, service.service_image) else ObservedFact.IMAGE_MISSING
+        return ObservedState.ABSENT if _image_present(client, service.service_image) else ObservedState.IMAGE_MISSING
 
     if container.status == "running":
         return _running_fact(container, boot_grace_seconds)
     if container.status in ("created", "restarting"):
-        return ObservedFact.BOOTING
+        return ObservedState.BOOTING
     exit_code = container.attrs.get("State", {}).get("ExitCode", 0)
-    return ObservedFact.EXITED_OK if exit_code == 0 else ObservedFact.CRASHED
+    return ObservedState.EXITED_OK if exit_code == 0 else ObservedState.CRASHED

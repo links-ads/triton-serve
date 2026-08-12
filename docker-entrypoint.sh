@@ -63,7 +63,7 @@ check_gpus() {
 start_sentinel() {
     echo "Starting Sentinel..."
     # --concurrency=1: the reconciler owns Docker; a single worker slot keeps one reconcile pass
-    # in flight at a time (belt-and-suspenders with the task's pg advisory lock)
+    # in flight at a time, alongside the task's pg advisory lock
     # strip any surrounding quotes: env_file may pass TARGET as the literal string "test"
     local target="${TARGET//\"/}"
     local worker_args=("--loglevel=${LOG_LEVEL:-info}" "--concurrency=1")

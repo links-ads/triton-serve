@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceUpdateBody
+from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceHealthcheck, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -177,6 +177,7 @@ def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
         environment=res.environment_variables or {},
         timeout=service.inactivity_timeout,
         priority=service.priority,
+        healthcheck=ServiceHealthcheck(**res.healthcheck) if res.healthcheck else None,
         resources=ServiceCreateResources(
             gpus=gpus,
             shm_size=res.shm_size,
@@ -254,6 +255,24 @@ def get_service_image(docker_client: DockerClient, image_name: str) -> Image:
         raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
 
 
+def docker_healthcheck(healthcheck: dict | None) -> dict | None:
+    """Converts a stored healthcheck (seconds, snake_case) to the docker API shape (ns, PascalCase).
+
+    Services store the user-facing shape so it round-trips through the API unchanged; docker only
+    accepts durations in nanoseconds. Returns None when the service has no healthcheck configured,
+    which leaves the container without one and falls back to the boot-grace timer in `observe`.
+    """
+    if not healthcheck:
+        return None
+    return {
+        "Test": healthcheck["test"],
+        "Interval": int(healthcheck["interval"] * 1e9),
+        "Timeout": int(healthcheck["timeout"] * 1e9),
+        "Retries": healthcheck["retries"],
+        "StartPeriod": int(healthcheck["start_period"] * 1e9),
+    }
+
+
 def spawn_service_container(
     client: DockerClient,
     image_id: str,
@@ -264,6 +283,7 @@ def spawn_service_container(
     resources: ServiceCreateResources,
     devices: list | None = None,
     environment: dict[str, str] | None = None,
+    healthcheck: dict | None = None,
 ):
     """Spawns a triton worker container.
 
@@ -279,6 +299,7 @@ def spawn_service_container(
         resources (ServiceCreateResources): The resources to use for the container.
         devices (list[str], optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
+        healthcheck (dict, optional): The stored healthcheck config, or None for no healthcheck.
 
     Returns:
         str: The id of the created container.
@@ -308,7 +329,9 @@ def spawn_service_container(
             DeviceRequest(device_ids=[str(gpu.uuid)], capabilities=[["gpu", "nvidia", "compute"]]) for gpu in devices
         ]
 
-    policy = {"MaximumRetryCount": 3, "Name": "on-failure"}
+    # no restart_policy: the reconciler owns restarts. a docker-level on-failure policy would
+    # restart the container behind its back, showing up as `restarting` (-> BOOTING) and silently
+    # multiplying the crash budget by the policy's retry count.
     container = client.containers.run(
         detach=True,
         remove=False,
@@ -318,7 +341,7 @@ def spawn_service_container(
         network=worker_network,
         volumes=volumes,
         environment=environment,
-        restart_policy=policy,  # type: ignore
+        healthcheck=docker_healthcheck(healthcheck),  # type: ignore
         runtime=runtime,
         device_requests=gpus,
         nano_cpus=int(resources.cpu_count * 1e9),
@@ -398,6 +421,7 @@ def create_service_entry(
     service_resources: ServiceCreateResources,
     service_environment: dict,
     model_instances: list[Model],
+    service_healthcheck: ServiceHealthcheck | None = None,
 ) -> Service:
     """
     Creates a new service entry in the database.
@@ -411,6 +435,7 @@ def create_service_entry(
         service_resources (ServiceResources): The resources allocated to the service.
         service_environment (dict): The environment variables for the service.
         model_instances (list): The list of model instances associated with the service.
+        service_healthcheck (ServiceHealthcheck, optional): The container healthcheck, if any.
 
     Returns:
         Service: The created service entry.
@@ -430,6 +455,7 @@ def create_service_entry(
         mem_size=service_resources.mem_size,
         shm_size=service_resources.shm_size,
         environment_variables=service_environment,
+        healthcheck=service_healthcheck.model_dump() if service_healthcheck else None,
     )
     service.resources = resources
 
@@ -474,6 +500,7 @@ def create_service(
     service_priority: int,
     model_infos: list[str],
     service_api_keys: list[str] | None = None,
+    service_healthcheck: ServiceHealthcheck | None = None,
 ) -> Service:
     """Declaratively creates a service record; the reconciler spawns the container out of band.
 
@@ -493,6 +520,7 @@ def create_service(
         service_priority (int): The priority for the service.
         model_infos (list): The list of models to load.
         service_api_keys (list[str], optional): The list of API keys to use for the service.
+        service_healthcheck (ServiceHealthcheck, optional): The container healthcheck, if any.
 
     Returns:
         Service: The created service.
@@ -513,6 +541,7 @@ def create_service(
             service_resources=service_resources,
             service_environment=service_environment,
             model_instances=model_instances,
+            service_healthcheck=service_healthcheck,
         )
         create_device_allocations(
             db=db,
@@ -540,7 +569,7 @@ def create_service(
 
 
 def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) -> None:
-    """Soft-deletes a service (Option A): DB record plus synchronous Traefik teardown.
+    """Soft-deletes a service: DB record plus synchronous Traefik teardown.
 
     Removes the Traefik config now (symmetric with create writing it synchronously), stamps
     deleted_at, and marks the service RETIRED. Capacity is released automatically because
@@ -628,6 +657,7 @@ def recreate_service_container(
             ),
             devices=device_objs,
             environment=res.environment_variables or {},
+            healthcheck=res.healthcheck,
         )
 
         service.container_id = str(container_id)
@@ -691,6 +721,9 @@ def update_service(
 
         if update_body.environment is not None:
             service.resources.environment_variables = update_body.environment
+
+        if update_body.healthcheck is not None:
+            service.resources.healthcheck = update_body.healthcheck.model_dump()
 
         if update_body.models is not None:
             new_model_instances = [get_single_model(db, name) for name in update_body.models]

@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 from httpx import Client
 from sqlalchemy import text
 
@@ -26,11 +27,23 @@ app = Celery("serve-sentinel")
 app.config_from_object(Config)
 
 
+@worker_process_init.connect
+def init_worker_database(**_):
+    """The webserver's lifespan never runs here, so the worker owns its own engine.
+
+    Per forked child, not at import: the prefork parent's connections would be inherited by every
+    child and used concurrently on the same sockets.
+    """
+    database_manager.init(settings.database_url)
+
+
+@worker_process_shutdown.connect
+def close_worker_database(**_):
+    database_manager.close()
+
+
 @app.on_after_configure.connect  # type: ignore
 def setup_periodic_tasks(sender, **_):
-    """
-    Setup periodic tasks
-    """
     sender.add_periodic_task(
         settings.sentinel_poll_interval,
         update_service_status.s(),  # type: ignore
@@ -51,6 +64,7 @@ def _replica_target(service: Service, now: datetime) -> int:
 
 
 def _backoff_seconds(attempts: int, base: int, cap: int) -> int:
+    """How many seconds before retrying"""
     return min(base * (2 ** max(attempts - 1, 0)), cap)
 
 
@@ -58,11 +72,11 @@ def _backoff_seconds(attempts: int, base: int, cap: int) -> int:
 def update_service_status() -> None:
     """Reconcile every non-retired service: observe -> decide -> execute. Reconciler owns Docker."""
     client = get_reconciler_docker_client()
-    now = datetime.now(tz=timezone.utc)
     # single-flight across the whole pass: hold the advisory lock on a dedicated connection so it
     # survives the per-service commits below -- an ORM session releases its connection on each commit,
-    # which would strand the lock on a pooled connection and unlock a different one
-    with database_manager.connect() as lock_conn:
+    # which would strand the lock on a pooled connection and unlock a different one. autocommit keeps
+    # that connection from sitting idle-in-transaction, pinning a snapshot for the whole pass
+    with database_manager.connect(isolation_level="AUTOCOMMIT") as lock_conn:
         if not lock_conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _RECONCILE_LOCK_KEY}).scalar():
             LOG.info("another reconcile pass holds the advisory lock; skipping this tick")
             return
@@ -71,6 +85,7 @@ def update_service_status() -> None:
                 services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
                 for service in services:
                     try:
+                        now = datetime.now(tz=timezone.utc)
                         # honor backoff: skip a service mid-retry still cooling down between attempts.
                         # RECOVERING is the status the executor persists after any spent attempt (crash
                         # recreate or image pull), so image-pull failures draw on the same crash budget
@@ -97,6 +112,16 @@ def update_service_status() -> None:
                             replica_target=target,
                             attempts=service.restart_attempts,
                             max_attempts=settings.service_max_restart_attempts,
+                        )
+                        LOG.debug(
+                            "reconcile %s: desired=%s target=%d observed=%s attempts=%d -> %s => %s",
+                            service.service_name,
+                            service.desired_state.value,
+                            target,
+                            observed.value,
+                            service.restart_attempts,
+                            decision.action.value,
+                            decision.status.value,
                         )
                         execute(db=db, client=client, service=service, decision=decision, settings=settings)
                     except Exception as e:

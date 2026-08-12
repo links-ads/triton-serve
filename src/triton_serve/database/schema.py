@@ -84,6 +84,7 @@ class ServiceResourcesSchema(BaseModel):
     shm_size: int = Field(gt=0)
     mem_size: int = Field(gt=0)
     environment_variables: dict | None = None
+    healthcheck: dict | None = None
 
 
 class DeviceAllocationSchema(BaseModel):

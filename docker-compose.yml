@@ -19,8 +19,6 @@ x-backend-base: &backend-base
           - capabilities: ["gpu"]
             driver: nvidia
             count: all
-  volumes:
-    - /var/run/docker.sock:/var/run/docker.sock
   env_file:
     - .env
   labels:
@@ -85,6 +83,7 @@ services:
     image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
       - ./src:/app/src
+      - /var/run/docker.sock:/var/run/docker.sock
     container_name: serve-sentinel
     env_file:
       - .env

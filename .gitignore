@@ -165,3 +165,7 @@ cython_debug/
 *.tgz
 CONTEXT.md
 docs/superpowers
+
+# manual lifecycle drill harness. containers/dummy is tracked, its driver deliberately is not:
+# it is a local testing aid, not product code. intentional -- do not propose committing it.
+scripts/lifecycle_drill.py
