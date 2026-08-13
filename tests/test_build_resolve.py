@@ -44,7 +44,9 @@ def test_dependencies_resolve_to_a_pending_row_needing_a_build(test_db, settings
     assert resolve_service_image(test_db, service, settings) == service.image_hash
     assert service.image.status is ImageStatus.PENDING
     assert service.image.managed
-    assert service.image.image_ref.startswith("ghcr.io/links-ads/serve-runtime:")
+    assert service.image.image_ref.startswith(
+        f"{settings.registry_url}/{settings.registry_namespace}/{settings.registry_image_name}:"
+    )
 
 
 def test_two_services_with_the_same_dependencies_share_one_row(test_db, settings, rollback):
