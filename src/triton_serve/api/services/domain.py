@@ -16,13 +16,17 @@ from sqlalchemy.orm import Session
 from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceHealthcheck, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
 from triton_serve.api.services.observe import effective_image_ref
+from triton_serve.builder.execute import enqueue_build
 from triton_serve.builder.registry import RegistryAuth, auth_config
+from triton_serve.builder.resolve import resolve_service_image
+from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
     APIKey,
     DesiredState,
     Device,
     DeviceAllocation,
+    ImageStatus,
     KeyType,
     Model,
     RuntimeStatus,
@@ -143,7 +147,16 @@ def reset_and_wake(db: Session, service_id: int) -> None:
     service.last_attempt_at = None
     service.last_active_time = datetime.now(tz=timezone.utc)
     service.runtime_status = RuntimeStatus.RECOVERING
+    image = service.image
+    if image is not None and image.managed and image.status is ImageStatus.FAILED:
+        image.status = ImageStatus.PENDING
+        image.build_log = None
+        retry_hash = image.image_hash
+    else:
+        retry_hash = None
     db.commit()
+    if retry_hash is not None:
+        enqueue_build(retry_hash)
 
 
 def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
@@ -501,6 +514,7 @@ def create_device_allocations(
 def create_service(
     db: Session,
     traefik: TraefikConfigManager,
+    settings: AppSettings,
     service_name: str,
     image_name: str,
     service_url_prefix: str,
@@ -521,6 +535,7 @@ def create_service(
     Args:
         db (Session): The database session.
         traefik (TraefikConfigManager): The Traefik config manager.
+        settings (AppSettings): The application settings.
         service_name (str): The name of the service.
         image_name (str): The name of the Docker image to use.
         service_url_prefix (str): The URL prefix to use for the service.
@@ -553,6 +568,7 @@ def create_service(
             model_instances=model_instances,
             service_healthcheck=service_healthcheck,
         )
+        pending_build = resolve_service_image(db=db, service=service, settings=settings)
         create_device_allocations(
             db=db,
             service_id=service.service_id,
@@ -568,11 +584,17 @@ def create_service(
         )
         db.commit()
         db.refresh(service)
+        # strictly after the commit: an enqueue before it could race a transaction that rolls back
+        if pending_build is not None:
+            enqueue_build(pending_build)
         return service
 
     except AssertionError as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e
     except Exception as e:
         db.rollback()
         raise e
@@ -701,6 +723,7 @@ def update_service(
     db: Session,
     service_id: int,
     update_body: ServiceUpdateBody,
+    settings: AppSettings,
 ) -> Service:
     """Applies a partial configuration change to a service record (declarative, no Docker).
 
@@ -711,6 +734,7 @@ def update_service(
         db (Session): The database session.
         service_id (int): The ID of the service to update.
         update_body (ServiceUpdateBody): The partial update payload.
+        settings (AppSettings): The application settings.
 
     Returns:
         Service: The updated service.
@@ -761,8 +785,11 @@ def update_service(
             device_infos, device_percent = get_allocable_devices(db, required_gpus=new_gpus)
             create_device_allocations(db, service.service_id, device_infos, device_percent)
 
+        pending_build = resolve_service_image(db=db, service=service, settings=settings)
         db.commit()
         db.refresh(service)
+        if pending_build is not None:
+            enqueue_build(pending_build)
         return service
 
     except HTTPException:
@@ -770,6 +797,9 @@ def update_service(
     except AssertionError as e:
         db.rollback()
         raise HTTPException(status_code=409, detail=f"Error updating service: {str(e)}") from e
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e
     except Exception as e:
         db.rollback()
         raise e

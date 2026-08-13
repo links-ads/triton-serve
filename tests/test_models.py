@@ -346,3 +346,39 @@ def test_malformed_pyproject_is_rejected(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project\nname =")
     with pytest.raises(AssertionError, match="pyproject.toml"):
         parse_dependencies(tmp_path)
+
+
+def test_changed_dependencies_repoint_affected_services(test_client, test_db, test_settings):
+    from triton_serve.api.models.domain import refresh_service_images
+    from triton_serve.database.model import Model, Service
+
+    response = test_client.post(
+        "/services",
+        json={
+            "name": "trt-srv_test_fanout",
+            "models": ["onnx"],
+            "resources": {"gpus": 0, "shm_size": 256, "mem_size": 1024},
+            "timeout": 3600,
+        },
+    )
+    assert response.status_code == 201, response.text
+    service_id = response.json()["service_id"]
+    model = test_db.query(Model).filter(Model.model_name == "onnx").one()
+    original = list(model.dependencies or [])
+    try:
+        test_db.expire_all()
+        before = test_db.get(Service, ident=service_id).image_hash
+
+        model.dependencies = ["numpy==1.26.0"]
+        test_db.commit()
+        refresh_service_images(db=test_db, models=[model], settings=test_settings)
+
+        test_db.expire_all()
+        service = test_db.get(Service, ident=service_id)
+        assert service.image_hash != before
+        assert service.image.managed
+        assert "numpy==1.26.0" in service.image.pip_packages
+    finally:
+        model.dependencies = original
+        test_db.commit()
+        test_client.delete(f"/services/{service_id}")

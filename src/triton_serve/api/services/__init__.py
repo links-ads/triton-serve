@@ -137,6 +137,7 @@ def create_service(
     return domain.create_service(
         db=db,
         traefik=traefik,
+        settings=settings,
         service_name=service_params.name,
         image_name=docker_image,
         service_url_prefix=settings.service_prefix,
@@ -260,6 +261,7 @@ def update_service(
     service_id: int,
     update_params: ServiceUpdateBody,
     db: Session = Depends(get_db),
+    settings: AppSettings = Depends(get_settings),
     _: Any = Depends(require_admin),
 ):
     """
@@ -272,4 +274,4 @@ def update_service(
     **Returns:**
     - `Service`: The updated service.
     """
-    return domain.update_service(db=db, service_id=service_id, update_body=update_params)
+    return domain.update_service(db=db, service_id=service_id, update_body=update_params, settings=settings)
