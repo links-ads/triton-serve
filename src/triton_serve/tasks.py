@@ -105,7 +105,8 @@ def update_service_status() -> None:
                         target = (
                             _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
                         )
-                        observed = observe(client, service, settings.service_boot_grace)
+                        image_status = service.image.status if service.image is not None else None
+                        observed = observe(client, service, settings.service_boot_grace, image_status)
                         decision = decide(
                             desired=service.desired_state,
                             observed=observed,
