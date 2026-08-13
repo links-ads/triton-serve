@@ -207,8 +207,7 @@ class Service(Base):
     models: Mapped[list["Model"]] = relationship(secondary=model_service_association, backref="services")
     device_allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="service")
     resources: Mapped["ServiceResources"] = relationship(back_populates="service")
-    # joined: the reconcile tick reads service.image.status for every service, on every tick
-    image: Mapped["ServiceImage | None"] = relationship(lazy="joined")
+    image: Mapped["ServiceImage | None"] = relationship()
 
     __table_args__ = (
         Index("service_name_idx", "service_name", unique=True, postgresql_where=(deleted_at.is_(None))),

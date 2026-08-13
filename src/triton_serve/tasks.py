@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from celery.signals import worker_process_init, worker_process_shutdown
 from httpx import Client
 from sqlalchemy import text
+from sqlalchemy.orm import joinedload
 
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
@@ -80,7 +81,14 @@ def update_service_status() -> None:
             return
         try:
             with database_manager.session() as db:
-                services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
+                # joinedload: the tick reads service.image.status for every service, and an
+                # N+1 per tick is exactly what this loop must not do
+                services = (
+                    db.query(Service)
+                    .options(joinedload(Service.image))
+                    .filter(Service.runtime_status != RuntimeStatus.RETIRED)
+                    .all()
+                )
                 for service in services:
                     try:
                         now = datetime.now(tz=timezone.utc)
