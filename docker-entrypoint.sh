@@ -64,13 +64,23 @@ start_sentinel() {
     echo "Starting Sentinel..."
     # --concurrency=1: the reconciler owns Docker; a single worker slot keeps one reconcile pass
     # in flight at a time, alongside the task's pg advisory lock
+    # -Q celery: image builds run for minutes and would stall the tick, so they get their own worker
     # strip any surrounding quotes: env_file may pass TARGET as the literal string "test"
     local target="${TARGET//\"/}"
-    local worker_args=("--loglevel=${LOG_LEVEL:-info}" "--concurrency=1")
+    local worker_args=("--loglevel=${LOG_LEVEL:-info}" "--concurrency=1" "-Q" "celery")
     if [ "$target" != "test" ]; then
         worker_args+=("--beat")
     fi
     exec uv run celery -A triton_serve.tasks worker "${worker_args[@]}"
+}
+
+start_builder() {
+    echo "Starting Builder..."
+    exec uv run celery -A triton_serve.tasks worker \
+        --loglevel=${LOG_LEVEL:-info} \
+        --concurrency=1 \
+        --hostname=builder@%h \
+        -Q builder
 }
 
 main() {
@@ -82,8 +92,10 @@ main() {
         check_gpus
     elif [ "$1" = "sentinel" ]; then
         start_sentinel
+    elif [ "$1" = "builder" ]; then
+        start_builder
     else
-        echo "Invalid argument. Please specify 'webserver', 'test' or 'sentinel'."
+        echo "Invalid argument. Please specify 'webserver', 'test', 'sentinel' or 'builder'."
         exit 1
     fi
 }

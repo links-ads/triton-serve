@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime, timezone
 
-from celery import Celery
 from celery.signals import worker_process_init, worker_process_shutdown
 from httpx import Client
 from sqlalchemy import text
@@ -9,12 +8,13 @@ from sqlalchemy import text
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
 from triton_serve.api.services.reconcile import decide
+from triton_serve.builder.execute import build_image  # noqa: F401  (registers the task on the app)
 from triton_serve.config import get_settings
-from triton_serve.config.celery import Config
 from triton_serve.config.celery import client as worker_client
 from triton_serve.database import database_manager
 from triton_serve.database.model import DesiredState, RuntimeStatus, Service
 from triton_serve.extensions import get_reconciler_docker_client
+from triton_serve.queue import app
 
 LOG = logging.getLogger(__name__)
 
@@ -23,8 +23,6 @@ LOG = logging.getLogger(__name__)
 _RECONCILE_LOCK_KEY = 0x7213_10CE
 
 settings = get_settings()
-app = Celery("serve-sentinel")
-app.config_from_object(Config)
 
 
 @worker_process_init.connect
