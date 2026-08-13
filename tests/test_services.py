@@ -467,3 +467,43 @@ def test_invalid_dependency_is_rejected_at_write_time(test_client, test_db):
     finally:
         model.dependencies = original
         test_db.commit()
+
+
+def test_retry_requeues_a_build_stuck_building(test_db, test_settings, monkeypatch):
+    """A worker that dies mid-build leaves the row BUILDING with no task behind it."""
+    from datetime import datetime, timezone
+
+    from triton_serve.api.services import domain
+    from triton_serve.builder.resolve import image_from_spec
+    from triton_serve.builder.spec import make_build_spec
+    from triton_serve.database.model import ImageStatus, ServiceImage
+
+    spec = make_build_spec(
+        base_image="ghcr.io/links-ads/serve-triton:23.07-py3", apt_packages=[], pip_packages=["six==1.16.1"]
+    )
+    image = image_from_spec(spec, test_settings)
+    image.status = ImageStatus.BUILDING
+    image.build_log = "worker died here"
+    service = Service(
+        service_name="trt-srv_test_stuck",
+        service_image=spec.base_image,
+        last_active_time=datetime.now(timezone.utc),
+        priority=1,
+        image=image,
+    )
+    test_db.add(service)
+    test_db.commit()
+
+    enqueued: list[str] = []
+    monkeypatch.setattr(domain, "enqueue_build", enqueued.append)
+    try:
+        domain.reset_and_wake(test_db, service.service_id)
+        test_db.refresh(image)
+        assert image.status is ImageStatus.PENDING
+        assert image.build_log is None
+        assert enqueued == [image.image_hash]
+    finally:
+        test_db.delete(service)
+        test_db.commit()
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == spec.image_hash).delete()
+        test_db.commit()

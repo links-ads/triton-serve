@@ -165,8 +165,6 @@ class ServiceImage(Base):
     base_image: Mapped[str | None] = mapped_column(nullable=True, default=None)
     apt_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     pip_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
-    pip_index_url: Mapped[str | None] = mapped_column(nullable=True, default=None)
-    pip_extra_index_urls: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)

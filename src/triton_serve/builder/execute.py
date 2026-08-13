@@ -4,7 +4,7 @@ from pathlib import Path
 
 from celery import Task
 from docker import DockerClient
-from docker.errors import APIError, BuildError
+from docker.errors import APIError
 
 from triton_serve.builder.registry import auth_config, push_auth
 from triton_serve.builder.render import write_build_context
@@ -26,8 +26,6 @@ def _spec_from_row(image: ServiceImage) -> BuildSpec:
         base_image=image.base_image or "",
         apt_packages=tuple(image.apt_packages),
         pip_packages=tuple(image.pip_packages),
-        pip_index_url=image.pip_index_url,
-        pip_extra_index_urls=tuple(image.pip_extra_index_urls),
     )
 
 
@@ -72,6 +70,10 @@ def build_image(self: Task, image_hash: str) -> None:
     budget is spent does the row go FAILED, which is genuinely terminal because identical inputs
     reproduce identical failures.
 
+    Every failure is caught rather than a known set: the row is already BUILDING by the time the
+    daemon is touched, and an escaping exception would leave it there forever, which the reconciler
+    reads as a build still in flight.
+
     Args:
         image_hash (str): The primary key of the service_images row to build.
     """
@@ -86,16 +88,16 @@ def build_image(self: Task, image_hash: str) -> None:
         spec = _spec_from_row(image)
         ref = image.image_ref
 
-    client = get_builder_docker_client()
     try:
+        client = get_builder_docker_client()
         _login(client, settings)
         with tempfile.TemporaryDirectory() as context:
             write_build_context(spec, Path(context))
             client.images.build(path=context, tag=ref, platform="linux/amd64", rm=True, pull=True)
         _push(client, ref, settings)
-    except (BuildError, APIError) as exc:
+    except Exception as exc:
         if self.request.retries >= self.max_retries:
-            _mark_failed(image_hash, str(exc))
+            _mark_failed(image_hash, f"{type(exc).__name__}: {exc}")
             return
         raise self.retry(exc=exc, countdown=30 * 2**self.request.retries) from exc
 

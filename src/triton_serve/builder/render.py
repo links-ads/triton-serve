@@ -8,17 +8,9 @@ APT_BLOCK = """RUN apt-get update \\
 """
 
 PIP_BLOCK = """COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir {flags}-r /tmp/requirements.txt \\
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \\
     && rm /tmp/requirements.txt
 """
-
-
-def _index_flags(spec: BuildSpec) -> str:
-    flags = []
-    if spec.pip_index_url:
-        flags.append(f"--index-url {spec.pip_index_url}")
-    flags.extend(f"--extra-index-url {url}" for url in spec.pip_extra_index_urls)
-    return f"{' '.join(flags)} " if flags else ""
 
 
 def render_dockerfile(spec: BuildSpec) -> str:
@@ -37,7 +29,7 @@ def render_dockerfile(spec: BuildSpec) -> str:
     if spec.apt_packages:
         blocks.append(APT_BLOCK.format(packages=" ".join(spec.apt_packages)))
     if spec.pip_packages:
-        blocks.append(PIP_BLOCK.format(flags=_index_flags(spec)))
+        blocks.append(PIP_BLOCK)
     return "\n".join(blocks)
 
 

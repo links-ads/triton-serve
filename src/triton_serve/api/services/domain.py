@@ -1,7 +1,6 @@
 import logging
 import math
 from datetime import datetime, timezone
-from itertools import chain
 from typing import cast
 
 from docker import DockerClient
@@ -18,7 +17,7 @@ from triton_serve.api.models.domain import get_single_model
 from triton_serve.api.services.observe import effective_image_ref
 from triton_serve.builder.execute import enqueue_build
 from triton_serve.builder.registry import RegistryAuth, auth_config
-from triton_serve.builder.resolve import resolve_service_image
+from triton_serve.builder.resolve import pip_dependencies, resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -147,8 +146,10 @@ def reset_and_wake(db: Session, service_id: int) -> None:
     service.last_attempt_at = None
     service.last_active_time = datetime.now(tz=timezone.utc)
     service.runtime_status = RuntimeStatus.RECOVERING
+    # any managed image that is not ready is re-queued, not just a failed one: a build whose worker
+    # died leaves the row BUILDING with no task behind it, and this is the only path back
     image = service.image
-    if image is not None and image.managed and image.status is ImageStatus.FAILED:
+    if image is not None and image.managed and image.status is not ImageStatus.READY:
         image.status = ImageStatus.PENDING
         image.build_log = None
         retry_hash = image.image_hash
@@ -247,7 +248,7 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
     return cast(list, db.scalars(query).all())
 
 
-def get_service_image(docker_client: DockerClient, image_name: str, auth: RegistryAuth | None = None) -> Image:
+def get_service_image(docker_client: DockerClient, image_name: str, auth: RegistryAuth) -> Image:
     """Returns a local image, pulling it from the registry if it is not present.
 
     Images are private, so the pull is always authenticated when credentials are configured. An
@@ -257,7 +258,7 @@ def get_service_image(docker_client: DockerClient, image_name: str, auth: Regist
     Args:
         docker_client (DockerClient): The docker client.
         image_name (str): The full reference of the image.
-        auth (RegistryAuth | None): The credential provider for the pull.
+        auth (RegistryAuth): The credential provider for the pull.
 
     Returns:
         Image: The local image.
@@ -269,8 +270,7 @@ def get_service_image(docker_client: DockerClient, image_name: str, auth: Regist
         try:
             return docker_client.images.get(image_name)
         except ImageNotFound:
-            config = auth_config(auth) if auth is not None else None
-            return docker_client.images.pull(image_name, auth_config=config)
+            return docker_client.images.pull(image_name, auth_config=auth_config(auth))
     except APIError as e:
         if e.status_code in (401, 403):
             raise HTTPException(status_code=412, detail=f"Registry rejected credentials for {image_name}") from e
@@ -644,7 +644,7 @@ def _boot_requirements(service: Service) -> str:
     """
     if service.image is not None and service.image.managed:
         return ""
-    return " ".join(sorted(set(chain.from_iterable(model.dependencies or [] for model in service.models))))
+    return " ".join(pip_dependencies(service))
 
 
 def recreate_service_container(
@@ -653,7 +653,7 @@ def recreate_service_container(
     service: Service,
     service_network: str,
     service_models_volume: str,
-    pull_credentials: RegistryAuth | None = None,
+    pull_credentials: RegistryAuth,
 ) -> Service:
     """Tears down the current container (if any) and spawns a fresh one from DB state.
 
@@ -665,7 +665,7 @@ def recreate_service_container(
         service (Service): The service ORM object.
         service_network (str): The Docker network name.
         service_models_volume (str): The volume name or path for models.
-        pull_credentials (RegistryAuth | None): Credentials for pulling a private image.
+        pull_credentials (RegistryAuth): Credentials for pulling a private image.
 
     Returns:
         Service: The updated service.

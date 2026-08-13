@@ -48,7 +48,6 @@ class AppSettings(BaseSettings):
     registry_push_token: SecretStr = SecretStr("")
     registry_pull_username: str = ""
     registry_pull_token: SecretStr = SecretStr("")
-    pip_index_allowed_hosts: list[str] = ["pypi.org", "files.pythonhosted.org", "download.pytorch.org"]
     image_build_timeout: int = 1800  # seconds; a build streams for minutes, unlike a reconcile call
 
     # database

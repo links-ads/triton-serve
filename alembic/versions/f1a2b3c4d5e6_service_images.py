@@ -33,10 +33,8 @@ def upgrade() -> None:
         sa.Column("base_image", sa.String(), nullable=True),
         sa.Column("apt_packages", postgresql.ARRAY(sa.String()), nullable=False),
         sa.Column("pip_packages", postgresql.ARRAY(sa.String()), nullable=False),
-        sa.Column("pip_index_url", sa.String(), nullable=True),
-        sa.Column("pip_extra_index_urls", postgresql.ARRAY(sa.String()), nullable=False),
         sa.Column("build_log", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("built_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("image_hash"),
     )
@@ -55,9 +53,8 @@ def upgrade() -> None:
         bind.execute(
             sa.text(
                 "INSERT INTO service_images "
-                "(image_hash, image_ref, status, managed, apt_packages, pip_packages, "
-                " pip_extra_index_urls, created_at, built_at) "
-                "VALUES (:h, :r, 'ready', false, '{}', '{}', '{}', now(), now()) "
+                "(image_hash, image_ref, status, managed, apt_packages, pip_packages, created_at, built_at) "
+                "VALUES (:h, :r, 'ready', false, '{}', '{}', now(), now()) "
                 "ON CONFLICT (image_hash) DO NOTHING"
             ),
             {"h": digest, "r": ref},

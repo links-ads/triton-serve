@@ -8,6 +8,7 @@ from pathlib import Path
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from triton_serve.builder.spec import validated_apt, validated_pip
 from triton_serve.database.model import ModelType
 from triton_serve.database.schema import ModelCreateSchema, ModelVersionCreateSchema
 
@@ -122,6 +123,20 @@ def _parse_pyproject(manifest: Path) -> BundleDependencies:
     )
 
 
+def _validated(dependencies: BundleDependencies) -> BundleDependencies:
+    """Rejects packages the builder would refuse later.
+
+    The same validation runs again when the build spec is assembled, but by then the models are
+    committed: a bundle that only fails there is stored and poisons every service created from it.
+    """
+    try:
+        validated_pip(dependencies.pip)
+        validated_apt(dependencies.system)
+    except ValueError as e:
+        raise AssertionError(str(e)) from e
+    return dependencies
+
+
 def parse_dependencies(bundle_path: Path) -> BundleDependencies:
     """Reads a bundle's dependency manifest.
 
@@ -136,12 +151,12 @@ def parse_dependencies(bundle_path: Path) -> BundleDependencies:
         BundleDependencies: The pip and system dependency lists, empty when there is no manifest.
 
     Raises:
-        AssertionError: If the manifest is malformed, its lock does not export, or its
-            requires-python excludes the runtime python.
+        AssertionError: If the manifest is malformed, its lock does not export, a package is
+            invalid, or its requires-python excludes the runtime python.
     """
     if (manifest := bundle_path / "pyproject.toml").is_file():
-        return _parse_pyproject(manifest)
-    return BundleDependencies(pip=parse_requirements(bundle_path / "requirements.txt"))
+        return _validated(_parse_pyproject(manifest))
+    return _validated(BundleDependencies(pip=parse_requirements(bundle_path / "requirements.txt")))
 
 
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:

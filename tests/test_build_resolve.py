@@ -57,21 +57,21 @@ def test_two_services_with_the_same_dependencies_share_one_row(test_db, settings
     assert first.image_hash == second.image_hash
 
 
-def test_build_spec_unions_dependencies_across_models(test_db, settings, rollback):
+def test_build_spec_unions_dependencies_across_models(test_db, rollback):
     service = _service(test_db, "resolve-union", ["numpy==1.26.0"], ["libgl1"])
     service.models.append(
         Model(model_name="resolve-union-2", dependencies=["pillow==10.0.0"], system_dependencies=["libsndfile1"])
     )
     test_db.flush()
-    spec = service_build_spec(service, settings)
+    spec = service_build_spec(service)
     assert spec.pip_packages == ("numpy==1.26.0", "pillow==10.0.0")
     assert spec.apt_packages == ("libgl1", "libsndfile1")
 
 
-def test_system_dependencies_change_the_hash(test_db, settings, rollback):
+def test_system_dependencies_change_the_hash(test_db, rollback):
     plain = _service(test_db, "resolve-nosys", ["numpy==1.26.0"])
     with_apt = _service(test_db, "resolve-sys", ["numpy==1.26.0"], ["libgl1"])
-    assert service_build_spec(plain, settings).image_hash != service_build_spec(with_apt, settings).image_hash
+    assert service_build_spec(plain).image_hash != service_build_spec(with_apt).image_hash
 
 
 def test_invalid_stored_dependency_raises(test_db, settings, rollback):

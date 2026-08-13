@@ -1,14 +1,15 @@
 from contextlib import suppress
 
 import pytest
-from docker.errors import ImageNotFound
+from docker import DockerClient
+from docker.errors import DockerException, ImageNotFound
 from httpx import Client
 
 from triton_serve.builder.execute import build_image
-from triton_serve.builder.registry import image_ref
+from triton_serve.builder.resolve import image_from_spec
 from triton_serve.builder.spec import make_build_spec
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import ImageStatus, ServiceImage, utcnow
+from triton_serve.database.model import ImageStatus, ServiceImage
 
 GITHUB_API = "https://api.github.com"
 
@@ -68,29 +69,42 @@ def built_images(test_settings, push_credentials, test_docker):
 
 @pytest.fixture
 def pending_image(test_db, test_settings, push_credentials, built_images):
-    spec = make_build_spec(
-        base_image="python:3.12-slim",
-        apt_packages=[],
-        pip_packages=["six==1.16.0"],
-        allowed_index_hosts=test_settings.pip_index_allowed_hosts,
-    )
-    image = ServiceImage(
-        image_hash=spec.image_hash,
-        image_ref=image_ref(test_settings, spec.image_hash),
-        status=ImageStatus.PENDING,
-        managed=True,
-        base_image=spec.base_image,
-        apt_packages=list(spec.apt_packages),
-        pip_packages=list(spec.pip_packages),
-        pip_extra_index_urls=[],
-        created_at=utcnow(),
-    )
+    spec = make_build_spec(base_image="python:3.12-slim", apt_packages=[], pip_packages=["six==1.16.0"])
+    image = image_from_spec(spec, test_settings)
     test_db.merge(image)
     test_db.commit()
     built_images.append(image.image_ref)
     yield image
     test_db.query(ServiceImage).filter(ServiceImage.image_hash == image.image_hash).delete()
     test_db.commit()
+
+
+@pytest.fixture
+def unbuildable_image(test_db, test_settings):
+    """A pending row for a build that never reaches the daemon, so it needs no credentials."""
+    spec = make_build_spec(base_image="python:3.12-slim", apt_packages=[], pip_packages=["six==1.17.0"])
+    image = image_from_spec(spec, test_settings)
+    test_db.merge(image)
+    test_db.commit()
+    yield image
+    test_db.query(ServiceImage).filter(ServiceImage.image_hash == image.image_hash).delete()
+    test_db.commit()
+
+
+def test_an_unreachable_daemon_does_not_strand_the_row_building(test_db, unbuildable_image, monkeypatch):
+    def unreachable() -> DockerClient:
+        raise DockerException("Error while fetching server API version")
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", unreachable)
+    build_image.push_request(retries=build_image.max_retries)
+    try:
+        build_image(unbuildable_image.image_hash)
+    finally:
+        build_image.pop_request()
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert "DockerException" in row.build_log
 
 
 def test_build_image_marks_the_row_ready(test_db, pending_image, test_docker):
@@ -111,23 +125,8 @@ def test_build_from_a_private_base_image_authenticates_the_pull(
     private_base = test_db.get(ServiceImage, pending_image.image_hash).image_ref
     test_docker.images.remove(private_base, force=True)
 
-    spec = make_build_spec(
-        base_image=private_base,
-        apt_packages=[],
-        pip_packages=["six==1.16.0"],
-        allowed_index_hosts=test_settings.pip_index_allowed_hosts,
-    )
-    derived = ServiceImage(
-        image_hash=spec.image_hash,
-        image_ref=image_ref(test_settings, spec.image_hash),
-        status=ImageStatus.PENDING,
-        managed=True,
-        base_image=spec.base_image,
-        apt_packages=list(spec.apt_packages),
-        pip_packages=list(spec.pip_packages),
-        pip_extra_index_urls=[],
-        created_at=utcnow(),
-    )
+    spec = make_build_spec(base_image=private_base, apt_packages=[], pip_packages=["six==1.16.0"])
+    derived = image_from_spec(spec, test_settings)
     test_db.merge(derived)
     test_db.commit()
     built_images.append(derived.image_ref)

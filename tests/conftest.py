@@ -12,6 +12,7 @@ import python_multipart
 import urllib3
 from httpx import Client
 
+from triton_serve.builder.spec import BuildSpec, make_build_spec
 from triton_serve.config import get_settings
 from triton_serve.database import database_manager
 
@@ -23,6 +24,17 @@ LOG = logging.getLogger(pytest.__name__)
 TEST_DIR = Path(os.getenv("TEST_DIR", Path(__file__).parent))
 TEST_GIT_REPO = os.getenv("TEST_GIT_REPO")
 ARCHIVE_NAME = "repository.zip"
+BASE_IMAGE = "ghcr.io/links-ads/serve-triton:23.07-py3"
+
+
+@pytest.fixture
+def build_spec() -> Callable[..., BuildSpec]:
+    """Builds a spec on shared defaults, so a test only spells out what it is actually about."""
+
+    def _spec(**kwargs) -> BuildSpec:
+        return make_build_spec(**{"base_image": BASE_IMAGE, "apt_packages": [], "pip_packages": [], **kwargs})
+
+    return _spec
 
 
 @pytest.fixture(scope="session")
