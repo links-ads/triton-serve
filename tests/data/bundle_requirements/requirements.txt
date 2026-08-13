@@ -1,0 +1,2 @@
+# a comment, already stripped today
+numpy==1.26.4

@@ -1,11 +1,15 @@
 import io
 import logging
 import os
+from pathlib import Path
 from typing import cast
 
 import pytest
 
+from triton_serve.storage.validation import parse_dependencies
+
 LOG = logging.getLogger(pytest.__name__)
+DATA = Path(__file__).parent / "data"
 
 
 def test_get_models_empty(test_client):
@@ -300,3 +304,45 @@ def test_delete_model_not_in_use(name, test_client, test_settings):
     assert data["deleted_at"] is not None
     expected_path = test_settings.repository_path / name
     assert not expected_path.exists()
+
+
+def test_pyproject_supplies_pip_and_system_dependencies():
+    deps = parse_dependencies(DATA / "bundle_pyproject")
+    assert deps.pip == ["numpy==1.26.4", "pillow==10.0.0"]
+    assert deps.system == ["libgl1", "libglib2.0-0"]
+
+
+def test_unknown_tool_serve_keys_are_ignored():
+    # `runtime` belongs to issue #130; a bundle carrying it must still parse here
+    assert parse_dependencies(DATA / "bundle_pyproject").system == ["libgl1", "libglib2.0-0"]
+
+
+def test_requirements_txt_is_still_read_when_no_pyproject():
+    deps = parse_dependencies(DATA / "bundle_requirements")
+    assert deps.pip == ["numpy==1.26.4"]
+    assert deps.system == []
+
+
+def test_pyproject_wins_over_requirements_txt(tmp_path: Path):
+    (tmp_path / "requirements.txt").write_text("legacy==1.0.0\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\ndependencies = ["modern==2.0.0"]\n'
+    )
+    assert parse_dependencies(tmp_path).pip == ["modern==2.0.0"]
+
+
+def test_missing_manifest_is_no_dependencies(tmp_path: Path):
+    deps = parse_dependencies(tmp_path)
+    assert deps.pip == []
+    assert deps.system == []
+
+
+def test_incompatible_requires_python_is_rejected():
+    with pytest.raises(AssertionError, match="requires-python"):
+        parse_dependencies(DATA / "bundle_bad_python")
+
+
+def test_malformed_pyproject_is_rejected(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text("[project\nname =")
+    with pytest.raises(AssertionError, match="pyproject.toml"):
+        parse_dependencies(tmp_path)

@@ -119,6 +119,7 @@ def create_models_from_source(
                     old_model.model_type = instance.model_type
                     old_model.source = instance.source or models_origin
                     old_model.dependencies = instance.dependencies  # type: ignore
+                    old_model.system_dependencies = instance.system_dependencies  # type: ignore
                     old_model.version_policy = instance.version_policy  # type: ignore
                     old_model.updated_at = timezone_aware_now()
                     # clean up the versions
