@@ -31,6 +31,19 @@ def _spec_from_row(image: ServiceImage) -> BuildSpec:
     )
 
 
+def _login(client: DockerClient, settings: AppSettings) -> None:
+    """Authenticates the daemon so `build` can pull a private base image.
+
+    The build endpoint takes no per-call credentials: docker-py forwards whatever this client has
+    logged in with. Without this, a FROM against a private package fails to authorize, and only
+    the push would have been authenticated.
+    """
+    username, token = push_auth(settings).credentials()
+    if not username or not token:
+        return
+    client.login(username=username, password=token, registry=settings.registry_url)
+
+
 def _push(client: DockerClient, ref: str, settings: AppSettings) -> None:
     """Pushes a tagged image, turning a streamed error line into the exception docker-py omits."""
     repository, tag = ref.rsplit(":", 1)
@@ -75,6 +88,7 @@ def build_image(self: Task, image_hash: str) -> None:
 
     client = get_builder_docker_client()
     try:
+        _login(client, settings)
         with tempfile.TemporaryDirectory() as context:
             write_build_context(spec, Path(context))
             client.images.build(path=context, tag=ref, platform="linux/amd64", rm=True, pull=True)
