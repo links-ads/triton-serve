@@ -17,7 +17,9 @@ down_revision: str | None = "a1f6c9d40b72"
 branch_labels: str | None = None
 depends_on: str | None = None
 
-image_status = postgresql.ENUM("pending", "building", "ready", "failed", name="imagestatus")
+# create_type=False: the type is created explicitly below, otherwise create_table emits a second
+# CREATE TYPE and the migration fails on the duplicate
+image_status = postgresql.ENUM("pending", "building", "ready", "failed", name="imagestatus", create_type=False)
 
 
 def upgrade() -> None:
