@@ -162,7 +162,7 @@ class ServiceImage(Base):
         server_default=ImageStatus.PENDING.value,
     )
     managed: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
-    base_image: Mapped[str | None] = mapped_column(nullable=True, default=None)
+    base_image: Mapped[str] = mapped_column(nullable=False)
     apt_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     pip_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)

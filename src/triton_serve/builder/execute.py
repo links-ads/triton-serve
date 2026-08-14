@@ -23,7 +23,7 @@ BUILD_TASK_NAME = "triton_serve.builder.build_image"
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:
     return BuildSpec(
-        base_image=image.base_image or "",
+        base_image=image.base_image,
         apt_packages=tuple(image.apt_packages),
         pip_packages=tuple(image.pip_packages),
     )
@@ -70,7 +70,7 @@ def _mark_failed(image_hash: str, reason: str) -> None:
             image.status = ImageStatus.FAILED
             image.build_log = reason[-BUILD_LOG_TAIL:]
             db.commit()
-    LOG.error("build %s failed: %s", image_hash[:12], reason[:500])
+    LOG.error("build %s failed: %s", image_hash[:12], reason[-500:])
 
 
 @app.task(bind=True, name=BUILD_TASK_NAME, queue=BUILDER_QUEUE, max_retries=3)
