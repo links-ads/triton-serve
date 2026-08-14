@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from triton_serve.api.dto import APIKeyCreateBody, ServiceKeyCreateBody
-from triton_serve.database.model import APIKey, KeyType
+from triton_serve.database.model import APIKey, DesiredState, KeyType, RuntimeStatus, Service
 
 LOG = logging.getLogger(pytest.__name__)
 
@@ -286,6 +286,27 @@ def test_create_api_key_invalid_type(test_client):
 def test_create_service_key_nonexistent_service(test_client):
     key_data = ServiceKeyCreateBody(project="test_project", notes="Test service key", expiration_days=30)
     response = test_client.post("/keys/99999", json=key_data.model_dump(mode="json"))
+    assert response.status_code == 404
+
+
+@pytest.mark.order(after="test_revoke_api_key")
+def test_create_service_key_deleted_service(test_client, test_db):
+    """A tombstoned service counts as absent: keying it would rebuild Traefik routing for a
+    service the reconciler has already torn down."""
+    svc = Service(
+        service_name="trt-srv_test_keyed_tombstone",
+        service_image="ghcr.io/links-ads/does-not-exist:0",
+        priority=1,
+        last_active_time=datetime.now(UTC),
+        desired_state=DesiredState.RETIRED,
+        runtime_status=RuntimeStatus.RETIRED,
+        deleted_at=datetime.now(UTC),
+    )
+    test_db.add(svc)
+    test_db.commit()
+
+    key_data = ServiceKeyCreateBody(project="test_project", notes="Test service key", expiration_days=30)
+    response = test_client.post(f"/keys/{svc.service_id}", json=key_data.model_dump(mode="json"))
     assert response.status_code == 404
 
 
