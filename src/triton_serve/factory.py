@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 from importlib.metadata import version
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, operations, services
@@ -27,8 +29,13 @@ def sync_traefik_configs(session, settings: AppSettings) -> None:
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
     """Factory method that creates a new FastAPI application.
 
-    :return: configured FastAPI instance
-    :rtype: FastAPI
+    Args:
+        settings (AppSettings): The application settings.
+        init_database (bool): Whether to initialise the database manager. False when the caller
+            already owns the engine, as the tests do.
+
+    Returns:
+        FastAPI: The configured application instance.
     """
     if init_database:
         database_manager.init(settings.database_url)
@@ -61,15 +68,35 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
         lifespan=lifespan,
     )
     register_middlewares(app)
+    register_exception_handlers(app)
     register_routers(app)
     return app
+
+
+def register_exception_handlers(app: FastAPI):
+    """Registers application-wide exception handlers.
+
+    Args:
+        app (FastAPI): The application instance.
+    """
+
+    @app.exception_handler(SQLAlchemyError)
+    async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+        """Turns any unhandled database failure into an opaque 500.
+
+        The driver message goes to the log, never to the client: it carries table names, SQL and
+        occasionally row values. The session context manager has already rolled back by the time
+        this runs.
+        """
+        log.exception("Database error on %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse(status_code=500, content={"detail": "Internal database error"})
 
 
 def register_middlewares(app: FastAPI):
     """Registers middlewares to the main application instance.
 
-    :param app: app instance
-    :type app: FastAPI
+    Args:
+        app (FastAPI): The application instance.
     """
     app.add_middleware(
         CORSMiddleware,
@@ -83,8 +110,8 @@ def register_middlewares(app: FastAPI):
 def register_routers(app: FastAPI):
     """Registers all the available submodules to the main application.
 
-    :param app: FastAPI instance
-    :type app: FastAPI
+    Args:
+        app (FastAPI): The application instance.
     """
     app.include_router(models.router)
     app.include_router(services.router)

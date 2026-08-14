@@ -1,5 +1,6 @@
 import logging
 import time
+from datetime import UTC
 
 import pytest
 import requests
@@ -311,7 +312,7 @@ def test_execute_recreates_absent(test_db, test_docker, test_settings):
 @pytest.mark.order(after="test_execute_recreates_absent")
 def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
     """The reconciler scales an idle service to zero, then wakes it once it sees traffic again."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc4").one()  # timeout=5s
     svc.desired_state = DesiredState.AVAILABLE
@@ -321,7 +322,7 @@ def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
     test_db.refresh(svc)
     assert svc.runtime_status == RuntimeStatus.IDLE  # scaled to zero, container stopped
 
-    svc.last_active_time = datetime.now(timezone.utc)
+    svc.last_active_time = datetime.now(UTC)
     test_db.commit()
     # target back to 1 -> the reconciler must actually bring it up; IDLE would mean it never woke
     status = _drive_reconciler(test_db, svc, until={RuntimeStatus.WARMING, RuntimeStatus.READY}, ticks=6, delay=2)
@@ -344,13 +345,16 @@ def test_delete_is_db_only(test_client, test_db):
     listing = test_client.get("/services").json()
     assert listing == []
 
+    # a tombstoned service is absent from the detail route too, not just the listing
+    assert test_client.get(f"/services/{service_id}").status_code == 404
+
 
 @pytest.mark.order(after="test_delete_is_db_only")
 def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
     """Spec headline guarantee: a bad image ref surfaces asynchronously as FAILED within the crash
     budget, and the reconciler does not spin forever recreating (the C1 regression). Self-contained
     (direct DB insert, no models) and ordered last so it cannot disturb the ordered lifecycle chain."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from docker.errors import NotFound
 
@@ -359,7 +363,7 @@ def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
         service_name=name,
         service_image="ghcr.io/links-ads/does-not-exist:0",
         priority=1,
-        last_active_time=datetime.now(timezone.utc),
+        last_active_time=datetime.now(UTC),
         desired_state=DesiredState.AVAILABLE,
         runtime_status=RuntimeStatus.WARMING,
     )
@@ -373,7 +377,7 @@ def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
 
     # exhaust the budget (bypass the real backoff wait) and confirm it lands terminal in FAILED
     svc.restart_attempts = test_settings.service_max_restart_attempts
-    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=120)
+    svc.last_attempt_at = datetime.now(UTC) - timedelta(seconds=120)
     test_db.commit()
     status = _drive_reconciler(test_db, svc, until={RuntimeStatus.FAILED}, ticks=4, delay=2)
     assert status == RuntimeStatus.FAILED, f"bad-image service did not reach FAILED, stuck at {status}"
@@ -386,12 +390,12 @@ def test_failed_stays_terminal_after_cooldown(test_db, test_settings):
     """FAILED is terminal: elapsed time must NOT resurrect a failed service by silently resetting
     its crash budget. Before the fix, any FAILED service revived one cooldown after its last attempt;
     only POST /retry may reset the budget now."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     svc = test_db.query(Service).filter(Service.service_name == "trt-srv_test_badimg").one()
     assert svc.runtime_status == RuntimeStatus.FAILED
     # push the last attempt well past the reset window -- the old time-based reset would revive it
-    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    svc.last_attempt_at = datetime.now(UTC) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
     test_db.commit()
 
     update_service_status.apply()
@@ -404,7 +408,7 @@ def test_failed_stays_terminal_after_cooldown(test_db, test_settings):
 def test_budget_returns_after_sustained_ready(test_db, test_docker, test_settings):
     """A recovered service that stays READY past the cooldown earns its crash budget back, but a
     brief READY within the cooldown does not (so a fast crash-recover-crash flap cannot loop)."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from triton_serve.api.services.execute import execute
     from triton_serve.api.services.reconcile import Action, Decision
@@ -414,7 +418,7 @@ def test_budget_returns_after_sustained_ready(test_db, test_docker, test_setting
 
     # within the cooldown: a fresh recovery attempt has not yet proven stable -> keep the budget spent
     svc.restart_attempts = 2
-    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    svc.last_attempt_at = datetime.now(UTC) - timedelta(seconds=5)
     svc.runtime_status = RuntimeStatus.RECOVERING
     test_db.commit()
     execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
@@ -422,7 +426,7 @@ def test_budget_returns_after_sustained_ready(test_db, test_docker, test_setting
     assert svc.restart_attempts == 2
 
     # past the cooldown: sustained health returns the budget
-    svc.last_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
+    svc.last_attempt_at = datetime.now(UTC) - timedelta(seconds=test_settings.service_restart_cooldown + 60)
     test_db.commit()
     execute(db=test_db, client=test_docker, service=svc, decision=ready, settings=test_settings)
     test_db.refresh(svc)
@@ -471,7 +475,7 @@ def test_invalid_dependency_is_rejected_at_write_time(test_client, test_db):
 
 def test_retry_requeues_a_build_stuck_building(test_db, test_settings, monkeypatch):
     """A worker that dies mid-build leaves the row BUILDING with no task behind it."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from triton_serve.api.services import domain
     from triton_serve.builder.resolve import image_from_spec
@@ -487,7 +491,7 @@ def test_retry_requeues_a_build_stuck_building(test_db, test_settings, monkeypat
     service = Service(
         service_name="trt-srv_test_stuck",
         service_image=spec.base_image,
-        last_active_time=datetime.now(timezone.utc),
+        last_active_time=datetime.now(UTC),
         priority=1,
         image=image,
     )

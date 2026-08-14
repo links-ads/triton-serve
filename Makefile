@@ -1,7 +1,7 @@
 # Simple and elegant Makefile derived from the almighty https://github.com/pydantic/pydantic
 .DEFAULT_GOAL := help
 .DEFAULT_GOAL := help
-PROFILE := gpu
+PROFILE ?= gpu
 DOCKER_COMPOSE := docker compose --profile $(PROFILE) -f docker-compose.yml -f docker-compose.$(TARGET).yml
 sources = src tests
 .ONESHELL:
@@ -43,8 +43,8 @@ lint: .uv
 	uv run ruff format --check $(sources)
 
 .PHONY: typecheck  ## Perform type-checking
-typecheck: .pre-commit
-	uv run pyright src/
+typecheck: .uv
+	uv run pyright
 
 .PHONY: config  ## Print the full configuration of the compose project
 config: .check-target .check-profile
@@ -93,7 +93,7 @@ migrate: .uv
 	@$(PY_BIN)/alembic revision --autogenerate -m "$${MSG}"
 
 .PHONY: test  ## Run unit and integration tests in containers
-test:
+test: .check-profile
 	@echo "Setting up test environment..."
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
@@ -112,11 +112,13 @@ test:
 		-f docker-compose.yml \
 		-f docker-compose.test.yml up --build \
 		--abort-on-container-exit --exit-code-from tester; fi
+	@status=$$?
 	@echo "Tearing everything down..."
 	@docker compose -p serve-test \
 		--profile $(PROFILE) \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
+	@exit $$status
 
 .PHONY: clean ## Clean unused files
 clean:

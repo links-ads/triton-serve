@@ -1,46 +1,24 @@
-from pathlib import Path
+from collections.abc import Iterator
+from tarfile import TarFile
+from zipfile import ZipFile
 
 from triton_serve.storage import BaseExtractor
 
 
-class ZipExtractor(BaseExtractor):
-    def __enter__(self, mode: str = "r"):  # type: ignore
-        from zipfile import ZipFile
+class ZipExtractor(BaseExtractor[ZipFile]):
+    def _open(self) -> ZipFile:
+        return ZipFile(self.file, "r")
 
-        self.archive = ZipFile(self.file, mode)  # type: ignore
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.archive.close()
-
-    def __iter__(self):  # type: ignore
+    def __iter__(self) -> Iterator[str]:
         return iter(self.archive.namelist())
 
-    def extract(self, path: Path, member: str | None = None):  # type: ignore
-        if member is not None:
-            self.archive.extract(member, path)
-        else:
-            self.archive.extractall(path)
 
+class TarExtractor(BaseExtractor[TarFile]):
+    def _open(self) -> TarFile:
+        return TarFile.open(self.file, "r:gz")
 
-class TarExtractor(BaseExtractor):
-    def __enter__(self, mode: str = "r:gz"):  # type: ignore
-        from tarfile import TarFile
-
-        self.archive = TarFile.open(self.file, mode)  # type: ignore
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.archive.close()
-
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self.archive.getnames())
-
-    def extract(self, path: Path, member: str | None = None):  # type: ignore
-        if member is not None:
-            self.archive.extract(member, path)
-        else:
-            self.archive.extractall(path)
 
 
 ExtractorType = ZipExtractor | TarExtractor

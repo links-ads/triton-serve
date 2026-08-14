@@ -18,7 +18,7 @@ from triton_serve.api.dto import (
     KeyType,
     ServiceKeyCreateBody,
 )
-from triton_serve.api.services.domain import get_service_by_id, rebuild_service_config
+from triton_serve.api.services.domain import get_service_or_not_found, rebuild_service_config
 from triton_serve.config import AppSettings, get_settings, get_traefik
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.schema import APIKeySchema
@@ -159,8 +159,7 @@ def create_service_key(
     Creates a new API key for a specific service.
     """
     # Check if the service exists
-    if not (service := get_service_by_id(db=db, service_id=service_id)):
-        raise HTTPException(status_code=404, detail="Service not found")
+    service = get_service_or_not_found(db=db, service_id=service_id)
 
     new_key = generate_key(
         db=db,
@@ -195,8 +194,7 @@ def add_service_key(
     if key.key_type != KeyType.SERVICE:
         raise HTTPException(status_code=400, detail="This operation is only valid for service keys")
 
-    if not (service := get_service_by_id(db=db, service_id=service_id)):
-        raise HTTPException(status_code=404, detail="Service not found")
+    service = get_service_or_not_found(db=db, service_id=service_id)
 
     updated_key = add_service_to_key(db=db, key=key, service=service)
     rebuild_service_config(db, traefik, service, settings.service_prefix, settings.api_keys)
@@ -223,8 +221,7 @@ def remove_service_key(
     if key.key_type != KeyType.SERVICE:
         raise HTTPException(status_code=400, detail="This operation is only valid for service keys")
 
-    if not (service := get_service_by_id(db=db, service_id=service_id)):
-        raise HTTPException(status_code=404, detail="Service not found")
+    service = get_service_or_not_found(db=db, service_id=service_id)
 
     if service_id not in (s.service_id for s in key.services):
         raise HTTPException(status_code=400, detail="This key is not associated with the specified service")

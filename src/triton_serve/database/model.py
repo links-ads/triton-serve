@@ -1,6 +1,5 @@
 import enum
-from datetime import datetime, timezone
-from functools import partial
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,7 +18,15 @@ from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
 
 Base = declarative_base()
 
-utcnow = partial(datetime.now, tz=timezone.utc)
+
+def timezone_aware_now() -> datetime:
+    """The single source of "now" for the whole project.
+
+    Deliberately not named `utcnow`: `datetime.utcnow` returns a *naive* timestamp, and every
+    column here is `DateTime(timezone=True)`, so mixing the two silently produces comparisons
+    between aware and naive datetimes.
+    """
+    return datetime.now(tz=UTC)
 
 
 class ModelType(enum.Enum):
@@ -90,10 +97,10 @@ class APIKey(Base):
     value: Mapped[str] = mapped_column(unique=True, nullable=False)
     project: Mapped[str] = mapped_column(nullable=False)
     notes: Mapped[str] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    services: Mapped[list["Service"]] = relationship(secondary=key_service_association)
+    services: Mapped[list[Service]] = relationship(secondary=key_service_association)
 
 
 class Machine(Base):
@@ -103,7 +110,7 @@ class Machine(Base):
     host_name: Mapped[str] = mapped_column(nullable=False)
     num_cpus: Mapped[int] = mapped_column(nullable=False, default=0)
     total_memory: Mapped[int] = mapped_column(nullable=False, default=0)
-    devices: Mapped[list["Device"]] = relationship(back_populates="machine")
+    devices: Mapped[list[Device]] = relationship(back_populates="machine")
 
 
 class Device(Base):
@@ -114,8 +121,8 @@ class Device(Base):
     memory: Mapped[int] = mapped_column(nullable=False)
     index: Mapped[int] = mapped_column(nullable=False)
     host_id: Mapped[int] = mapped_column(ForeignKey("machines.host_id"), nullable=False)
-    machine: Mapped["Machine"] = relationship(back_populates="devices")
-    allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="device")
+    machine: Mapped[Machine] = relationship(back_populates="devices")
+    allocations: Mapped[list[DeviceAllocation]] = relationship(back_populates="device")
 
 
 class Model(Base):
@@ -124,8 +131,8 @@ class Model(Base):
     model_id: Mapped[int] = mapped_column(primary_key=True)
     model_name: Mapped[str] = mapped_column(nullable=False)
     model_type: Mapped[ModelType] = mapped_column(nullable=False, default=ModelType.UNK)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     source: Mapped[str] = mapped_column(nullable=True)
     dependencies: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True, default=[])
@@ -133,7 +140,7 @@ class Model(Base):
         ARRAY(String), nullable=False, default=list, server_default="{}"
     )
     version_policy: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    versions: Mapped[list["ModelVersion"]] = relationship("ModelVersion")
+    versions: Mapped[list[ModelVersion]] = relationship("ModelVersion")
 
     __table_args__ = (Index("model_name_idx", "model_name", unique=True, postgresql_where=(deleted_at.is_(None))),)
 
@@ -166,7 +173,7 @@ class ServiceImage(Base):
     apt_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     pip_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
 
@@ -194,7 +201,7 @@ class Service(Base):
         default=RuntimeStatus.WARMING,
         server_default=RuntimeStatus.WARMING.value,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     last_active_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     inactivity_timeout: Mapped[int] = mapped_column(nullable=False, default=3600)  # 1 hour
@@ -202,10 +209,10 @@ class Service(Base):
     restart_attempts: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
-    models: Mapped[list["Model"]] = relationship(secondary=model_service_association, backref="services")
-    device_allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="service")
-    resources: Mapped["ServiceResources"] = relationship(back_populates="service")
-    image: Mapped["ServiceImage | None"] = relationship()
+    models: Mapped[list[Model]] = relationship(secondary=model_service_association, backref="services")
+    device_allocations: Mapped[list[DeviceAllocation]] = relationship(back_populates="service")
+    resources: Mapped[ServiceResources] = relationship(back_populates="service")
+    image: Mapped[ServiceImage | None] = relationship()
 
     __table_args__ = (
         Index("service_name_idx", "service_name", unique=True, postgresql_where=(deleted_at.is_(None))),
@@ -256,7 +263,7 @@ class KombuQueue(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(nullable=False)
 
-    messages: Mapped[list["KombuMessage"]] = relationship("KombuMessage", back_populates="queue")
+    messages: Mapped[list[KombuMessage]] = relationship("KombuMessage", back_populates="queue")
 
 
 class KombuMessage(Base):
@@ -271,4 +278,4 @@ class KombuMessage(Base):
     version: Mapped[int] = mapped_column()
     queue_id: Mapped[int] = mapped_column(ForeignKey("kombu_queue.id"))
 
-    queue: Mapped["KombuQueue"] = relationship("KombuQueue", back_populates="messages")
+    queue: Mapped[KombuQueue] = relationship("KombuQueue", back_populates="messages")

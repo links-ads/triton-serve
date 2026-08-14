@@ -1,6 +1,6 @@
+import contextlib
 import logging
 import math
-from datetime import datetime, timezone
 from typing import cast
 
 from docker import DockerClient
@@ -31,7 +31,7 @@ from triton_serve.database.model import (
     RuntimeStatus,
     Service,
     ServiceResources,
-    utcnow,
+    timezone_aware_now,
 )
 
 LOG = logging.getLogger("uvicorn")
@@ -77,7 +77,7 @@ def rebuild_service_config(
         .filter(
             Service.service_id == service.service_id,
             APIKey.key_type == KeyType.SERVICE,
-            APIKey.expires_at > utcnow(),
+            APIKey.expires_at > timezone_aware_now(),
         )
         .all()
     )
@@ -123,28 +123,43 @@ def get_service_by_id(db: Session, service_id: int) -> Service | None:
     return db.get(Service, ident=service_id)
 
 
+def get_service_or_not_found(db: Session, service_id: int) -> Service:
+    """Returns a live service by id, or raises 404. A deleted service counts as absent.
+
+    Args:
+        db (Session): The database session.
+        service_id (int): The id of the service.
+
+    Returns:
+        Service: The requested service.
+
+    Raises:
+        HTTPException: 404 if the service does not exist or is deleted.
+    """
+    service = db.get(Service, ident=service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    return service
+
+
 def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
     """Pure DB lookup for the status projection hook. No Docker call."""
     return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
 
 
 def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     service.desired_state = desired
     if wake:
-        service.last_active_time = datetime.now(tz=timezone.utc)
+        service.last_active_time = timezone_aware_now()
     db.commit()
 
 
 def reset_and_wake(db: Session, service_id: int) -> None:
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     service.restart_attempts = 0
     service.last_attempt_at = None
-    service.last_active_time = datetime.now(tz=timezone.utc)
+    service.last_active_time = timezone_aware_now()
     service.runtime_status = RuntimeStatus.RECOVERING
     # any managed image that is not ready is re-queued, not just a failed one: a build whose worker
     # died leaves the row BUILDING with no task behind it, and this is the only path back
@@ -173,9 +188,7 @@ def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
     Raises:
         HTTPException: 404 if the service does not exist or is deleted.
     """
-    service = db.get(Service, ident=service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
 
     allocations = service.device_allocations
     if not allocations:
@@ -311,18 +324,16 @@ def spawn_service_container(
     """Spawns a triton worker container.
 
     Args:
-
         client (DockerClient): The docker client.
         image_id (str): The identifier of the docker image to use.
         worker_name (str): The name of the worker container.
-        worker_command (str): The command to run the docker image.
         worker_network (str): The name of the docker network to use.
         worker_volume (str): The path to the model repository, or a volume name.
-        models (list[str]): The list of models to load.
+        models (list[Model]): The list of models to load.
         worker_requirements (str): Dependencies for the entrypoint to install at boot. Empty for a
             managed image, whose dependencies are already baked in.
         resources (ServiceCreateResources): The resources to use for the container.
-        devices (list[str], optional): The list of devices to use. Defaults to None.
+        devices (list, optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
         healthcheck (dict, optional): The stored healthcheck config, or None for no healthcheck.
 
@@ -407,7 +418,7 @@ def get_allocable_devices(db: Session, required_gpus: float) -> tuple[list[Devic
         required_gpus (float): The number of GPUs required.
 
     Returns:
-        list: List of available GPU devices.
+        tuple[list[Device], float]: The devices to allocate, and the percentage to take of each.
 
     Raises:
         AssertionError: If not enough GPUs are available.
@@ -468,8 +479,8 @@ def create_service_entry(
         service_image=image_name,
         inactivity_timeout=service_timeout,
         priority=service_priority,
-        created_at=datetime.now(tz=timezone.utc),
-        last_active_time=datetime.now(tz=timezone.utc),
+        created_at=timezone_aware_now(),
+        last_active_time=timezone_aware_now(),
     )
     service.models.extend(model_instances)
 
@@ -591,7 +602,7 @@ def create_service(
 
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error creating service: {e!s}") from e
     except ValueError as e:
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e
@@ -616,11 +627,9 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     Raises:
         HTTPException: If the service does not exist or is already deleted.
     """
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     traefik.delete(service_name=service.service_name)
-    service.deleted_at = datetime.now(tz=timezone.utc)
+    service.deleted_at = timezone_aware_now()
     service.desired_state = DesiredState.RETIRED
     db.commit()
 
@@ -632,7 +641,7 @@ def update_active_time(db: Session, service: Service):
         db (Session): The database session.
         service (Service): The service to update.
     """
-    service.last_active_time = datetime.now(tz=timezone.utc)
+    service.last_active_time = timezone_aware_now()
     db.commit()
 
 
@@ -672,10 +681,8 @@ def recreate_service_container(
     """
     try:
         if service.container_id:
-            try:
+            with contextlib.suppress(NotFound):
                 client.containers.get(service.container_id).remove(force=True)
-            except NotFound:
-                pass
             service.container_id = None
 
         # a stale/foreign container may still hold the name under a different id (e.g. dirty
@@ -713,10 +720,10 @@ def recreate_service_container(
 
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error recreating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error recreating service: {e!s}") from e
     except APIError as e:
         db.rollback()
-        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {str(e)}") from e
+        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {e!s}") from e
 
 
 def update_service(
@@ -796,7 +803,7 @@ def update_service(
         raise
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error updating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error updating service: {e!s}") from e
     except ValueError as e:
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e

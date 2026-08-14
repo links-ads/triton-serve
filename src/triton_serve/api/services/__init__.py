@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody, ServiceUpdateBody
@@ -60,7 +60,7 @@ def get_service(
     _: Any = Depends(require_elevated),
 ):
     """
-    Retrieves a specific service by id, if present.
+    Retrieves a specific service by id. A deleted service counts as absent.
 
     **Arguments:**
     - `service_id` (`int`): The id of the service.
@@ -68,10 +68,7 @@ def get_service(
     **Returns:**
     - `Service`: The requested service.
     """
-    service = domain.get_service_by_id(db=db, service_id=service_id)
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"Service with ID={service_id} does not exist")
-    return service
+    return domain.get_service_or_not_found(db=db, service_id=service_id)
 
 
 @router.get(

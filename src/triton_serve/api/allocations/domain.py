@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from triton_serve.api.services.domain import get_service_or_not_found
 from triton_serve.database.model import Machine, RuntimeStatus, Service
 from triton_serve.database.schema import (
     DeviceAllocationSummarySchema,
@@ -64,9 +65,7 @@ def get_resource_overview(db: Session) -> MachineAllocationSchema:
 
 
 def get_service_allocation(db: Session, service_id: int) -> ServiceAllocationSchema:
-    service = db.get(Service, ident=service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
 
     res = service.resources
     return ServiceAllocationSchema(

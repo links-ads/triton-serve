@@ -12,7 +12,7 @@ from triton_serve.builder.spec import BuildSpec
 from triton_serve.config import get_settings
 from triton_serve.config.schema import AppSettings
 from triton_serve.database import database_manager
-from triton_serve.database.model import ImageStatus, ServiceImage, utcnow
+from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
 from triton_serve.extensions import get_builder_docker_client
 from triton_serve.queue import BUILDER_QUEUE, app
 
@@ -116,7 +116,7 @@ def build_image(self: Task, image_hash: str) -> None:
         image = db.get(ServiceImage, image_hash)
         if image is not None:
             image.status = ImageStatus.READY
-            image.built_at = utcnow()
+            image.built_at = timezone_aware_now()
             image.build_log = None
             db.commit()
     LOG.info("build %s: ready at %s", image_hash[:12], ref)

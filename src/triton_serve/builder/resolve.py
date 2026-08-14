@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from triton_serve.builder.registry import image_ref
 from triton_serve.builder.spec import BuildSpec, make_build_spec
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import ImageStatus, Model, Service, ServiceImage, utcnow
+from triton_serve.database.model import ImageStatus, Model, Service, ServiceImage, timezone_aware_now
 
 
 def pip_dependencies(service: Service) -> list[str]:
@@ -52,7 +52,7 @@ def image_from_spec(spec: BuildSpec, settings: AppSettings) -> ServiceImage:
         base_image=spec.base_image,
         apt_packages=list(spec.apt_packages),
         pip_packages=list(spec.pip_packages),
-        built_at=utcnow() if empty else None,
+        built_at=timezone_aware_now() if empty else None,
     )
 
 

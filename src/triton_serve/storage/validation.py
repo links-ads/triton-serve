@@ -39,7 +39,7 @@ def parse_config(config_file: Path) -> dict[str, str]:
 
 
 def parse_version_policy(config_file: Path) -> dict:
-    with open(config_file, "r") as f:
+    with open(config_file) as f:
         content = f.read()
 
     policy = {}
@@ -163,6 +163,7 @@ def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
     """Infers the model type from the given list of files.
 
     Args:
+        model_name (str): name of the model, used in the failure message
         files (list[Path]): list of files to analyze
 
     Returns:
@@ -206,8 +207,8 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
         list[ModelCreateSchema]: list of validated models
     """
     models = []
-    #  list all directories in the repository
-    model_dirs = [d for d in repository_path.iterdir() if d.is_dir()]
+    #  list all directories in the repository, sorted so a bundle always registers in the same order
+    model_dirs = sorted((d for d in repository_path.iterdir() if d.is_dir()), key=lambda d: d.name)
     assert model_dirs, "Empty repository"
 
     dependencies = parse_dependencies(repository_path)

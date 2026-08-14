@@ -33,35 +33,7 @@ class LocalModelStorage(ModelStorage):
         Returns:
             bool: true if present (and name matches, if provided), false otherwise.
         """
-        for item in path.iterdir():
-            if item.is_dir():
-                if name is None or item.name == name:
-                    return True
-        return False
-
-    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
-        """Simply returns the model URI.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            str: The model URI.
-        """
-        return self.location(model, version)
-
-    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
-        """Checks if the model exists in the base path.
-
-        Args:
-            model (ModelSchema): The model to check.
-            version (ModelVersionSchema): The version to check.
-
-        Returns:
-            bool: True if the model exists, False otherwise.
-        """
-        return Path(self.location(model, version)).exists()
+        return any(item.is_dir() and (name is None or item.name == name) for item in path.iterdir())
 
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
         """
@@ -112,11 +84,12 @@ class LocalModelStorage(ModelStorage):
         The model URI is updated with the new version.
 
         Args:
-            updated (ModelSchema): The updated model.
-            origin (Path): The path to the temporary directory containing the model.
+            model (ModelSchema): The updated model.
+            version (ModelVersionSchema): The version being relocated.
+            current_uri (Path): The path the version currently lives at.
 
         Returns:
-            Path: The model URI.
+            Path: The updated model URI.
         """
         # two cases again: the new name does not exist, or it does
         updated_uri = self.location(model, version)
@@ -157,7 +130,3 @@ class LocalModelStorage(ModelStorage):
             rmtree(model_root, ignore_errors=False)
         # extra check to remove empty directories, if any
         self._delete_empty_directories(self.base_path)
-
-    def close(self) -> None:
-        """Not much to do here."""
-        return

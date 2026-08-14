@@ -1,26 +1,47 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
+from tarfile import TarFile
+from zipfile import ZipFile
 
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 
 
-class BaseExtractor(ABC):
-    """Base class for extracting files from an archive."""
+class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
+    """Base class for extracting files from an archive.
+
+    Subclasses only supply the two things the archive libraries spell differently: how the archive
+    is opened, and how its members are listed. Closing and extracting are identical for both.
+    """
+
+    archive: ArchiveT
 
     def __init__(self, file: Path):
         self.file = file
 
     @abstractmethod
-    def __enter__(self, mode: str = "r"): ...
+    def _open(self) -> ArchiveT:
+        """Opens the archive for reading."""
+        ...
 
     @abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb): ...
+    def __iter__(self) -> Iterator[str]:
+        """Yields the names of the archive members."""
+        ...
 
-    @abstractmethod
-    def __iter__(self): ...
+    def __enter__(self) -> BaseExtractor[ArchiveT]:
+        self.archive = self._open()
+        return self
 
-    @abstractmethod
-    def extract(self, member: str, path: Path): ...
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.archive.close()
+
+    def extract(self, path: Path, member: str | None = None) -> None:
+        """Extracts `member` into `path`, or the whole archive when no member is given."""
+        if member is not None:
+            self.archive.extract(member, path)
+        else:
+            self.archive.extractall(path)
 
 
 class ModelSource(ABC):
@@ -46,7 +67,11 @@ class ModelSource(ABC):
 
 
 class ModelStorage(ABC):
-    supported_formats = [".zip", ".tar", ".gz"]
+    """Where model files live. Placing them is the whole job.
+
+    Triton reads the model repository straight off a shared volume, so nothing here ever hands
+    model bytes to a caller -- a storage backend only has to put files where Triton will find them.
+    """
 
     def __init__(self, base_path: Path) -> None:
         self.base_path: Path = base_path
@@ -56,53 +81,25 @@ class ModelStorage(ABC):
         and using both the artifact's name and the artifact's version.
 
         Args:
-            model (ModelSchema): model name and version
+            model (ModelSchema): the model to locate
             version (ModelVersionSchema): model version
 
         Returns:
-            str: absolute path to the package
+            Path: absolute path to the package
         """
         return self.base_path / model.model_name / str(version.version_id)
 
     @abstractmethod
-    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
-        """Required to transform a possibly remote URI into a local path.
-        No-op for local storage.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            Path: local path to a model.
-        """
-        ...
-
-    @abstractmethod
-    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
-        """Checks whether the given model exists.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            bool: True if the model exists, False otherwise.
-        """
-        ...
-
-    @abstractmethod
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
-        """Required to store the given data into the storage implementation (locally, blog storage, etc.).
-        This is the complement of the load method.
+        """Required to store the given data into the storage implementation (locally, blob storage, etc.).
 
         Args:
-            model (ModelSchema): model name and version.
-            verrsion (ModelVersionSchema): model version.
+            model (ModelSchema): the model being stored.
+            version (ModelVersionSchema): model version.
             origin (Path): local path to the model root.
 
         Returns:
-            path to the model root.
+            Path: path to the model root.
         """
         ...
 
@@ -114,12 +111,12 @@ class ModelStorage(ABC):
         Args:
             model (ModelSchema): current model name and version.
             version (ModelVersionSchema): current model version.
-            origin (Path): old path to the model root, to be updated.
+            current_uri (Path): old path to the model root, to be updated.
 
         Returns:
             Path: updated local or remote path to the model.
         """
-        raise NotImplementedError()
+        ...
 
     @abstractmethod
     def delete(self, model: ModelSchema, version: ModelVersionSchema) -> None:
@@ -129,9 +126,4 @@ class ModelStorage(ABC):
             model (ModelSchema): model name and version.
             version (ModelVersionSchema): model version.
         """
-        ...
-
-    @abstractmethod
-    def close(self) -> None:
-        """Closes the storage instance."""
         ...

@@ -9,8 +9,8 @@ from triton_serve.api.dto import ModelUpdateBody
 from triton_serve.builder.execute import enqueue_build
 from triton_serve.builder.resolve import resolve_service_image, services_using_models
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import Model, ModelVersion
-from triton_serve.database.schema import ModelCreateSchema, timezone_aware_now
+from triton_serve.database.model import Model, ModelVersion, timezone_aware_now
+from triton_serve.database.schema import ModelCreateSchema
 from triton_serve.storage import ModelSource, ModelStorage
 from triton_serve.storage.validation import validate_models
 
@@ -55,11 +55,10 @@ def get_single_model(
 
     Args:
         db (Session): The database session.
-        storage (ModelStorage): The storage implementation to use.
         model_name (str): The name of the model to retrieve.
 
     Returns:
-        Model: Returns the requested model instance if found, or None otherwise.
+        Model | None: The requested model instance if found, None otherwise.
     """
     model = (
         db.query(Model)
@@ -88,7 +87,7 @@ def get_all_models(
         source (Optional[str], optional): The source of the model to filter. Defaults to None.
 
     Returns:
-        List[ModelSchema]: A list of ModelSchema instances representing the filtered models.
+        list[Model]: A list of Model instances representing the filtered models.
     """
     statement = db.query(Model)
     if model_name is not None:
@@ -113,6 +112,11 @@ def create_models_from_source(
     """
     Extracts models from a source archive and creates them in the database.
 
+    A bundle registers as one unit: the whole set commits once, at the end, so a model that fails
+    halfway through does not leave the ones before it registered. Storage is not part of that
+    transaction -- files already moved for the earlier models stay on disk, to be overwritten by
+    the next attempt at the same bundle.
+
     Args:
         source (ModelSource): The source of the models to extract, either archive or git repository.
         storage (ModelStorage): The storage implementation to use.
@@ -120,7 +124,7 @@ def create_models_from_source(
         update (bool, optional): Whether to update the models if they already exist. Defaults to False.
 
     Returns:
-        List[Model]: A list of Model instances representing the extracted models.
+        list[Model]: A list of Model instances representing the extracted models.
 
     Raises:
         HTTPException: If the file is invalid.
@@ -134,7 +138,6 @@ def create_models_from_source(
             # store the models in the database
             for instance in validated_models:
                 # verify the model is not already in the database
-                print(instance.model_name)
                 if old_model := get_single_model(db=db, model_name=instance.model_name):
                     if not update:
                         raise HTTPException(
@@ -178,13 +181,20 @@ def create_models_from_source(
                     model = Model(**{**instance.model_dump(), "versions": model_versions})
                     db.add(model)
 
-                db.commit()
-                db.refresh(model)
                 models.append(model)
 
+            db.commit()
+            for model in models:
+                db.refresh(model)
+
         return models
+    except HTTPException:
+        # a conflict raised mid-loop must discard the models already staged before it
+        db.rollback()
+        raise
     except (AssertionError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}")
+        db.rollback()
+        raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}") from e
 
 
 def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: ModelUpdateBody) -> Model:
@@ -193,16 +203,16 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
     If the name or the version are provided in the updates, update the model and move the model to the new location.
 
     Args:
+        db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
-        model (ModelSchema): The model to update.
+        model (Model): The model to update.
         updates (ModelUpdateBody): The updates to apply.
 
     Raises:
         HTTPException: If the model could not be updated.
 
     Returns:
-        ModelSchema: The updated model.
-
+        Model: The updated model.
     """
     try:
         updated_name = updates.name or model.model_name
@@ -218,10 +228,10 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
         db.refresh(model)
         return model
     except AssertionError as e:
-        raise HTTPException(status_code=409, detail=f"Cannot update model: {e}")
+        raise HTTPException(status_code=409, detail=f"Cannot update model: {e}") from e
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Cannot update model: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot update model: {e}") from e
 
 
 def delete_model(
@@ -236,15 +246,14 @@ def delete_model(
     Args:
         db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
-        model (ModelSchema): The model to delete.
-        version_number (int): The version of the model to delete.
+        model (Model): The model to delete.
+        version_number (int | None): The version to delete, or None to delete every version.
 
     Raises:
         HTTPException: If the model could not be deleted.
 
     Returns:
-        None
-
+        Model: The model, tombstoned when no version is left.
     """
     LOG.debug("Deleting model '%s' (version: %s)", model.model_name, version_number)
     if version_number is not None:

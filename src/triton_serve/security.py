@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from sqlalchemy.orm import Session
 
-from triton_serve.database.model import APIKey, KeyType, utcnow
+from triton_serve.database.model import APIKey, KeyType, timezone_aware_now
 from triton_serve.extensions import get_db
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
@@ -10,7 +10,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 def retrieve_key(db: Session, key: str) -> APIKey | None:
     api_key = db.query(APIKey).filter_by(value=key).first()
-    if api_key and api_key.expires_at > utcnow():
+    if api_key and api_key.expires_at > timezone_aware_now():
         return api_key
     return None
 

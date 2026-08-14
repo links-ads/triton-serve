@@ -26,7 +26,7 @@ def get_resources(
 
     Includes CPU, RAM, and per-GPU allocation broken down into:
     - `allocated`: reserved by all non-deleted services
-    - `in_use`: consumed by services in STARTING or ACTIVE state
+    - `in_use`: consumed by services in READY, WARMING or RECOVERING state
 
     **Returns:**
     - `MachineAllocationSchema`: Machine-wide resource snapshot.

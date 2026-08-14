@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone
 
 from docker import DockerClient
 from sqlalchemy.orm import Session
@@ -8,7 +7,7 @@ from triton_serve.api.services.domain import get_container_by_name, recreate_ser
 from triton_serve.api.services.reconcile import Action, Decision
 from triton_serve.builder.registry import pull_auth
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import RuntimeStatus, Service
+from triton_serve.database.model import RuntimeStatus, Service, timezone_aware_now
 
 LOG = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ def _recreate(db: Session, client: DockerClient, service: Service, settings: App
 
 def _spend_attempt(service: Service) -> None:
     service.restart_attempts += 1
-    service.last_attempt_at = datetime.now(timezone.utc)
+    service.last_attempt_at = timezone_aware_now()
 
 
 def _maybe_reset_budget(service: Service, cooldown: int) -> None:
@@ -32,7 +31,7 @@ def _maybe_reset_budget(service: Service, cooldown: int) -> None:
     budget back. FAILED never reaches READY, so this can never revive a terminally failed service.
     """
     if service.restart_attempts and service.last_attempt_at is not None:
-        elapsed = (datetime.now(timezone.utc) - service.last_attempt_at).total_seconds()
+        elapsed = (timezone_aware_now() - service.last_attempt_at).total_seconds()
         if elapsed > cooldown:
             service.restart_attempts = 0
             service.last_attempt_at = None

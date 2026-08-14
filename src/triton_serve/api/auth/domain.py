@@ -3,15 +3,14 @@ import secrets
 from datetime import timedelta
 
 from fastapi import HTTPException
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from triton_serve.database.model import APIKey, KeyType, Service, utcnow
+from triton_serve.database.model import APIKey, KeyType, Service, timezone_aware_now
 
 LOG = logging.getLogger("uvicorn")
 
 
-def get_key(db: Session, key_id: int) -> APIKey:
+def get_key(db: Session, key_id: int) -> APIKey | None:
     """
     Retrieve an API key by its ID.
 
@@ -20,7 +19,7 @@ def get_key(db: Session, key_id: int) -> APIKey:
         key_id (int): API key ID
 
     Returns:
-        APIKey: API key object if found, else None
+        APIKey | None: API key object if found, None otherwise
     """
     return db.query(APIKey).filter(APIKey.key_id == key_id).first()
 
@@ -41,19 +40,16 @@ def list_keys(
         service (str): Service name
 
     Returns:
-        List[APIKey]: List of API keys
+        list[APIKey]: List of API keys
     """
-    try:
-        query = db.query(APIKey)
-        if key_type:
-            query = query.filter_by(key_type=key_type)
-        if project:
-            query = query.filter_by(project=project)
-        if service:
-            query = query.join(APIKey.services).filter_by(service_name=service)
-        return query.all()
-    except SQLAlchemyError as e:
-        raise HTTPException(status_code=500, detail=e._message())
+    query = db.query(APIKey)
+    if key_type:
+        query = query.filter_by(key_type=key_type)
+    if project:
+        query = query.filter_by(project=project)
+    if service:
+        query = query.join(APIKey.services).filter_by(service_name=service)
+    return query.all()
 
 
 def generate_key(
@@ -79,7 +75,7 @@ def generate_key(
         APIKey: Newly created API key.
     """
     key = secrets.token_urlsafe(32)
-    expires_at = utcnow() + timedelta(days=expiration_days)
+    expires_at = timezone_aware_now() + timedelta(days=expiration_days)
     new_key = APIKey(
         value=key,
         key_type=key_type,
@@ -87,16 +83,12 @@ def generate_key(
         notes=notes,
         expires_at=expires_at,
     )
-    try:
-        if services:
-            new_key.services = services
+    if services:
+        new_key.services = services
 
-        db.add(new_key)
-        db.commit()
-        return new_key
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=e._message())
+    db.add(new_key)
+    db.commit()
+    return new_key
 
 
 def revoke_key(db: Session, key: str):
@@ -107,16 +99,11 @@ def revoke_key(db: Session, key: str):
         db (Session): SQLAlchemy session
         key (str): API key value
     """
-    try:
-        api_key = db.query(APIKey).filter_by(value=key).first()
-        if api_key:
-            db.delete(api_key)
-            db.commit()
-        else:
-            raise HTTPException(status_code=404, detail="Key not found")
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=e._message())
+    api_key = db.query(APIKey).filter_by(value=key).first()
+    if api_key is None:
+        raise HTTPException(status_code=404, detail="Key not found")
+    db.delete(api_key)
+    db.commit()
 
 
 def update_key(
@@ -138,22 +125,18 @@ def update_key(
         APIKey: Updated API key.
     """
     LOG.debug(f"Updated info: {project}, {notes}")
-    try:
-        api_key = db.query(APIKey).filter_by(value=key).first()
-        if not api_key:
-            raise HTTPException(status_code=404, detail="Key not found")
+    api_key = db.query(APIKey).filter_by(value=key).first()
+    if api_key is None:
+        raise HTTPException(status_code=404, detail="Key not found")
 
-        if project is not None:
-            api_key.project = project
-        if notes is not None:
-            api_key.notes = notes
+    if project is not None:
+        api_key.project = project
+    if notes is not None:
+        api_key.notes = notes
 
-        db.commit()
-        db.refresh(api_key)
-        return api_key
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    db.commit()
+    db.refresh(api_key)
+    return api_key
 
 
 def add_service_to_key(db: Session, key: APIKey, service: Service) -> APIKey:
@@ -168,18 +151,13 @@ def add_service_to_key(db: Session, key: APIKey, service: Service) -> APIKey:
     Returns:
         APIKey: Updated API key.
     """
-    try:
-        service_ids = [s.service_id for s in key.services]
-        if service.service_id not in service_ids:
-            key.services.append(service)
-            db.commit()
-        else:
-            raise HTTPException(status_code=400, detail="Service already added to key")
-        db.refresh(key)
-        return key
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=e._message())
+    service_ids = [s.service_id for s in key.services]
+    if service.service_id in service_ids:
+        raise HTTPException(status_code=400, detail="Service already added to key")
+    key.services.append(service)
+    db.commit()
+    db.refresh(key)
+    return key
 
 
 def remove_service_from_key(db: Session, key: APIKey, service: Service) -> APIKey:
@@ -194,12 +172,7 @@ def remove_service_from_key(db: Session, key: APIKey, service: Service) -> APIKe
     Returns:
         APIKey: Updated API key.
     """
-    try:
-        updated_services = [s for s in key.services if s.service_id != service.service_id]
-        key.services = updated_services
-        db.commit()
-        db.refresh(key)
-        return key
-    except SQLAlchemyError as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=e._message())
+    key.services = [s for s in key.services if s.service_id != service.service_id]
+    db.commit()
+    db.refresh(key)
+    return key
