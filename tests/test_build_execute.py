@@ -154,4 +154,4 @@ def test_build_image_marks_a_broken_spec_failed(test_db, pending_image):
     test_db.expire_all()
     row = test_db.get(ServiceImage, row.image_hash)
     assert row.status is ImageStatus.FAILED
-    assert row.build_log
+    assert "this-package-does-not-exist-93f2a1" in row.build_log

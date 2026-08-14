@@ -4,7 +4,7 @@ from pathlib import Path
 
 from celery import Task
 from docker import DockerClient
-from docker.errors import APIError
+from docker.errors import APIError, BuildError
 
 from triton_serve.builder.registry import auth_config, push_auth
 from triton_serve.builder.render import write_build_context
@@ -52,6 +52,17 @@ def _push(client: DockerClient, ref: str, settings: AppSettings) -> None:
             raise APIError(line["errorDetail"].get("message", "push failed"))
 
 
+def _failure_detail(exc: Exception) -> str:
+    """What the column is named after: the daemon's output when there is any, the exception otherwise.
+
+    `BuildError.__str__` is only the `non-zero code` line; the pip or apt output that explains the
+    failure is in its `build_log`, and that is what a user needs to fix their bundle.
+    """
+    if isinstance(exc, BuildError):
+        return "".join(chunk.get("stream", "") for chunk in exc.build_log) or str(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _mark_failed(image_hash: str, reason: str) -> None:
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
@@ -97,7 +108,7 @@ def build_image(self: Task, image_hash: str) -> None:
         _push(client, ref, settings)
     except Exception as exc:
         if self.request.retries >= self.max_retries:
-            _mark_failed(image_hash, f"{type(exc).__name__}: {exc}")
+            _mark_failed(image_hash, _failure_detail(exc))
             return
         raise self.retry(exc=exc, countdown=30 * 2**self.request.retries) from exc
 

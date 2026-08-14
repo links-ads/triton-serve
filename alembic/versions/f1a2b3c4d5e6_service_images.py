@@ -7,6 +7,7 @@ Create Date: 2026-08-13
 """
 
 import hashlib
+import json
 
 import sqlalchemy as sa
 from alembic import op
@@ -20,6 +21,19 @@ depends_on: str | None = None
 # create_type=False: the type is created explicitly below, otherwise create_table emits a second
 # CREATE TYPE and the migration fails on the duplicate
 image_status = postgresql.ENUM("pending", "building", "ready", "failed", name="imagestatus", create_type=False)
+
+
+def _empty_spec_hash(ref: str) -> str:
+    """The hash BuildSpec computes for a dependency-free service on `ref`.
+
+    The canonical form is inlined rather than imported so a later change to BuildSpec cannot rewrite
+    what this revision backfilled. If the two ever diverge, the first write to an upgraded service
+    inserts a duplicate row for content that is already in the table.
+    """
+    canonical = json.dumps(
+        {"apt_packages": [], "base_image": ref, "pip_packages": []}, sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def upgrade() -> None:
@@ -49,7 +63,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     refs = [row[0] for row in bind.execute(sa.text("SELECT DISTINCT service_image FROM services"))]
     for ref in refs:
-        digest = hashlib.sha256(ref.encode()).hexdigest()
+        digest = _empty_spec_hash(ref)
         bind.execute(
             sa.text(
                 "INSERT INTO service_images "

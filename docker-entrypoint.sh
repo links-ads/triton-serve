@@ -76,6 +76,9 @@ start_sentinel() {
 
 start_builder() {
     echo "Starting Builder..."
+    # --concurrency=1, single replica: retrying a build queues a second task for the same hash, and
+    # serializing them is what makes the duplicate a no-op -- the second finds the row already READY.
+    # Scaling out stays correct (the tag is content-addressed, the push idempotent) but stops being free.
     exec uv run celery -A triton_serve.tasks worker \
         --loglevel=${LOG_LEVEL:-info} \
         --concurrency=1 \
