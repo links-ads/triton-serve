@@ -1,7 +1,7 @@
 # Simple and elegant Makefile derived from the almighty https://github.com/pydantic/pydantic
 .DEFAULT_GOAL := help
 .DEFAULT_GOAL := help
-PROFILE := gpu
+PROFILE ?= gpu
 DOCKER_COMPOSE := docker compose --profile $(PROFILE) -f docker-compose.yml -f docker-compose.$(TARGET).yml
 sources = src tests
 .ONESHELL:
