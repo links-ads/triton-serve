@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from pathlib import Path
 
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
@@ -11,16 +12,18 @@ class BaseExtractor(ABC):
         self.file = file
 
     @abstractmethod
-    def __enter__(self, mode: str = "r"): ...
+    def __enter__(self) -> "BaseExtractor": ...
 
     @abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb): ...
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
 
     @abstractmethod
-    def __iter__(self): ...
+    def __iter__(self) -> Iterator[str]: ...
 
     @abstractmethod
-    def extract(self, member: str, path: Path): ...
+    def extract(self, path: Path, member: str | None = None) -> None:
+        """Extracts `member` into `path`, or the whole archive when no member is given."""
+        ...
 
 
 class ModelSource(ABC):
@@ -46,7 +49,11 @@ class ModelSource(ABC):
 
 
 class ModelStorage(ABC):
-    supported_formats = [".zip", ".tar", ".gz"]
+    """Where model files live. Placing them is the whole job.
+
+    Triton reads the model repository straight off a shared volume, so nothing here ever hands
+    model bytes to a caller -- a storage backend only has to put files where Triton will find them.
+    """
 
     def __init__(self, base_path: Path) -> None:
         self.base_path: Path = base_path
@@ -65,40 +72,13 @@ class ModelStorage(ABC):
         return self.base_path / model.model_name / str(version.version_id)
 
     @abstractmethod
-    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
-        """Required to transform a possibly remote URI into a local path.
-        No-op for local storage.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            Path: local path to a model.
-        """
-        ...
-
-    @abstractmethod
-    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
-        """Checks whether the given model exists.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            bool: True if the model exists, False otherwise.
-        """
-        ...
-
-    @abstractmethod
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
         """Required to store the given data into the storage implementation (locally, blog storage, etc.).
         This is the complement of the load method.
 
         Args:
             model (ModelSchema): model name and version.
-            verrsion (ModelVersionSchema): model version.
+            version (ModelVersionSchema): model version.
             origin (Path): local path to the model root.
 
         Returns:
@@ -114,12 +94,12 @@ class ModelStorage(ABC):
         Args:
             model (ModelSchema): current model name and version.
             version (ModelVersionSchema): current model version.
-            origin (Path): old path to the model root, to be updated.
+            current_uri (Path): old path to the model root, to be updated.
 
         Returns:
             Path: updated local or remote path to the model.
         """
-        raise NotImplementedError()
+        ...
 
     @abstractmethod
     def delete(self, model: ModelSchema, version: ModelVersionSchema) -> None:
@@ -129,9 +109,4 @@ class ModelStorage(ABC):
             model (ModelSchema): model name and version.
             version (ModelVersionSchema): model version.
         """
-        ...
-
-    @abstractmethod
-    def close(self) -> None:
-        """Closes the storage instance."""
         ...

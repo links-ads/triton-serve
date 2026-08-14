@@ -39,30 +39,6 @@ class LocalModelStorage(ModelStorage):
                     return True
         return False
 
-    def load(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
-        """Simply returns the model URI.
-
-        Args:
-            model (ModelSchema): model name and version
-            version (ModelVersionSchema): model version
-
-        Returns:
-            str: The model URI.
-        """
-        return self.location(model, version)
-
-    def exists(self, model: ModelSchema, version: ModelVersionSchema) -> bool:
-        """Checks if the model exists in the base path.
-
-        Args:
-            model (ModelSchema): The model to check.
-            version (ModelVersionSchema): The version to check.
-
-        Returns:
-            bool: True if the model exists, False otherwise.
-        """
-        return Path(self.location(model, version)).exists()
-
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
         """
         Moves the model from the origin to the base path.
@@ -157,7 +133,3 @@ class LocalModelStorage(ModelStorage):
             rmtree(model_root, ignore_errors=False)
         # extra check to remove empty directories, if any
         self._delete_empty_directories(self.base_path)
-
-    def close(self) -> None:
-        """Not much to do here."""
-        return
