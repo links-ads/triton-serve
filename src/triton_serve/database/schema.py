@@ -9,35 +9,12 @@ def timezone_aware_now():
     return datetime.now(tz=timezone.utc)
 
 
-class MachineBaseSchema(BaseModel):
-    host_name: str
-    num_cpus: int
-    total_memory: int
-
-
-class MachineCreateSchema(MachineBaseSchema):
-    pass
-
-
-class MachineSchema(MachineBaseSchema):
-    model_config = ConfigDict(from_attributes=True)
-    host_id: int
-
-
-class DeviceBaseSchema(BaseModel):
+class DeviceCreateSchema(BaseModel):
     uuid: str
     name: str
     memory: int
     index: int
-
-
-class DeviceCreateSchema(DeviceBaseSchema):
     host_id: int | None = None
-
-
-class DeviceSchema(DeviceBaseSchema):
-    model_config = ConfigDict(from_attributes=True)
-    host_id: int
 
 
 class ModelVersionBaseSchema(BaseModel):
@@ -116,10 +93,6 @@ class ServiceInfoSchema(BaseModel):
     runtime_status: RuntimeStatus
 
 
-class ServiceCreateSchema(ServiceBaseSchema):
-    pass
-
-
 class ServiceSchema(ServiceBaseSchema):
     model_config = ConfigDict(from_attributes=True)
     service_id: int
@@ -135,10 +108,6 @@ class APIKeyBaseSchema(BaseModel):
     created_at: datetime = Field(default_factory=timezone_aware_now)
     expires_at: datetime | None = None
     services: list[ServiceInfoSchema] = []
-
-
-class APIKeyCreateSchema(APIKeyBaseSchema):
-    pass
 
 
 class APIKeySchema(APIKeyBaseSchema):
