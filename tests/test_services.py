@@ -345,6 +345,9 @@ def test_delete_is_db_only(test_client, test_db):
     listing = test_client.get("/services").json()
     assert listing == []
 
+    # a tombstoned service is absent from the detail route too, not just the listing
+    assert test_client.get(f"/services/{service_id}").status_code == 404
+
 
 @pytest.mark.order(after="test_delete_is_db_only")
 def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
