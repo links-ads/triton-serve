@@ -122,15 +122,32 @@ def get_service_by_id(db: Session, service_id: int) -> Service | None:
     return db.get(Service, ident=service_id)
 
 
+def get_service_or_not_found(db: Session, service_id: int) -> Service:
+    """Returns a live service by id, or raises 404. A deleted service counts as absent.
+
+    Args:
+        db (Session): The database session.
+        service_id (int): The id of the service.
+
+    Returns:
+        Service: The requested service.
+
+    Raises:
+        HTTPException: 404 if the service does not exist or is deleted.
+    """
+    service = db.get(Service, ident=service_id)
+    if service is None or service.deleted_at is not None:
+        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    return service
+
+
 def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
     """Pure DB lookup for the status projection hook. No Docker call."""
     return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
 
 
 def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     service.desired_state = desired
     if wake:
         service.last_active_time = timezone_aware_now()
@@ -138,9 +155,7 @@ def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake:
 
 
 def reset_and_wake(db: Session, service_id: int) -> None:
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     service.restart_attempts = 0
     service.last_attempt_at = None
     service.last_active_time = timezone_aware_now()
@@ -172,9 +187,7 @@ def get_service_config(db: Session, service_id: int) -> ServiceCreateBody:
     Raises:
         HTTPException: 404 if the service does not exist or is deleted.
     """
-    service = db.get(Service, ident=service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
 
     allocations = service.device_allocations
     if not allocations:
@@ -615,9 +628,7 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     Raises:
         HTTPException: If the service does not exist or is already deleted.
     """
-    service = db.get(Service, service_id)
-    if service is None or service.deleted_at is not None:
-        raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
+    service = get_service_or_not_found(db, service_id)
     traefik.delete(service_name=service.service_name)
     service.deleted_at = timezone_aware_now()
     service.desired_state = DesiredState.RETIRED
