@@ -112,11 +112,13 @@ test:
 		-f docker-compose.yml \
 		-f docker-compose.test.yml up --build \
 		--abort-on-container-exit --exit-code-from tester; fi
+	@status=$$?
 	@echo "Tearing everything down..."
 	@docker compose -p serve-test \
 		--profile $(PROFILE) \
         -f docker-compose.yml \
         -f docker-compose.test.yml down -v
+	@exit $$status
 
 .PHONY: clean ## Clean unused files
 clean:
