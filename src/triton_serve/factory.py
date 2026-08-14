@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 from importlib.metadata import version
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, operations, services
@@ -61,8 +63,28 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
         lifespan=lifespan,
     )
     register_middlewares(app)
+    register_exception_handlers(app)
     register_routers(app)
     return app
+
+
+def register_exception_handlers(app: FastAPI):
+    """Registers application-wide exception handlers.
+
+    :param app: app instance
+    :type app: FastAPI
+    """
+
+    @app.exception_handler(SQLAlchemyError)
+    async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+        """Turns any unhandled database failure into an opaque 500.
+
+        The driver message goes to the log, never to the client: it carries table names, SQL and
+        occasionally row values. The session context manager has already rolled back by the time
+        this runs.
+        """
+        log.exception("Database error on %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse(status_code=500, content={"detail": "Internal database error"})
 
 
 def register_middlewares(app: FastAPI):
