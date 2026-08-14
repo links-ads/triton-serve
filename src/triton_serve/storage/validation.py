@@ -206,8 +206,8 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
         list[ModelCreateSchema]: list of validated models
     """
     models = []
-    #  list all directories in the repository
-    model_dirs = [d for d in repository_path.iterdir() if d.is_dir()]
+    #  list all directories in the repository, sorted so a bundle always registers in the same order
+    model_dirs = sorted((d for d in repository_path.iterdir() if d.is_dir()), key=lambda d: d.name)
     assert model_dirs, "Empty repository"
 
     dependencies = parse_dependencies(repository_path)

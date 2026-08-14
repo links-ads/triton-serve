@@ -2,6 +2,7 @@ import io
 import logging
 import os
 from pathlib import Path
+from shutil import rmtree
 from typing import cast
 
 import pytest
@@ -89,6 +90,42 @@ def test_create_models_from_zip_already_existing_with_update(test_client, test_s
         assert subdir.name.isdigit()
         files = [f for f in subdir.iterdir() if f.is_file()]
         assert len(files) > 0
+
+
+@pytest.mark.order(after="test_create_models_from_zip_already_existing_with_update")
+def test_multi_model_bundle_updates_in_one_transaction(test_client, make_zip):
+    """Two models updated in one bundle now share a single flush (#134).
+
+    Each one deletes its old versions and re-inserts rows under the same primary keys, so this only
+    works if the flush still orders the deletes ahead of the inserts once several models are batched
+    into it rather than committed one at a time.
+    """
+    with make_zip(include_models=["ensemble", "onnx"]) as package:
+        response = test_client.post("/models", data={"update": True}, files={"package": package})
+    assert response.status_code == 201, response.text
+    assert {model["model_name"] for model in response.json()} == {"ensemble", "onnx"}
+
+    for name in ("ensemble", "onnx"):
+        detail = test_client.get(f"/models/{name}")
+        assert detail.status_code == 200
+        assert len(detail.json()["versions"]) > 0
+
+
+@pytest.mark.order(after="test_create_models_from_zip_already_existing")
+def test_conflicting_bundle_registers_nothing(test_client, test_settings, make_zip):
+    """A bundle registers as one unit (#134).
+
+    `alpha_onnx` sorts first and is new, `onnx` is already registered: the conflict is raised only
+    after `alpha_onnx` has been staged, which is exactly the case that used to leave it committed.
+    """
+    try:
+        with make_zip(include_models=["alpha_onnx", "onnx"]) as package:
+            response = test_client.post("/models", files={"package": package})
+        assert response.status_code == 409, response.text
+        assert test_client.get("/models/alpha_onnx").status_code == 404
+    finally:
+        # storage is not part of the transaction, so the staged files outlive the rollback
+        rmtree(test_settings.repository_path / "alpha_onnx", ignore_errors=True)
 
 
 @pytest.mark.order(after="test_create_models_from_zip")

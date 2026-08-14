@@ -113,6 +113,11 @@ def create_models_from_source(
     """
     Extracts models from a source archive and creates them in the database.
 
+    A bundle registers as one unit: the whole set commits once, at the end, so a model that fails
+    halfway through does not leave the ones before it registered. Storage is not part of that
+    transaction -- files already moved for the earlier models stay on disk, to be overwritten by
+    the next attempt at the same bundle.
+
     Args:
         source (ModelSource): The source of the models to extract, either archive or git repository.
         storage (ModelStorage): The storage implementation to use.
@@ -134,7 +139,6 @@ def create_models_from_source(
             # store the models in the database
             for instance in validated_models:
                 # verify the model is not already in the database
-                print(instance.model_name)
                 if old_model := get_single_model(db=db, model_name=instance.model_name):
                     if not update:
                         raise HTTPException(
@@ -178,13 +182,20 @@ def create_models_from_source(
                     model = Model(**{**instance.model_dump(), "versions": model_versions})
                     db.add(model)
 
-                db.commit()
-                db.refresh(model)
                 models.append(model)
 
+            db.commit()
+            for model in models:
+                db.refresh(model)
+
         return models
+    except HTTPException:
+        # a conflict raised mid-loop must discard the models already staged before it
+        db.rollback()
+        raise
     except (AssertionError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}")
+        db.rollback()
+        raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}") from e
 
 
 def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: ModelUpdateBody) -> Model:
