@@ -6,7 +6,7 @@ x-backend-base: &backend-base
     - TARGET=${TARGET:-dev}
     - NVIDIA_DRIVER_VERSION=${NVIDIA_DRIVER_VERSION:-550.90.07}
     - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
-    - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+    - PYTHON_VERSION=${PYTHON_VERSION:-3.14.3}
     - UV_VERSION=${UV_VERSION:-0.10.7}
   image: ghcr.io/links-ads/serve-backend:${PROJECT_VERSION:-latest}
   hostname: backend
@@ -78,7 +78,7 @@ services:
       dockerfile: containers/sentinel/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
-      - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+      - PYTHON_VERSION=${PYTHON_VERSION:-3.14.3}
       - UV_VERSION=${UV_VERSION:-0.10.7}
     image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:
@@ -100,7 +100,7 @@ services:
       dockerfile: containers/sentinel/Dockerfile
       args:
       - TARGET=${TARGET:-dev}
-      - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+      - PYTHON_VERSION=${PYTHON_VERSION:-3.14.3}
       - UV_VERSION=${UV_VERSION:-0.10.7}
     image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
     volumes:

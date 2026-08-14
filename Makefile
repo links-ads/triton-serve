@@ -43,8 +43,8 @@ lint: .uv
 	uv run ruff format --check $(sources)
 
 .PHONY: typecheck  ## Perform type-checking
-typecheck: .pre-commit
-	uv run pyright src/
+typecheck: .uv
+	uv run pyright
 
 .PHONY: config  ## Print the full configuration of the compose project
 config: .check-target .check-profile
