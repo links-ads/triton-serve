@@ -93,7 +93,7 @@ migrate: .uv
 	@$(PY_BIN)/alembic revision --autogenerate -m "$${MSG}"
 
 .PHONY: test  ## Run unit and integration tests in containers
-test:
+test: .check-profile
 	@echo "Setting up test environment..."
 	@ln -sf ./envs/test.env .env
 	@echo "Executing containerized tests..."
