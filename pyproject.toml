@@ -60,6 +60,24 @@ build-backend = "hatchling.build"
 [tool.ruff]
 line-length = 119
 
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's whole dependency-injection contract is "call this marker in the default argument",
+# so B008 fires on every route in the project. The markers are inert descriptors, not the
+# mutable defaults the rule exists to catch.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+    "fastapi.Security",
+]
+
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"

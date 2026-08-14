@@ -1,9 +1,9 @@
 import io
 import logging
 import os
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
 from zipfile import ZipFile
 
 import docker

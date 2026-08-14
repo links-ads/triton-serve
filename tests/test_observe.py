@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from docker.errors import NotFound
@@ -43,7 +43,7 @@ class FakeClient:
 
 
 def _container(status, exit_code=0, health=None, started=None):
-    started = started or datetime.now(timezone.utc)
+    started = started or datetime.now(UTC)
     return SimpleNamespace(
         status=status,
         attrs={
@@ -75,36 +75,36 @@ def test_running_healthy_is_running():
 
 
 def test_running_health_starting_is_booting():
-    c = _container("running", health="starting", started=datetime.now(timezone.utc))
+    c = _container("running", health="starting", started=datetime.now(UTC))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
 
 
 def test_running_health_unhealthy_is_crashed():
     # docker only reports unhealthy past the start period and after the configured retries, so
     # there is nothing left to wait for: the boot grace must not delay the verdict
-    c = _container("running", health="unhealthy", started=datetime.now(timezone.utc))
+    c = _container("running", health="unhealthy", started=datetime.now(UTC))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
 
 
 def test_running_health_stuck_past_grace_is_crashed():
-    c = _container("running", health="unhealthy", started=datetime.now(timezone.utc) - timedelta(seconds=120))
+    c = _container("running", health="unhealthy", started=datetime.now(UTC) - timedelta(seconds=120))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
 
 
 def test_running_health_starting_ignores_boot_grace():
     # starting cannot hang forever, docker leaves it after the start period; calling it crashed on
     # our own clock would recreate a container docker still considers to be warming up
-    c = _container("running", health="starting", started=datetime.now(timezone.utc) - timedelta(seconds=120))
+    c = _container("running", health="starting", started=datetime.now(UTC) - timedelta(seconds=120))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
 
 
 def test_running_no_health_within_grace_is_booting():
-    c = _container("running", started=datetime.now(timezone.utc))
+    c = _container("running", started=datetime.now(UTC))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
 
 
 def test_running_no_health_past_grace_is_running():
-    c = _container("running", started=datetime.now(timezone.utc) - timedelta(seconds=120))
+    c = _container("running", started=datetime.now(UTC) - timedelta(seconds=120))
     assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.RUNNING
 
 

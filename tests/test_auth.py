@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import yaml
@@ -22,7 +22,7 @@ def _service_config_keys(settings, service_name: str) -> list[str]:
 @pytest.fixture
 def create_api_key(test_db):
     def _create_api_key(key_type, key_value, project, notes=None, expiration_days=30):
-        expires_at = datetime.now(tz=timezone.utc) + timedelta(days=expiration_days)
+        expires_at = datetime.now(tz=UTC) + timedelta(days=expiration_days)
 
         api_key = APIKey(
             key_type=key_type,

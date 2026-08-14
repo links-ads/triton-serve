@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from docker import DockerClient
 from docker.errors import ImageNotFound, NotFound
@@ -26,7 +26,7 @@ def _uptime_seconds(state: dict) -> float | None:
     except ValueError:
         return None
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
+        started = started.replace(tzinfo=UTC)
     return (timezone_aware_now() - started).total_seconds()
 
 

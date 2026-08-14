@@ -604,7 +604,7 @@ def create_service(
 
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error creating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error creating service: {e!s}") from e
     except ValueError as e:
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e
@@ -722,10 +722,10 @@ def recreate_service_container(
 
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error recreating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error recreating service: {e!s}") from e
     except APIError as e:
         db.rollback()
-        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {str(e)}") from e
+        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {e!s}") from e
 
 
 def update_service(
@@ -805,7 +805,7 @@ def update_service(
         raise
     except AssertionError as e:
         db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error updating service: {str(e)}") from e
+        raise HTTPException(status_code=409, detail=f"Error updating service: {e!s}") from e
     except ValueError as e:
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Invalid build spec: {e}") from e

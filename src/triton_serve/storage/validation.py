@@ -39,7 +39,7 @@ def parse_config(config_file: Path) -> dict[str, str]:
 
 
 def parse_version_policy(config_file: Path) -> dict:
-    with open(config_file, "r") as f:
+    with open(config_file) as f:
         content = f.read()
 
     policy = {}

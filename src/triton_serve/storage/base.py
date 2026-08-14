@@ -29,7 +29,7 @@ class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
         """Yields the names of the archive members."""
         ...
 
-    def __enter__(self) -> "BaseExtractor[ArchiveT]":
+    def __enter__(self) -> BaseExtractor[ArchiveT]:
         self.archive = self._open()
         return self
 

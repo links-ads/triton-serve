@@ -34,4 +34,4 @@ def get_traefik():
     return TraefikConfigManager(settings.configs_path)
 
 
-__all__ = ["get_settings", "get_storage", "AppSettings"]
+__all__ = ["AppSettings", "get_settings", "get_storage"]
