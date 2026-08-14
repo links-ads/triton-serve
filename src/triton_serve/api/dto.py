@@ -17,9 +17,8 @@ class APIKeyUpdateBody(BaseModel):
     @field_validator("project")
     @classmethod
     def validate_project(cls, v):
-        if v is not None:
-            if not v.strip():
-                raise ValueError("Project name cannot be empty or just whitespace")
+        if v is not None and not v.strip():
+            raise ValueError("Project name cannot be empty or just whitespace")
         return v
 
 

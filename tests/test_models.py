@@ -381,7 +381,7 @@ def test_incompatible_requires_python_is_rejected():
 
 def test_malformed_pyproject_is_rejected(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project\nname =")
-    with pytest.raises(AssertionError, match="pyproject.toml"):
+    with pytest.raises(AssertionError, match=r"pyproject\.toml"):
         parse_dependencies(tmp_path)
 
 

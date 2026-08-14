@@ -229,10 +229,10 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
         db.refresh(model)
         return model
     except AssertionError as e:
-        raise HTTPException(status_code=409, detail=f"Cannot update model: {e}")
+        raise HTTPException(status_code=409, detail=f"Cannot update model: {e}") from e
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Cannot update model: {e}")
+        raise HTTPException(status_code=500, detail=f"Cannot update model: {e}") from e
 
 
 def delete_model(

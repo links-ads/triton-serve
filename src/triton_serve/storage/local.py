@@ -34,9 +34,8 @@ class LocalModelStorage(ModelStorage):
             bool: true if present (and name matches, if provided), false otherwise.
         """
         for item in path.iterdir():
-            if item.is_dir():
-                if name is None or item.name == name:
-                    return True
+            if item.is_dir() and (name is None or item.name == name):
+                return True
         return False
 
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:

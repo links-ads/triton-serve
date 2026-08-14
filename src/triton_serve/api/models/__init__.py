@@ -143,7 +143,7 @@ def create_models_from_repository(
         domain.refresh_service_images(db=db, models=stored_models, settings=settings)
         return stored_models
     except AssertionError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.put(
@@ -212,7 +212,6 @@ def delete_model(
                 status_code=409,
                 detail=f"Model '{model_name}' has associated services. Please delete the services first.",
             )
-    if model_version is not None:
-        if not any(version.version_id == model_version for version in model.versions):
-            raise HTTPException(status_code=404, detail=f"Model version '{model_name}:{model_version}' does not exist")
+    if model_version is not None and not any(version.version_id == model_version for version in model.versions):
+        raise HTTPException(status_code=404, detail=f"Model version '{model_name}:{model_version}' does not exist")
     return domain.delete_model(db=db, storage=storage, model=model, version_number=model_version)

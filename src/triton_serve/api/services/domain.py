@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import math
 from typing import cast
@@ -682,10 +683,8 @@ def recreate_service_container(
     """
     try:
         if service.container_id:
-            try:
+            with contextlib.suppress(NotFound):
                 client.containers.get(service.container_id).remove(force=True)
-            except NotFound:
-                pass
             service.container_id = None
 
         # a stale/foreign container may still hold the name under a different id (e.g. dirty
