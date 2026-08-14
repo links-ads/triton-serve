@@ -1,3 +1,9 @@
-site_name: My Docs
+site_name: Triton Serve
+site_description: Deployment framework based on NVIDIA Triton Inference Server
+repo_url: https://github.com/links-ads/triton-serve
+
 theme:
   name: material
+  features:
+    - navigation.instant
+    - content.code.copy
