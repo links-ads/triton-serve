@@ -84,11 +84,12 @@ class LocalModelStorage(ModelStorage):
         The model URI is updated with the new version.
 
         Args:
-            updated (ModelSchema): The updated model.
-            origin (Path): The path to the temporary directory containing the model.
+            model (ModelSchema): The updated model.
+            version (ModelVersionSchema): The version being relocated.
+            current_uri (Path): The path the version currently lives at.
 
         Returns:
-            Path: The model URI.
+            Path: The updated model URI.
         """
         # two cases again: the new name does not exist, or it does
         updated_uri = self.location(model, version)

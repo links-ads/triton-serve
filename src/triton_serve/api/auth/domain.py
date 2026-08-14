@@ -10,7 +10,7 @@ from triton_serve.database.model import APIKey, KeyType, Service, timezone_aware
 LOG = logging.getLogger("uvicorn")
 
 
-def get_key(db: Session, key_id: int) -> APIKey:
+def get_key(db: Session, key_id: int) -> APIKey | None:
     """
     Retrieve an API key by its ID.
 
@@ -19,7 +19,7 @@ def get_key(db: Session, key_id: int) -> APIKey:
         key_id (int): API key ID
 
     Returns:
-        APIKey: API key object if found, else None
+        APIKey | None: API key object if found, None otherwise
     """
     return db.query(APIKey).filter(APIKey.key_id == key_id).first()
 
@@ -40,7 +40,7 @@ def list_keys(
         service (str): Service name
 
     Returns:
-        List[APIKey]: List of API keys
+        list[APIKey]: List of API keys
     """
     query = db.query(APIKey)
     if key_type:

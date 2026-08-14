@@ -81,26 +81,25 @@ class ModelStorage(ABC):
         and using both the artifact's name and the artifact's version.
 
         Args:
-            model (ModelSchema): model name and version
+            model (ModelSchema): the model to locate
             version (ModelVersionSchema): model version
 
         Returns:
-            str: absolute path to the package
+            Path: absolute path to the package
         """
         return self.base_path / model.model_name / str(version.version_id)
 
     @abstractmethod
     def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
-        """Required to store the given data into the storage implementation (locally, blog storage, etc.).
-        This is the complement of the load method.
+        """Required to store the given data into the storage implementation (locally, blob storage, etc.).
 
         Args:
-            model (ModelSchema): model name and version.
+            model (ModelSchema): the model being stored.
             version (ModelVersionSchema): model version.
             origin (Path): local path to the model root.
 
         Returns:
-            path to the model root.
+            Path: path to the model root.
         """
         ...
 

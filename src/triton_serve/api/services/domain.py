@@ -324,18 +324,16 @@ def spawn_service_container(
     """Spawns a triton worker container.
 
     Args:
-
         client (DockerClient): The docker client.
         image_id (str): The identifier of the docker image to use.
         worker_name (str): The name of the worker container.
-        worker_command (str): The command to run the docker image.
         worker_network (str): The name of the docker network to use.
         worker_volume (str): The path to the model repository, or a volume name.
-        models (list[str]): The list of models to load.
+        models (list[Model]): The list of models to load.
         worker_requirements (str): Dependencies for the entrypoint to install at boot. Empty for a
             managed image, whose dependencies are already baked in.
         resources (ServiceCreateResources): The resources to use for the container.
-        devices (list[str], optional): The list of devices to use. Defaults to None.
+        devices (list, optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
         healthcheck (dict, optional): The stored healthcheck config, or None for no healthcheck.
 
@@ -420,7 +418,7 @@ def get_allocable_devices(db: Session, required_gpus: float) -> tuple[list[Devic
         required_gpus (float): The number of GPUs required.
 
     Returns:
-        list: List of available GPU devices.
+        tuple[list[Device], float]: The devices to allocate, and the percentage to take of each.
 
     Raises:
         AssertionError: If not enough GPUs are available.

@@ -55,11 +55,10 @@ def get_single_model(
 
     Args:
         db (Session): The database session.
-        storage (ModelStorage): The storage implementation to use.
         model_name (str): The name of the model to retrieve.
 
     Returns:
-        Model: Returns the requested model instance if found, or None otherwise.
+        Model | None: The requested model instance if found, None otherwise.
     """
     model = (
         db.query(Model)
@@ -88,7 +87,7 @@ def get_all_models(
         source (Optional[str], optional): The source of the model to filter. Defaults to None.
 
     Returns:
-        List[ModelSchema]: A list of ModelSchema instances representing the filtered models.
+        list[Model]: A list of Model instances representing the filtered models.
     """
     statement = db.query(Model)
     if model_name is not None:
@@ -125,7 +124,7 @@ def create_models_from_source(
         update (bool, optional): Whether to update the models if they already exist. Defaults to False.
 
     Returns:
-        List[Model]: A list of Model instances representing the extracted models.
+        list[Model]: A list of Model instances representing the extracted models.
 
     Raises:
         HTTPException: If the file is invalid.
@@ -204,16 +203,16 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
     If the name or the version are provided in the updates, update the model and move the model to the new location.
 
     Args:
+        db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
-        model (ModelSchema): The model to update.
+        model (Model): The model to update.
         updates (ModelUpdateBody): The updates to apply.
 
     Raises:
         HTTPException: If the model could not be updated.
 
     Returns:
-        ModelSchema: The updated model.
-
+        Model: The updated model.
     """
     try:
         updated_name = updates.name or model.model_name
@@ -247,15 +246,14 @@ def delete_model(
     Args:
         db (Session): The database session.
         storage (ModelStorage): The storage implementation to use.
-        model (ModelSchema): The model to delete.
-        version_number (int): The version of the model to delete.
+        model (Model): The model to delete.
+        version_number (int | None): The version to delete, or None to delete every version.
 
     Raises:
         HTTPException: If the model could not be deleted.
 
     Returns:
-        None
-
+        Model: The model, tombstoned when no version is left.
     """
     LOG.debug("Deleting model '%s' (version: %s)", model.model_name, version_number)
     if version_number is not None:

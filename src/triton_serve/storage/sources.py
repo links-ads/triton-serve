@@ -28,7 +28,7 @@ class ArchiveModelSource(ModelSource):
             ValueError: If the file format is not supported.
 
         Returns:
-            ExtractorType: Extractor implementation.
+            type[ExtractorType]: Extractor implementation.
         """
         if str(filename).endswith(".zip"):
             return ZipExtractor

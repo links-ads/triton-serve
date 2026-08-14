@@ -163,6 +163,7 @@ def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
     """Infers the model type from the given list of files.
 
     Args:
+        model_name (str): name of the model, used in the failure message
         files (list[Path]): list of files to analyze
 
     Returns:

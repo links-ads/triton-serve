@@ -16,14 +16,10 @@ def delete_queue_messages(db: Session, older_than_hours: int) -> QueueMessageDel
 
     Args:
         db (Session): The database session.
-        storage (ModelStorage): The storage implementation to use.
         older_than_hours (int): Delete messages that are older than this many hours.
 
     Returns:
-        dict: Information about the deleted messages
-
-    Raises:
-        HTTPException: If an error occurs while deleting the messages
+        QueueMessageDeleteResponseSchema: The number of messages deleted.
     """
     LOG.debug("Deleting queue messages older than %d hours", older_than_hours)
     query = delete(KombuMessage).where(

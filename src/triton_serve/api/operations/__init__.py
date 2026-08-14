@@ -24,14 +24,9 @@ def delete_queue_messages(
     _: Any = Depends(require_admin),
 ):
     """
-    Delete messages from the queue within a specified time window.
+    Delete messages from the queue older than the configured retention window.
 
-    Parameters:
-    - db (Session): Database session
-    - settings (AppSettings): Application settings
-
-    Returns:
-    - dict: Information about the deleted messages
-
+    **Returns:**
+    - `QueueMessageDeleteResponseSchema`: The number of messages deleted.
     """
     return domain.delete_queue_messages(db=db, older_than_hours=settings.older_than_hours_to_purge)

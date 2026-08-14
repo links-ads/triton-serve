@@ -29,8 +29,13 @@ def sync_traefik_configs(session, settings: AppSettings) -> None:
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
     """Factory method that creates a new FastAPI application.
 
-    :return: configured FastAPI instance
-    :rtype: FastAPI
+    Args:
+        settings (AppSettings): The application settings.
+        init_database (bool): Whether to initialise the database manager. False when the caller
+            already owns the engine, as the tests do.
+
+    Returns:
+        FastAPI: The configured application instance.
     """
     if init_database:
         database_manager.init(settings.database_url)
@@ -71,8 +76,8 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
 def register_exception_handlers(app: FastAPI):
     """Registers application-wide exception handlers.
 
-    :param app: app instance
-    :type app: FastAPI
+    Args:
+        app (FastAPI): The application instance.
     """
 
     @app.exception_handler(SQLAlchemyError)
@@ -90,8 +95,8 @@ def register_exception_handlers(app: FastAPI):
 def register_middlewares(app: FastAPI):
     """Registers middlewares to the main application instance.
 
-    :param app: app instance
-    :type app: FastAPI
+    Args:
+        app (FastAPI): The application instance.
     """
     app.add_middleware(
         CORSMiddleware,
@@ -105,8 +110,8 @@ def register_middlewares(app: FastAPI):
 def register_routers(app: FastAPI):
     """Registers all the available submodules to the main application.
 
-    :param app: FastAPI instance
-    :type app: FastAPI
+    Args:
+        app (FastAPI): The application instance.
     """
     app.include_router(models.router)
     app.include_router(services.router)

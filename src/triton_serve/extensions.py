@@ -9,8 +9,8 @@ from triton_serve.database import database_manager
 def get_db():
     """Yields a database session safely.
 
-    :yield: database session
-    :rtype: Iterator[Session]
+    Yields:
+        Session: The database session, closed when the dependency is torn down.
     """
     with database_manager.session() as session:
         yield session
