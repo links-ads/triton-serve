@@ -21,8 +21,8 @@ class APIKeyUpdateBody(BaseModel):
     project: str | None = None
     notes: str | None = None
 
-    @classmethod
     @field_validator("project")
+    @classmethod
     def validate_project(cls, v):
         if v is not None:
             if not v.strip():
@@ -47,8 +47,8 @@ class ModelUpdateBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     source: str | None = None
 
-    @classmethod
     @field_validator("name")
+    @classmethod
     def validate_name(cls, v):
         if v is not None:
             if not v.strip():
@@ -89,8 +89,8 @@ class ServiceCreateResources(BaseModel):
     mem_size: int = Field(gt=0, le=65536, default=4096, description="Memory size in MB")
     cpu_count: int = Field(gt=0, default=2, description="Number of CPUs")
 
-    @classmethod
     @field_validator("shm_size", "mem_size", mode="before")
+    @classmethod
     def validate_units(cls, value: int | str) -> int:
         if isinstance(value, str):
             value = value.upper()
