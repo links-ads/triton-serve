@@ -66,6 +66,7 @@ class ModelBaseSchema(BaseModel):
     updated_at: datetime = Field(default_factory=timezone_aware_now)
     source: str | None = None
     dependencies: list | None = Field(default_factory=list)
+    system_dependencies: list | None = Field(default_factory=list)
     version_policy: dict | None = None
     versions: list[ModelVersionBaseSchema] = Field(default_factory=list)
 

@@ -24,6 +24,9 @@ services:
   sentinel:
     restart: unless-stopped
 
+  builder:
+    restart: unless-stopped
+
   backend:
     <<: *override
 

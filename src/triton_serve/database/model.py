@@ -12,6 +12,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     String,
     Table,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
@@ -47,6 +48,13 @@ class RuntimeStatus(enum.Enum):
     FAILED = "failed"
     SUSPENDED = "suspended"
     RETIRED = "retired"
+
+
+class ImageStatus(enum.Enum):
+    PENDING = "pending"
+    BUILDING = "building"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class KeyType(enum.Enum):
@@ -121,6 +129,9 @@ class Model(Base):
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     source: Mapped[str] = mapped_column(nullable=True)
     dependencies: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True, default=[])
+    system_dependencies: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, default=list, server_default="{}"
+    )
     version_policy: Mapped[dict] = mapped_column(JSONB, nullable=True)
     versions: Mapped[list["ModelVersion"]] = relationship("ModelVersion")
 
@@ -137,12 +148,37 @@ class ModelVersion(Base):
     __table_args__ = (CheckConstraint("version_id > 0", name="version_positive"),)
 
 
+class ServiceImage(Base):
+    """A content-addressed runtime image. Rows are immutable: a changed spec is a different row."""
+
+    __tablename__ = "service_images"
+
+    image_hash: Mapped[str] = mapped_column(primary_key=True)
+    image_ref: Mapped[str] = mapped_column(nullable=False)
+    status: Mapped[ImageStatus] = mapped_column(
+        Enum(ImageStatus, name="imagestatus", values_callable=lambda enum_cls: [e.value for e in enum_cls]),
+        nullable=False,
+        default=ImageStatus.PENDING,
+        server_default=ImageStatus.PENDING.value,
+    )
+    managed: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
+    base_image: Mapped[str] = mapped_column(nullable=False)
+    apt_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    pip_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+
+
 class Service(Base):
     __tablename__ = "services"
 
     service_id: Mapped[int] = mapped_column(primary_key=True)
     service_name: Mapped[str] = mapped_column(nullable=False)
     service_image: Mapped[str] = mapped_column(nullable=False)
+    image_hash: Mapped[str | None] = mapped_column(
+        ForeignKey("service_images.image_hash"), nullable=True, default=None
+    )
     container_id: Mapped[str | None] = mapped_column(default=None)
     # values_callable: the desiredstate/runtimestatus postgres enums store the lowercase .value
     # labels (see the lifecycle_redesign_expand migration), not the Python member names.
@@ -169,6 +205,7 @@ class Service(Base):
     models: Mapped[list["Model"]] = relationship(secondary=model_service_association, backref="services")
     device_allocations: Mapped[list["DeviceAllocation"]] = relationship(back_populates="service")
     resources: Mapped["ServiceResources"] = relationship(back_populates="service")
+    image: Mapped["ServiceImage | None"] = relationship()
 
     __table_args__ = (
         Index("service_name_idx", "service_name", unique=True, postgresql_where=(deleted_at.is_(None))),

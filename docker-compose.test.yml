@@ -29,6 +29,9 @@ services:
   sentinel:
     container_name: serve-sentinel_test
 
+  builder:
+    container_name: serve-builder_test
+
   database:
       container_name: serve-database_test
 

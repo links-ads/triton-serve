@@ -5,7 +5,7 @@ from docker.errors import ImageNotFound, NotFound
 from docker.models.containers import Container
 
 from triton_serve.api.services.reconcile import ObservedState
-from triton_serve.database.model import Service
+from triton_serve.database.model import ImageStatus, Service
 
 
 def _image_present(client: DockerClient, image_ref: str) -> bool:
@@ -53,21 +53,41 @@ def _running_fact(container: Container, boot_grace_seconds: int) -> ObservedStat
             return ObservedState.RUNNING if uptime >= boot_grace_seconds else ObservedState.BOOTING
 
 
-def observe(client: DockerClient, service: Service, boot_grace_seconds: int) -> ObservedState:
-    """Derive the current observed fact for a service from the Docker daemon (read-only).
+def effective_image_ref(service: Service) -> str:
+    """The image a service actually runs: its resolved row's ref, or its raw base image."""
+    return service.image.image_ref if service.image is not None else service.service_image
+
+
+def observe(
+    client: DockerClient,
+    service: Service,
+    boot_grace_seconds: int,
+    image_status: ImageStatus | None,
+) -> ObservedState:
+    """Derive the current observed fact for a service from its image row and the Docker daemon.
+
+    Read-only. The image status is checked first: there is nothing useful to observe on the
+    daemon for a service whose image does not exist yet.
 
     Args:
         client (DockerClient): The docker client.
         service (Service): The service to observe.
         boot_grace_seconds (int): How long a container without a healthcheck stays BOOTING.
+        image_status (ImageStatus | None): The status of the service's resolved image row.
 
     Returns:
         ObservedState: The fact the reconciler decides on.
     """
+    if image_status in (ImageStatus.PENDING, ImageStatus.BUILDING):
+        return ObservedState.IMAGE_PENDING
+    if image_status is ImageStatus.FAILED:
+        return ObservedState.IMAGE_FAILED
+
     try:
         container = client.containers.get(service.service_name)
     except NotFound:
-        return ObservedState.ABSENT if _image_present(client, service.service_image) else ObservedState.IMAGE_MISSING
+        present = _image_present(client, effective_image_ref(service))
+        return ObservedState.ABSENT if present else ObservedState.IMAGE_MISSING
 
     if container.status == "running":
         return _running_fact(container, boot_grace_seconds)

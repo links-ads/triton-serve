@@ -94,6 +94,30 @@ services:
         condition: service_healthy
     command: sentinel
 
+  builder:
+    build:
+      context: .
+      dockerfile: containers/sentinel/Dockerfile
+      args:
+      - TARGET=${TARGET:-dev}
+      - PYTHON_VERSION=${PYTHON_VERSION:-3.12.12}
+      - UV_VERSION=${UV_VERSION:-0.10.7}
+    image: ghcr.io/links-ads/serve-sentinel:${PROJECT_VERSION:-latest}
+    volumes:
+      - ./src:/app/src
+      - /var/run/docker.sock:/var/run/docker.sock
+    container_name: serve-builder
+    env_file:
+      - .env
+    depends_on:
+      database:
+        condition: service_healthy
+      # the kombu sqlalchemy transport bootstraps its own schema on first use; two workers racing
+      # that on a cold start makes one of them die on a duplicate sequence
+      sentinel:
+        condition: service_started
+    command: builder
+
   backend:
     <<: *backend-base
     profiles: ["gpu"]

@@ -96,3 +96,18 @@ def test_decide_is_total():
         for observed in ObservedState:
             for target in (0, 1):
                 assert decide(desired, observed, target, attempts=0, max_attempts=3) is not None
+
+
+def test_available_image_pending_waits_warming():
+    d = decide(D.AVAILABLE, A.IMAGE_PENDING, replica_target=1, attempts=0, max_attempts=3)
+    assert (d.action, d.status, d.increment_attempt) == (Action.NONE, R.WARMING, False)
+
+
+def test_available_image_pending_does_not_spend_the_crash_budget():
+    d = decide(D.AVAILABLE, A.IMAGE_PENDING, replica_target=1, attempts=3, max_attempts=3)
+    assert (d.action, d.status) == (Action.NONE, R.WARMING)
+
+
+def test_available_image_failed_is_terminal():
+    d = decide(D.AVAILABLE, A.IMAGE_FAILED, replica_target=1, attempts=0, max_attempts=3)
+    assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)

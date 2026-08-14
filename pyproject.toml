@@ -20,6 +20,7 @@ dependencies = [
     "fastapi>=0.135.1",
     "gunicorn>=25.1.0",
     "httpx>=0.28.1",
+    "packaging>=26.0",
     "psutil>=7.2.2",
     "psycopg2-binary>=2.9.11",
     "pydantic-settings>=2.13.1",

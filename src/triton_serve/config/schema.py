@@ -1,7 +1,7 @@
 from enum import Enum
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,16 @@ class AppSettings(BaseSettings):
     service_max_restart_attempts: int = 3
     service_restart_cooldown: int = 600  # seconds; also the READY window that earns the budget back
     service_restart_backoff_base: int = 10  # seconds; base of the exponential retry backoff
+
+    # image registry; tokens are never logged and never written into a build context
+    registry_url: str = "ghcr.io"
+    registry_namespace: str = "links-ads"
+    registry_image_name: str = "serve-runtime"
+    registry_push_username: str = ""
+    registry_push_token: SecretStr = SecretStr("")
+    registry_pull_username: str = ""
+    registry_pull_token: SecretStr = SecretStr("")
+    image_build_timeout: int = 1800  # seconds; a build streams for minutes, unlike a reconcile call
 
     # database
     database_user: str

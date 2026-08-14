@@ -4,7 +4,7 @@ import time
 import pytest
 import requests
 
-from triton_serve.database.model import DesiredState, Device, RuntimeStatus, Service
+from triton_serve.database.model import DesiredState, Device, Model, RuntimeStatus, Service
 from triton_serve.tasks import update_service_status
 
 LOG = logging.getLogger(pytest.__name__)
@@ -429,3 +429,81 @@ def test_budget_returns_after_sustained_ready(test_db, test_docker, test_setting
     assert svc.restart_attempts == 0
     assert svc.last_attempt_at is None
     assert svc.runtime_status == RuntimeStatus.READY
+
+
+RESOURCES = {"gpus": 0, "shm_size": 256, "mem_size": 1024}
+
+
+@pytest.mark.order(after="test_create_service")
+def test_created_service_gets_an_image_row(test_client, test_db):
+    response = test_client.post(
+        "/services",
+        json={"name": "trt-srv_test_img1", "models": ["onnx"], "resources": RESOURCES, "timeout": 3600},
+    )
+    assert response.status_code == 201, response.text
+    service_id = response.json()["service_id"]
+    try:
+        test_db.expire_all()
+        service = test_db.get(Service, ident=service_id)
+        assert service.image is not None
+        assert service.image_hash == service.image.image_hash
+        assert service.image.base_image == service.service_image
+    finally:
+        test_client.delete(f"/services/{service_id}")
+
+
+@pytest.mark.order(after="test_create_service")
+def test_invalid_dependency_is_rejected_at_write_time(test_client, test_db):
+    model = test_db.query(Model).filter(Model.model_name == "onnx").one()
+    original = list(model.dependencies or [])
+    model.dependencies = ["--extra-index-url http://attacker.example"]
+    test_db.commit()
+    try:
+        response = test_client.post(
+            "/services",
+            json={"name": "trt-srv_test_img2", "models": ["onnx"], "resources": RESOURCES, "timeout": 3600},
+        )
+        assert response.status_code == 422, response.text
+    finally:
+        model.dependencies = original
+        test_db.commit()
+
+
+def test_retry_requeues_a_build_stuck_building(test_db, test_settings, monkeypatch):
+    """A worker that dies mid-build leaves the row BUILDING with no task behind it."""
+    from datetime import datetime, timezone
+
+    from triton_serve.api.services import domain
+    from triton_serve.builder.resolve import image_from_spec
+    from triton_serve.builder.spec import make_build_spec
+    from triton_serve.database.model import ImageStatus, ServiceImage
+
+    spec = make_build_spec(
+        base_image="ghcr.io/links-ads/serve-triton:23.07-py3", apt_packages=[], pip_packages=["six==1.16.1"]
+    )
+    image = image_from_spec(spec, test_settings)
+    image.status = ImageStatus.BUILDING
+    image.build_log = "worker died here"
+    service = Service(
+        service_name="trt-srv_test_stuck",
+        service_image=spec.base_image,
+        last_active_time=datetime.now(timezone.utc),
+        priority=1,
+        image=image,
+    )
+    test_db.add(service)
+    test_db.commit()
+
+    enqueued: list[str] = []
+    monkeypatch.setattr(domain, "enqueue_build", enqueued.append)
+    try:
+        domain.reset_and_wake(test_db, service.service_id)
+        test_db.refresh(image)
+        assert image.status is ImageStatus.PENDING
+        assert image.build_log is None
+        assert enqueued == [image.image_hash]
+    finally:
+        test_db.delete(service)
+        test_db.commit()
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == spec.image_hash).delete()
+        test_db.commit()

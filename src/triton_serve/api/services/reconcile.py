@@ -11,6 +11,8 @@ class ObservedState(enum.Enum):
     CRASHED = "crashed"  # exited, code != 0
     ABSENT = "absent"  # no container bound to the service (vanished / stale id)
     IMAGE_MISSING = "image_missing"
+    IMAGE_PENDING = "image_pending"  # build queued or in flight
+    IMAGE_FAILED = "image_failed"  # build failed terminally
 
 
 class Action(enum.Enum):
@@ -64,6 +66,11 @@ def _available(observed: ObservedState, target: int, attempts: int, max_attempts
             if exhausted:
                 return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.PULL, RuntimeStatus.WARMING, increment_attempt=True)
+        case ObservedState.IMAGE_PENDING:
+            # a build runs for minutes against a 10s tick; waiting must not spend the crash budget
+            return Decision(Action.NONE, RuntimeStatus.WARMING)
+        case ObservedState.IMAGE_FAILED:
+            return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
     raise AssertionError(f"unreachable observed={observed}")  # pragma: no cover
 
 

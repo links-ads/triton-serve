@@ -1,7 +1,14 @@
 import logging
 import re
+import subprocess
+import tomllib
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
+from triton_serve.builder.spec import validated_apt, validated_pip
 from triton_serve.database.model import ModelType
 from triton_serve.database.schema import ModelCreateSchema, ModelVersionCreateSchema
 
@@ -69,6 +76,89 @@ def parse_requirements(requirements_file: Path) -> list[str]:
     return dependencies
 
 
+# the python a built image actually runs: the tritonserver base images ship 3.10
+RUNTIME_PYTHON = Version("3.10")
+
+
+@dataclass(frozen=True)
+class BundleDependencies:
+    pip: list[str] = field(default_factory=list)
+    system: list[str] = field(default_factory=list)
+
+
+def _export_locked(bundle_path: Path) -> list[str] | None:
+    """Exports a committed uv.lock to fully pinned requirements, or None if there is no lock.
+
+    A resolved closure is what makes the build hash honest: without it, an unpinned `numpy`
+    resolves differently next month while the content hash still claims the image is unchanged.
+    """
+    if not (bundle_path / "uv.lock").is_file():
+        return None
+    result = subprocess.run(
+        ["uv", "export", "--frozen", "--no-hashes", "--no-emit-project", "--format", "requirements-txt"],
+        cwd=bundle_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"uv.lock is present but does not export: {result.stderr.strip()}"
+    return [line.strip() for line in result.stdout.splitlines() if line.strip() and not line.startswith("#")]
+
+
+def _parse_pyproject(manifest: Path) -> BundleDependencies:
+    try:
+        content = tomllib.loads(manifest.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise AssertionError(f"invalid pyproject.toml: {e}") from e
+
+    project = content.get("project", {})
+    if requires_python := project.get("requires-python"):
+        assert RUNTIME_PYTHON in SpecifierSet(requires_python), (
+            f"bundle requires-python {requires_python!r} excludes the runtime python {RUNTIME_PYTHON}"
+        )
+
+    serve = content.get("tool", {}).get("serve", {})
+    return BundleDependencies(
+        pip=_export_locked(manifest.parent) or list(project.get("dependencies", [])),
+        system=list(serve.get("system-packages", [])),
+    )
+
+
+def _validated(dependencies: BundleDependencies) -> BundleDependencies:
+    """Rejects packages the builder would refuse later.
+
+    The same validation runs again when the build spec is assembled, but by then the models are
+    committed: a bundle that only fails there is stored and poisons every service created from it.
+    """
+    try:
+        validated_pip(dependencies.pip)
+        validated_apt(dependencies.system)
+    except ValueError as e:
+        raise AssertionError(str(e)) from e
+    return dependencies
+
+
+def parse_dependencies(bundle_path: Path) -> BundleDependencies:
+    """Reads a bundle's dependency manifest.
+
+    `pyproject.toml` is preferred and `requirements.txt` remains supported so existing bundles keep
+    working untouched. Both normalize to the same shape here, so nothing downstream knows which
+    format a bundle used.
+
+    Args:
+        bundle_path (Path): The root of the extracted bundle.
+
+    Returns:
+        BundleDependencies: The pip and system dependency lists, empty when there is no manifest.
+
+    Raises:
+        AssertionError: If the manifest is malformed, its lock does not export, a package is
+            invalid, or its requires-python excludes the runtime python.
+    """
+    if (manifest := bundle_path / "pyproject.toml").is_file():
+        return _validated(_parse_pyproject(manifest))
+    return _validated(BundleDependencies(pip=parse_requirements(bundle_path / "requirements.txt")))
+
+
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
     """Infers the model type from the given list of files.
 
@@ -120,8 +210,7 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
     model_dirs = [d for d in repository_path.iterdir() if d.is_dir()]
     assert model_dirs, "Empty repository"
 
-    # Parse requirements.txt if present
-    requirements = parse_requirements(repository_path / "requirements.txt")
+    dependencies = parse_dependencies(repository_path)
 
     for model_dir in model_dirs:
         model_name = model_dir.name
@@ -152,7 +241,8 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
             model_name=model_name,
             model_type=model_type,
             source=None,
-            dependencies=requirements,
+            dependencies=dependencies.pip,
+            system_dependencies=dependencies.system,
             version_policy=version_policy,
         )
         # add the versions and validate them

@@ -104,6 +104,7 @@ def create_models_from_archive(
         db=db,
         update=update,
     )
+    domain.refresh_service_images(db=db, models=stored_models, settings=settings)
     return stored_models
 
 
@@ -139,6 +140,7 @@ def create_models_from_repository(
             db=db,
             update=update,
         )
+        domain.refresh_service_images(db=db, models=stored_models, settings=settings)
         return stored_models
     except AssertionError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -1,20 +1,21 @@
 import logging
 from datetime import datetime, timezone
 
-from celery import Celery
 from celery.signals import worker_process_init, worker_process_shutdown
 from httpx import Client
 from sqlalchemy import text
+from sqlalchemy.orm import joinedload
 
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
 from triton_serve.api.services.reconcile import decide
+from triton_serve.builder.execute import build_image  # noqa: F401  (registers the task on the app)
 from triton_serve.config import get_settings
-from triton_serve.config.celery import Config
 from triton_serve.config.celery import client as worker_client
 from triton_serve.database import database_manager
 from triton_serve.database.model import DesiredState, RuntimeStatus, Service
 from triton_serve.extensions import get_reconciler_docker_client
+from triton_serve.queue import app
 
 LOG = logging.getLogger(__name__)
 
@@ -23,8 +24,6 @@ LOG = logging.getLogger(__name__)
 _RECONCILE_LOCK_KEY = 0x7213_10CE
 
 settings = get_settings()
-app = Celery("serve-sentinel")
-app.config_from_object(Config)
 
 
 @worker_process_init.connect
@@ -82,7 +81,14 @@ def update_service_status() -> None:
             return
         try:
             with database_manager.session() as db:
-                services = db.query(Service).filter(Service.runtime_status != RuntimeStatus.RETIRED).all()
+                # joinedload: the tick reads service.image.status for every service, and an
+                # N+1 per tick is exactly what this loop must not do
+                services = (
+                    db.query(Service)
+                    .options(joinedload(Service.image))
+                    .filter(Service.runtime_status != RuntimeStatus.RETIRED)
+                    .all()
+                )
                 for service in services:
                     try:
                         now = datetime.now(tz=timezone.utc)
@@ -105,7 +111,8 @@ def update_service_status() -> None:
                         target = (
                             _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
                         )
-                        observed = observe(client, service, settings.service_boot_grace)
+                        image_status = service.image.status if service.image is not None else None
+                        observed = observe(client, service, settings.service_boot_grace, image_status)
                         decision = decide(
                             desired=service.desired_state,
                             observed=observed,

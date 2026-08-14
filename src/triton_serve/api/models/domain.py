@@ -6,12 +6,44 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ModelUpdateBody
+from triton_serve.builder.execute import enqueue_build
+from triton_serve.builder.resolve import resolve_service_image, services_using_models
+from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import Model, ModelVersion
 from triton_serve.database.schema import ModelCreateSchema, timezone_aware_now
 from triton_serve.storage import ModelSource, ModelStorage
 from triton_serve.storage.validation import validate_models
 
 LOG = logging.getLogger("uvicorn")
+
+
+def refresh_service_images(db: Session, models: list[Model], settings: AppSettings) -> None:
+    """Re-resolves every live service serving any of these models, and queues the builds it needs.
+
+    A changed requirements.txt changes the dependency union, which changes the content hash, which
+    is a different image. Fan-out is eager: at this scale the affected set is a handful of services.
+
+    Args:
+        db (Session): The database session.
+        models (list[Model]): The models just created or updated.
+        settings (AppSettings): The application settings.
+
+    Raises:
+        HTTPException: 422 if a stored dependency does not parse.
+    """
+    pending: list[str] = []
+    for service in services_using_models(db, models):
+        try:
+            if (image_hash := resolve_service_image(db=db, service=service, settings=settings)) is not None:
+                pending.append(image_hash)
+        except ValueError as e:
+            db.rollback()
+            raise HTTPException(
+                status_code=422, detail=f"Invalid dependencies for '{service.service_name}': {e}"
+            ) from e
+    db.commit()
+    for image_hash in pending:
+        enqueue_build(image_hash)
 
 
 def get_single_model(
@@ -119,6 +151,7 @@ def create_models_from_source(
                     old_model.model_type = instance.model_type
                     old_model.source = instance.source or models_origin
                     old_model.dependencies = instance.dependencies  # type: ignore
+                    old_model.system_dependencies = instance.system_dependencies  # type: ignore
                     old_model.version_policy = instance.version_policy  # type: ignore
                     old_model.updated_at = timezone_aware_now()
                     # clean up the versions
