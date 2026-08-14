@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from triton_serve.api.services.resources import get_gpu_info, get_machine_info
 from triton_serve.database.model import Device, Machine
 
+LOG = logging.getLogger(__name__)
+
 
 def check_resources(session: Session):
     """
@@ -21,22 +23,20 @@ def check_resources(session: Session):
     )
 
     # retrieve devices and check if they match
-    host_devices = session.query(Device).filter(Device.machine.has(host_id=machine.host_id)).all()
+    saved_devices = session.query(Device).filter(Device.machine.has(host_id=machine.host_id)).all()
     try:
-        saved_devices = get_gpu_info()
+        node_devices = get_gpu_info()
     except Exception as e:
-        log = logging.getLogger(__name__)
-        log.warning("Failed to get GPU info: %s", e)
-        saved_devices = []
-    assert len(host_devices) == len(saved_devices), (
-        f"Node devices ({len(host_devices)}) do not match the saved devices ({len(saved_devices)})"
+        LOG.warning("Failed to get GPU info: %s", e)
+        node_devices = []
+    assert len(node_devices) == len(saved_devices), (
+        f"Node devices ({len(node_devices)}) do not match the saved devices ({len(saved_devices)})"
     )
 
-    device_dict = {device.uuid: device for device in host_devices}
-    for device in saved_devices:
-        host_device = device_dict.get(device.uuid)
-        assert host_device is not None, f"Device {device.uuid} not found on the node"
-        assert host_device.name == device.name, f"Device {device.uuid} name does not match"
-        assert host_device.memory == device.memory, f"Device {device.uuid} memory does not match"
-        assert host_device.index == device.index, f"Device {device.uuid} index does not match"
-        assert host_device.index == device.index, f"Device {device.uuid} index does not match"
+    saved_by_uuid = {device.uuid: device for device in saved_devices}
+    for node_device in node_devices:
+        saved = saved_by_uuid.get(node_device.uuid)
+        assert saved is not None, f"Device {node_device.uuid} is on the node but not in the database"
+        assert saved.name == node_device.name, f"Device {node_device.uuid} name does not match"
+        assert saved.memory == node_device.memory, f"Device {node_device.uuid} memory does not match"
+        assert saved.index == node_device.index, f"Device {node_device.uuid} index does not match"
