@@ -1,29 +1,47 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from pathlib import Path
+from tarfile import TarFile
+from zipfile import ZipFile
 
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 
 
-class BaseExtractor(ABC):
-    """Base class for extracting files from an archive."""
+class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
+    """Base class for extracting files from an archive.
+
+    Subclasses only supply the two things the archive libraries spell differently: how the archive
+    is opened, and how its members are listed. Closing and extracting are identical for both.
+    """
+
+    archive: ArchiveT
 
     def __init__(self, file: Path):
         self.file = file
 
     @abstractmethod
-    def __enter__(self) -> "BaseExtractor": ...
+    def _open(self) -> ArchiveT:
+        """Opens the archive for reading."""
+        ...
 
     @abstractmethod
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None: ...
+    def __iter__(self) -> Iterator[str]:
+        """Yields the names of the archive members."""
+        ...
 
-    @abstractmethod
-    def __iter__(self) -> Iterator[str]: ...
+    def __enter__(self) -> "BaseExtractor[ArchiveT]":
+        self.archive = self._open()
+        return self
 
-    @abstractmethod
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.archive.close()
+
     def extract(self, path: Path, member: str | None = None) -> None:
         """Extracts `member` into `path`, or the whole archive when no member is given."""
-        ...
+        if member is not None:
+            self.archive.extract(member, path)
+        else:
+            self.archive.extractall(path)
 
 
 class ModelSource(ABC):
