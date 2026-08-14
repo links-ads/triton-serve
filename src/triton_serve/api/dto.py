@@ -7,14 +7,7 @@ class APIKeyCreateBody(BaseModel):
     project: str
     key_type: KeyType
     notes: str | None = None
-    expiration_days: int = 365
-
-    @field_validator("expiration_days")
-    @classmethod
-    def validate_expiration_days(cls, v):
-        if v < 1:
-            raise ValueError("Expiration days must be greater than 0")
-        return v
+    expiration_days: int = Field(default=365, gt=0)
 
 
 class APIKeyUpdateBody(BaseModel):
@@ -33,14 +26,7 @@ class APIKeyUpdateBody(BaseModel):
 class ServiceKeyCreateBody(BaseModel):
     project: str
     notes: str | None = None
-    expiration_days: int = 365
-
-    @field_validator("expiration_days")
-    @classmethod
-    def validate_expiration_days(cls, v):
-        if v < 1:
-            raise ValueError("Expiration days must be greater than 0")
-        return v
+    expiration_days: int = Field(default=365, gt=0)
 
 
 class ModelUpdateBody(BaseModel):
