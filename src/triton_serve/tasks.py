@@ -139,12 +139,17 @@ def update_service_status() -> None:
 
 
 @app.task
-def purge_queue_messages(client: Client | None) -> None:
-    """
-    Purge queue messages
+def purge_queue_messages(client: Client | None = None) -> None:
+    """Purges queue messages older than the configured window.
+
+    The beat schedule fires this with no arguments, so `client` must stay optional; it exists for
+    tests to inject their own. The worker has no client in a test environment, where the backend
+    it would call is the process under test.
     """
     client = client or worker_client
-    assert client is not None
+    if client is None:
+        LOG.warning("No backend client configured, skipping the queue purge")
+        return
     try:
         response = client.delete("queue/messages")
         LOG.debug("Purge of queue messages complete: %s", response.text)
