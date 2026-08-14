@@ -1,12 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from triton_serve.database.model import DesiredState, KeyType, ModelType, RuntimeStatus
-
-
-def timezone_aware_now():
-    return datetime.now(tz=timezone.utc)
+from triton_serve.database.model import DesiredState, KeyType, ModelType, RuntimeStatus, timezone_aware_now
 
 
 class DeviceCreateSchema(BaseModel):

@@ -5,7 +5,7 @@ from docker.errors import ImageNotFound, NotFound
 from docker.models.containers import Container
 
 from triton_serve.api.services.reconcile import ObservedState
-from triton_serve.database.model import ImageStatus, Service
+from triton_serve.database.model import ImageStatus, Service, timezone_aware_now
 
 
 def _image_present(client: DockerClient, image_ref: str) -> bool:
@@ -27,7 +27,7 @@ def _uptime_seconds(state: dict) -> float | None:
         return None
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - started).total_seconds()
+    return (timezone_aware_now() - started).total_seconds()
 
 
 def _running_fact(container: Container, boot_grace_seconds: int) -> ObservedState:

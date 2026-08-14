@@ -2,7 +2,7 @@ import pytest
 
 from triton_serve.builder.resolve import resolve_service_image, service_build_spec
 from triton_serve.config import get_settings
-from triton_serve.database.model import ImageStatus, Model, Service, ServiceResources, utcnow
+from triton_serve.database.model import ImageStatus, Model, Service, ServiceResources, timezone_aware_now
 
 BASE = "ghcr.io/links-ads/serve-triton:23.07-py3"
 
@@ -20,7 +20,7 @@ def rollback(test_db):
 
 
 def _service(db, name, dependencies, system_dependencies=()):
-    service = Service(service_name=name, service_image=BASE, last_active_time=utcnow(), priority=1)
+    service = Service(service_name=name, service_image=BASE, last_active_time=timezone_aware_now(), priority=1)
     service.models.append(
         Model(model_name=f"{name}-model", dependencies=dependencies, system_dependencies=list(system_dependencies))
     )

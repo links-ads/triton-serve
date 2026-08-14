@@ -12,7 +12,7 @@ from triton_serve.database.model import (
     KeyType,
     Service,
     key_service_association,
-    utcnow,
+    timezone_aware_now,
 )
 
 DEFAULT_KEYS = ["master-key"]
@@ -37,7 +37,7 @@ def service(db_session):
     svc = Service(
         service_name="demo",
         service_image="img",
-        last_active_time=utcnow(),
+        last_active_time=timezone_aware_now(),
         priority=0,
     )
     db_session.add(svc)
@@ -58,7 +58,7 @@ def _associate_key(db: Session, service: Service, value: str) -> APIKey:
         key_type=KeyType.SERVICE,
         value=value,
         project="test",
-        expires_at=utcnow() + timedelta(days=30),
+        expires_at=timezone_aware_now() + timedelta(days=30),
     )
     key.services.append(service)
     db.add(key)

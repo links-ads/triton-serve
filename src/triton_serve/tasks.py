@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from celery.signals import worker_process_init, worker_process_shutdown
 from httpx import Client
@@ -13,7 +13,7 @@ from triton_serve.builder.execute import build_image  # noqa: F401  (registers t
 from triton_serve.config import get_settings
 from triton_serve.config.celery import client as worker_client
 from triton_serve.database import database_manager
-from triton_serve.database.model import DesiredState, RuntimeStatus, Service
+from triton_serve.database.model import DesiredState, RuntimeStatus, Service, timezone_aware_now
 from triton_serve.extensions import get_reconciler_docker_client
 from triton_serve.queue import app
 
@@ -91,7 +91,7 @@ def update_service_status() -> None:
                 )
                 for service in services:
                     try:
-                        now = datetime.now(tz=timezone.utc)
+                        now = timezone_aware_now()
                         # honor backoff: skip a service mid-retry still cooling down between attempts.
                         # RECOVERING is the status the executor persists after any spent attempt (crash
                         # recreate or image pull), so image-pull failures draw on the same crash budget

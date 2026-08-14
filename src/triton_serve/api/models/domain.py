@@ -9,8 +9,8 @@ from triton_serve.api.dto import ModelUpdateBody
 from triton_serve.builder.execute import enqueue_build
 from triton_serve.builder.resolve import resolve_service_image, services_using_models
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import Model, ModelVersion
-from triton_serve.database.schema import ModelCreateSchema, timezone_aware_now
+from triton_serve.database.model import Model, ModelVersion, timezone_aware_now
+from triton_serve.database.schema import ModelCreateSchema
 from triton_serve.storage import ModelSource, ModelStorage
 from triton_serve.storage.validation import validate_models
 

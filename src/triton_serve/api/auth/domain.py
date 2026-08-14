@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from triton_serve.database.model import APIKey, KeyType, Service, utcnow
+from triton_serve.database.model import APIKey, KeyType, Service, timezone_aware_now
 
 LOG = logging.getLogger("uvicorn")
 
@@ -79,7 +79,7 @@ def generate_key(
         APIKey: Newly created API key.
     """
     key = secrets.token_urlsafe(32)
-    expires_at = utcnow() + timedelta(days=expiration_days)
+    expires_at = timezone_aware_now() + timedelta(days=expiration_days)
     new_key = APIKey(
         value=key,
         key_type=key_type,

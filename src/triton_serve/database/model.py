@@ -1,6 +1,5 @@
 import enum
 from datetime import datetime, timezone
-from functools import partial
 
 from sqlalchemy import (
     CheckConstraint,
@@ -19,7 +18,15 @@ from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
 
 Base = declarative_base()
 
-utcnow = partial(datetime.now, tz=timezone.utc)
+
+def timezone_aware_now() -> datetime:
+    """The single source of "now" for the whole project.
+
+    Deliberately not named `utcnow`: `datetime.utcnow` returns a *naive* timestamp, and every
+    column here is `DateTime(timezone=True)`, so mixing the two silently produces comparisons
+    between aware and naive datetimes.
+    """
+    return datetime.now(tz=timezone.utc)
 
 
 class ModelType(enum.Enum):
@@ -90,7 +97,7 @@ class APIKey(Base):
     value: Mapped[str] = mapped_column(unique=True, nullable=False)
     project: Mapped[str] = mapped_column(nullable=False)
     notes: Mapped[str] = mapped_column(nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     services: Mapped[list["Service"]] = relationship(secondary=key_service_association)
@@ -124,8 +131,8 @@ class Model(Base):
     model_id: Mapped[int] = mapped_column(primary_key=True)
     model_name: Mapped[str] = mapped_column(nullable=False)
     model_type: Mapped[ModelType] = mapped_column(nullable=False, default=ModelType.UNK)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     source: Mapped[str] = mapped_column(nullable=True)
     dependencies: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=True, default=[])
@@ -166,7 +173,7 @@ class ServiceImage(Base):
     apt_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     pip_packages: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
 
 
@@ -194,7 +201,7 @@ class Service(Base):
         default=RuntimeStatus.WARMING,
         server_default=RuntimeStatus.WARMING.value,
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     deleted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     last_active_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     inactivity_timeout: Mapped[int] = mapped_column(nullable=False, default=3600)  # 1 hour

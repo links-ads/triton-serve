@@ -4,8 +4,8 @@ from datetime import timedelta
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from triton_serve.database.model import KombuMessage
-from triton_serve.database.schema import QueueMessageDeleteResponseSchema, timezone_aware_now
+from triton_serve.database.model import KombuMessage, timezone_aware_now
+from triton_serve.database.schema import QueueMessageDeleteResponseSchema
 
 LOG = logging.getLogger("uvicorn")
 

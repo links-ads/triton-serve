@@ -1,6 +1,5 @@
 import logging
 import math
-from datetime import datetime, timezone
 from typing import cast
 
 from docker import DockerClient
@@ -31,7 +30,7 @@ from triton_serve.database.model import (
     RuntimeStatus,
     Service,
     ServiceResources,
-    utcnow,
+    timezone_aware_now,
 )
 
 LOG = logging.getLogger("uvicorn")
@@ -77,7 +76,7 @@ def rebuild_service_config(
         .filter(
             Service.service_id == service.service_id,
             APIKey.key_type == KeyType.SERVICE,
-            APIKey.expires_at > utcnow(),
+            APIKey.expires_at > timezone_aware_now(),
         )
         .all()
     )
@@ -134,7 +133,7 @@ def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
     service.desired_state = desired
     if wake:
-        service.last_active_time = datetime.now(tz=timezone.utc)
+        service.last_active_time = timezone_aware_now()
     db.commit()
 
 
@@ -144,7 +143,7 @@ def reset_and_wake(db: Session, service_id: int) -> None:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
     service.restart_attempts = 0
     service.last_attempt_at = None
-    service.last_active_time = datetime.now(tz=timezone.utc)
+    service.last_active_time = timezone_aware_now()
     service.runtime_status = RuntimeStatus.RECOVERING
     # any managed image that is not ready is re-queued, not just a failed one: a build whose worker
     # died leaves the row BUILDING with no task behind it, and this is the only path back
@@ -468,8 +467,8 @@ def create_service_entry(
         service_image=image_name,
         inactivity_timeout=service_timeout,
         priority=service_priority,
-        created_at=datetime.now(tz=timezone.utc),
-        last_active_time=datetime.now(tz=timezone.utc),
+        created_at=timezone_aware_now(),
+        last_active_time=timezone_aware_now(),
     )
     service.models.extend(model_instances)
 
@@ -620,7 +619,7 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     if service is None or service.deleted_at is not None:
         raise HTTPException(status_code=404, detail=f"Service with id {service_id} does not exist")
     traefik.delete(service_name=service.service_name)
-    service.deleted_at = datetime.now(tz=timezone.utc)
+    service.deleted_at = timezone_aware_now()
     service.desired_state = DesiredState.RETIRED
     db.commit()
 
@@ -632,7 +631,7 @@ def update_active_time(db: Session, service: Service):
         db (Session): The database session.
         service (Service): The service to update.
     """
-    service.last_active_time = datetime.now(tz=timezone.utc)
+    service.last_active_time = timezone_aware_now()
     db.commit()
 
 
