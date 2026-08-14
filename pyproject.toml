@@ -78,6 +78,13 @@ extend-immutable-calls = [
     "fastapi.Security",
 ]
 
+[tool.pyright]
+# Tests are deliberately excluded: they monkeypatch attributes onto functions and pass stubs
+# where the ORM types are declared, which standard mode flags by design.
+include = ["src"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"
