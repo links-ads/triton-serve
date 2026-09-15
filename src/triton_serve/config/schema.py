@@ -49,6 +49,7 @@ class AppSettings(BaseSettings):
     registry_pull_username: str = ""
     registry_pull_token: SecretStr = SecretStr("")
     image_build_timeout: int = 1800  # seconds; a build streams for minutes, unlike a reconcile call
+    image_build_stale_after: int = 3600  # seconds a PENDING/BUILDING row may sit before it is reaped
 
     # database
     database_user: str

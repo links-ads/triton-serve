@@ -6,7 +6,7 @@ from docker import DockerClient
 from docker.errors import DockerException, ImageNotFound
 from httpx import Client
 
-from triton_serve.builder.execute import build_image
+from triton_serve.builder.execute import build_image, reap_stale_builds
 from triton_serve.builder.resolve import image_from_spec
 from triton_serve.builder.spec import make_build_spec
 from triton_serve.config.schema import AppSettings
@@ -182,3 +182,59 @@ def test_a_failed_build_restamps_status_changed_at(test_db, unbuildable_image, m
 def test_the_build_task_acknowledges_late():
     assert build_image.acks_late is True
     assert build_image.reject_on_worker_lost is True
+
+
+@pytest.fixture
+def stale_rows(test_db, test_settings):
+    """Rows aged past the reap threshold, one per case the sweep has to tell apart."""
+    old = timezone_aware_now() - timedelta(seconds=test_settings.image_build_stale_after + 60)
+
+    def _row(image_hash: str, status: ImageStatus, managed: bool, changed_at) -> ServiceImage:
+        return ServiceImage(
+            image_hash=image_hash,
+            image_ref=f"example.org/img:{image_hash}",
+            base_image="python:3.12-slim",
+            apt_packages=[],
+            pip_packages=[],
+            status=status,
+            managed=managed,
+            status_changed_at=changed_at,
+        )
+
+    rows = [
+        _row("reap-pending", ImageStatus.PENDING, True, old),
+        _row("reap-building", ImageStatus.BUILDING, True, old),
+        _row("reap-unmanaged", ImageStatus.PENDING, False, old),
+        _row("reap-ready", ImageStatus.READY, True, old),
+        _row("reap-fresh", ImageStatus.BUILDING, True, timezone_aware_now()),
+    ]
+    for row in rows:
+        test_db.merge(row)
+    test_db.commit()
+    yield rows
+    for row in rows:
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == row.image_hash).delete()
+    test_db.commit()
+
+
+@pytest.mark.parametrize("image_hash", ["reap-pending", "reap-building"])
+def test_reap_fails_a_stale_row(test_db, stale_rows, image_hash):
+    reap_stale_builds()
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert "retry" in row.build_log
+
+
+@pytest.mark.parametrize(
+    "image_hash,expected",
+    [
+        ("reap-unmanaged", ImageStatus.PENDING),
+        ("reap-ready", ImageStatus.READY),
+        ("reap-fresh", ImageStatus.BUILDING),
+    ],
+)
+def test_reap_leaves_everything_else_alone(test_db, stale_rows, image_hash, expected):
+    reap_stale_builds()
+    test_db.expire_all()
+    assert test_db.get(ServiceImage, image_hash).status is expected

@@ -1,5 +1,6 @@
 import logging
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 from celery import Task
@@ -19,6 +20,10 @@ from triton_serve.queue import BUILDER_QUEUE, app
 LOG = logging.getLogger(__name__)
 BUILD_LOG_TAIL = 8000
 BUILD_TASK_NAME = "triton_serve.builder.build_image"
+REAP_REASON = (
+    "the build never completed: its worker was lost or its message was never delivered. "
+    "POST /services/{service_id}/retry re-queues it."
+)
 
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:
@@ -127,6 +132,36 @@ def build_image(self: Task, image_hash: str) -> None:
             image.build_log = None
             db.commit()
     LOG.info("build %s: ready at %s", image_hash[:12], ref)
+
+
+@app.task
+def reap_stale_builds() -> None:
+    """Fails any managed image row that has sat in PENDING or BUILDING past the stale threshold.
+
+    Covers what late ack cannot: an enqueue lost between the owning commit and the broker, a message
+    the broker itself dropped, and rows orphaned before late ack shipped. The row going FAILED is
+    what lets the reconciler move the service out of WARMING, through its existing IMAGE_FAILED path.
+
+    Re-queueing instead of failing would loop forever on a build that dies deterministically, and
+    bounding that needs an attempt counter this design does not otherwise want.
+    """
+    settings = get_settings()
+    cutoff = timezone_aware_now() - timedelta(seconds=settings.image_build_stale_after)
+    with database_manager.session() as db:
+        stale = (
+            db.query(ServiceImage)
+            .filter(
+                ServiceImage.managed.is_(True),
+                ServiceImage.status.in_((ImageStatus.PENDING, ImageStatus.BUILDING)),
+                ServiceImage.status_changed_at < cutoff,
+            )
+            .all()
+        )
+        for image in stale:
+            LOG.warning("reaping stale build %s, stuck in %s", image.image_hash[:12], image.status.value)
+            image.transition(ImageStatus.FAILED)
+            image.build_log = REAP_REASON
+        db.commit()
 
 
 def enqueue_build(image_hash: str) -> None:
