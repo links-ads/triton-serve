@@ -165,7 +165,7 @@ def reset_and_wake(db: Session, service_id: int) -> None:
     # died leaves the row BUILDING with no task behind it, and this is the only path back
     image = service.image
     if image is not None and image.managed and image.status is not ImageStatus.READY:
-        image.status = ImageStatus.PENDING
+        image.transition(ImageStatus.PENDING)
         image.build_log = None
         retry_hash = image.image_hash
     else:

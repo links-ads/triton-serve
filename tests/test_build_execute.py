@@ -1,4 +1,5 @@
 from contextlib import suppress
+from datetime import timedelta
 
 import pytest
 from docker import DockerClient
@@ -9,7 +10,7 @@ from triton_serve.builder.execute import build_image
 from triton_serve.builder.resolve import image_from_spec
 from triton_serve.builder.spec import make_build_spec
 from triton_serve.config.schema import AppSettings
-from triton_serve.database.model import ImageStatus, ServiceImage
+from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
 
 GITHUB_API = "https://api.github.com"
 
@@ -155,3 +156,29 @@ def test_build_image_marks_a_broken_spec_failed(test_db, pending_image):
     row = test_db.get(ServiceImage, row.image_hash)
     assert row.status is ImageStatus.FAILED
     assert "this-package-does-not-exist-93f2a1" in row.build_log
+
+
+def test_a_failed_build_restamps_status_changed_at(test_db, unbuildable_image, monkeypatch):
+    def unreachable() -> DockerClient:
+        raise DockerException("Error while fetching server API version")
+
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    row.status_changed_at = timezone_aware_now() - timedelta(hours=5)
+    test_db.commit()
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", unreachable)
+    build_image.push_request(retries=build_image.max_retries)
+    try:
+        build_image(unbuildable_image.image_hash)
+    finally:
+        build_image.pop_request()
+
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert (timezone_aware_now() - row.status_changed_at).total_seconds() < 60
+
+
+def test_the_build_task_acknowledges_late():
+    assert build_image.acks_late is True
+    assert build_image.reject_on_worker_lost is True

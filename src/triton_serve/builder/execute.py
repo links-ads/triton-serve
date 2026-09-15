@@ -67,13 +67,20 @@ def _mark_failed(image_hash: str, reason: str) -> None:
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
         if image is not None:
-            image.status = ImageStatus.FAILED
+            image.transition(ImageStatus.FAILED)
             image.build_log = reason[-BUILD_LOG_TAIL:]
             db.commit()
     LOG.error("build %s failed: %s", image_hash[:12], reason[-500:])
 
 
-@app.task(bind=True, name=BUILD_TASK_NAME, queue=BUILDER_QUEUE, max_retries=3)
+@app.task(
+    bind=True,
+    name=BUILD_TASK_NAME,
+    queue=BUILDER_QUEUE,
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def build_image(self: Task, image_hash: str) -> None:
     """Builds and pushes the image for a PENDING row, then flips it to READY or FAILED.
 
@@ -94,7 +101,7 @@ def build_image(self: Task, image_hash: str) -> None:
         if image is None or not image.managed or image.status is ImageStatus.READY:
             LOG.info("build %s: nothing to do (missing, unmanaged or already ready)", image_hash[:12])
             return
-        image.status = ImageStatus.BUILDING
+        image.transition(ImageStatus.BUILDING)
         db.commit()
         spec = _spec_from_row(image)
         ref = image.image_ref
@@ -115,7 +122,7 @@ def build_image(self: Task, image_hash: str) -> None:
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
         if image is not None:
-            image.status = ImageStatus.READY
+            image.transition(ImageStatus.READY)
             image.built_at = timezone_aware_now()
             image.build_log = None
             db.commit()
