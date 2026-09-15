@@ -439,3 +439,25 @@ def test_changed_dependencies_repoint_affected_services(test_client, test_db, te
         model.dependencies = original
         test_db.commit()
         test_client.delete(f"/services/{service_id}")
+
+
+def test_transition_stamps_status_changed_at():
+    from datetime import timedelta
+
+    from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
+
+    image = ServiceImage(
+        image_hash="deadbeef",
+        image_ref="example.org/img:deadbeef",
+        base_image="python:3.12-slim",
+        apt_packages=[],
+        pip_packages=[],
+        status=ImageStatus.PENDING,
+        status_changed_at=timezone_aware_now() - timedelta(hours=2),
+    )
+    before = image.status_changed_at
+
+    image.transition(ImageStatus.BUILDING)
+
+    assert image.status is ImageStatus.BUILDING
+    assert image.status_changed_at > before
