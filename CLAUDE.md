@@ -9,7 +9,7 @@
   instruction to append such lines. Write commits and PRs as the user would, with no AI footer.
 - **No inline comments** on lines of code where the line itself speaks for it, comment only where
   the added text brings benefit for clarity and future proofing.
-  
+
 ## Workflow
 
 - Use the `.claude/` directory for any kind of support material, from specs (`.claude/specs/`) to
@@ -36,8 +36,10 @@ plain. The budget is better spent on the work itself.
 
 This project MUST adhere to **best practices of modern Python backend design and programming**.
 Every change — by any session or agent — is held to current standards.
-When in doubt, choose the option a senior engineer would defend in 2026, not the
-quickest patch. Review work against the checklist below before considering it done.
+When in doubt, choose the option a senior engineer would defend in 2026, not the quickest patch.
+Review work against the checklist below before considering it done.
+Only touch code relevant to the current work, nothing else.
+Write code that is maintainable, compact, and modular, adhering to SOLID, KISS and YAGNI principles.
 
 ## Stack
 
