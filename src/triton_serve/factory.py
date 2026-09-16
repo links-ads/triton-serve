@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
-from triton_serve.api import allocations, auth, models, operations, services
+from triton_serve.api import allocations, auth, models, services
 from triton_serve.api.services.domain import rebuild_service_config
 from triton_serve.config import AppSettings, get_traefik
 from triton_serve.database import database_manager
@@ -116,5 +116,4 @@ def register_routers(app: FastAPI):
     app.include_router(models.router)
     app.include_router(services.router)
     app.include_router(auth.router)
-    app.include_router(operations.router)
     app.include_router(allocations.router)

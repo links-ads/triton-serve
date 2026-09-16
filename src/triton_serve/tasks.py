@@ -2,7 +2,6 @@ import logging
 from datetime import datetime
 
 from celery.signals import worker_process_init, worker_process_shutdown
-from httpx import Client
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 
@@ -14,7 +13,6 @@ from triton_serve.builder.execute import (  # noqa: F401  (registers the tasks o
     reap_stale_builds,
 )
 from triton_serve.config import get_settings
-from triton_serve.config.celery import client as worker_client
 from triton_serve.database import database_manager
 from triton_serve.database.model import DesiredState, RuntimeStatus, Service, timezone_aware_now
 from triton_serve.extensions import get_reconciler_docker_client
@@ -57,12 +55,6 @@ def setup_periodic_tasks(sender, **_):
         settings.sentinel_poll_interval,
         reap_stale_builds.s(),  # type: ignore
         name="Reap stale image builds",
-    )
-
-    sender.add_periodic_task(
-        settings.purge_message_schedule,
-        purge_queue_messages.s(),  # type: ignore
-        name="Purge queue messages",
     )
 
 
@@ -146,22 +138,3 @@ def update_service_status() -> None:
                         db.rollback()
         finally:
             lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _RECONCILE_LOCK_KEY})
-
-
-@app.task
-def purge_queue_messages(client: Client | None = None) -> None:
-    """Purges queue messages older than the configured window.
-
-    The beat schedule fires this with no arguments, so `client` must stay optional; it exists for
-    tests to inject their own. The worker has no client in a test environment, where the backend
-    it would call is the process under test.
-    """
-    client = client or worker_client
-    if client is None:
-        LOG.warning("No backend client configured, skipping the queue purge")
-        return
-    try:
-        response = client.delete("queue/messages")
-        LOG.debug("Purge of queue messages complete: %s", response.text)
-    except Exception as e:
-        LOG.error("Error purging queue messages: %s", e)
