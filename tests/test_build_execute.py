@@ -223,7 +223,7 @@ def test_reap_fails_a_stale_row(test_db, stale_rows, image_hash):
     test_db.expire_all()
     row = test_db.get(ServiceImage, image_hash)
     assert row.status is ImageStatus.FAILED
-    assert "retry" in row.build_log
+    assert "builder lost" in row.build_log
 
 
 @pytest.mark.parametrize(

@@ -20,10 +20,6 @@ from triton_serve.queue import BUILDER_QUEUE, app
 LOG = logging.getLogger(__name__)
 BUILD_LOG_TAIL = 8000
 BUILD_TASK_NAME = "triton_serve.builder.build_image"
-REAP_REASON = (
-    "the build never completed: its worker was lost or its message was never delivered. "
-    "POST /services/{service_id}/retry re-queues it."
-)
 
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:
@@ -160,7 +156,7 @@ def reap_stale_builds() -> None:
         for image in stale:
             LOG.warning("reaping stale build %s, stuck in %s", image.image_hash[:12], image.status.value)
             image.transition(ImageStatus.FAILED)
-            image.build_log = REAP_REASON
+            image.build_log = "builder lost or message never received"
         db.commit()
 
 
