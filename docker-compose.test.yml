@@ -35,6 +35,9 @@ services:
   database:
       container_name: serve-database_test
 
+  redis:
+    container_name: serve-redis_test
+
   # Same image as the backend, but with a different command
   # Runs the tests inside the container, calling the backend
   tester:
