@@ -35,11 +35,12 @@ plain. The budget is better spent on the work itself.
 ## Project standard (non-negotiable)
 
 This project MUST adhere to **best practices of modern Python backend design and programming**.
-Every change — by any session or agent — is held to current standards.
-When in doubt, choose the option a senior engineer would defend in 2026, not the quickest patch.
-Review work against the checklist below before considering it done.
-Only touch code relevant to the current work, nothing else.
-Write code that is maintainable, compact, and modular, adhering to SOLID, KISS and YAGNI principles.
+- Every change — by any session or agent — is held to current standards.
+- When in doubt, ask the user, and suggest options a senior engineer would defend in 2026, not the quickest patch.
+- Review work against the checklist below before considering it done.
+- Before implementing new functionality, make sure the same functionality is not already available or derivable with little effort
+- Only touch code relevant to the current work, nothing else.
+- Write code that is maintainable, compact, reusable and modular, adhering to SOLID, KISS and YAGNI principles.
 
 ## Stack
 
