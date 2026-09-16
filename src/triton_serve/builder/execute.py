@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 from docker import DockerClient
 from docker.errors import APIError, BuildError
 
@@ -20,6 +21,11 @@ from triton_serve.queue import BUILDER_QUEUE, app
 LOG = logging.getLogger(__name__)
 BUILD_LOG_TAIL = 8000
 BUILD_TASK_NAME = "triton_serve.builder.build_image"
+# the broker's visibility timeout assumes one attempt cannot outlive image_build_timeout; these are
+# what make that true, since the setting itself only caps a single docker-py read. the hard limit
+# just backstops a task that ignores the soft signal, far enough above it to write the row first
+BUILD_SOFT_LIMIT = get_settings().image_build_timeout
+BUILD_HARD_LIMIT = BUILD_SOFT_LIMIT + 60
 
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:
@@ -81,6 +87,8 @@ def _mark_failed(image_hash: str, reason: str) -> None:
     max_retries=3,
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=BUILD_SOFT_LIMIT,
+    time_limit=BUILD_HARD_LIMIT,
 )
 def build_image(self: Task, image_hash: str) -> None:
     """Builds and pushes the image for a PENDING row, then flips it to READY or FAILED.
@@ -88,6 +96,10 @@ def build_image(self: Task, image_hash: str) -> None:
     Transient Docker and registry errors are retried with exponential backoff; only once the
     budget is spent does the row go FAILED, which is genuinely terminal because identical inputs
     reproduce identical failures.
+
+    An attempt that outlives its soft time limit skips the budget entirely and fails at once, so the
+    row cannot sit non-terminal long enough for the broker to redeliver the message underneath it.
+    `POST /services/{service_id}/retry` is the way back from there.
 
     Every failure is caught rather than a known set: the row is already BUILDING by the time the
     daemon is touched, and an escaping exception would leave it there forever, which the reconciler
@@ -114,6 +126,11 @@ def build_image(self: Task, image_hash: str) -> None:
             write_build_context(spec, Path(context))
             client.images.build(path=context, tag=ref, platform="linux/amd64", rm=True, pull=True)
         _push(client, ref, settings)
+    except SoftTimeLimitExceeded:
+        # terminal rather than retried: spending the budget would hold the row out of a terminal
+        # state for hours, and each attempt restamps status_changed_at so the reaper never cuts in
+        _mark_failed(image_hash, f"build exceeded its {BUILD_SOFT_LIMIT}s limit and was stopped")
+        return
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             _mark_failed(image_hash, _failure_detail(exc))

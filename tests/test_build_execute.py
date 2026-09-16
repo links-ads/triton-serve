@@ -2,6 +2,7 @@ from contextlib import suppress
 from datetime import timedelta
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from docker import DockerClient
 from docker.errors import DockerException, ImageNotFound
 from httpx import Client
@@ -182,6 +183,32 @@ def test_a_failed_build_restamps_status_changed_at(test_db, unbuildable_image, m
 def test_the_build_task_acknowledges_late():
     assert build_image.acks_late is True
     assert build_image.reject_on_worker_lost is True
+
+
+def test_a_build_that_outlives_its_limit_fails_without_retrying(test_db, unbuildable_image, monkeypatch):
+    """A timeout is terminal, so the retry budget starts untouched: spending it would keep the row
+    out of a terminal state for hours, and `POST /services/{id}/retry` is the way back."""
+
+    def too_slow() -> DockerClient:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", too_slow)
+    build_image(unbuildable_image.image_hash)
+
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert "exceeded" in row.build_log
+
+
+def test_the_build_task_caps_a_single_attempt(test_settings):
+    """The visibility timeout is only safe while one attempt cannot outlive `image_build_timeout`.
+
+    Nothing enforced that bound before: the setting caps a single docker-py read, not the build, so
+    a build still running past the window had its message handed to a second worker.
+    """
+    assert build_image.soft_time_limit == test_settings.image_build_timeout
+    assert build_image.time_limit > build_image.soft_time_limit
 
 
 @pytest.fixture
