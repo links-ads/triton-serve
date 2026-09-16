@@ -461,3 +461,27 @@ def test_transition_stamps_status_changed_at():
 
     assert image.status is ImageStatus.BUILDING
     assert image.status_changed_at > before
+
+
+def test_transition_leaves_the_stamp_alone_when_the_status_is_unchanged():
+    """The reaper reads the stamp as how long a row has waited without progress, so a retry that
+    re-declares BUILDING must not hide the row by pushing its clock forward."""
+    from datetime import timedelta
+
+    from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
+
+    image = ServiceImage(
+        image_hash="deadbeef",
+        image_ref="example.org/img:deadbeef",
+        base_image="python:3.12-slim",
+        apt_packages=[],
+        pip_packages=[],
+        status=ImageStatus.BUILDING,
+        status_changed_at=timezone_aware_now() - timedelta(hours=2),
+    )
+    before = image.status_changed_at
+
+    image.transition(ImageStatus.BUILDING)
+
+    assert image.status is ImageStatus.BUILDING
+    assert image.status_changed_at == before
