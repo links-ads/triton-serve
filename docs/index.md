@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-file MD013 -->
 # Triton Serve
 
 A deployment framework built on [NVIDIA Triton Inference Server](https://github.com/triton-inference-server/server).
@@ -13,6 +14,9 @@ container, routes traffic to it, and stops it again when it goes idle.
 - **Reconciler** — a Celery worker that ticks on a fixed interval, compares what Docker is actually
   doing against those records, and takes the one action that closes the gap.
 - **Builder** — a separate Celery worker that builds and pushes runtime images.
+- **Broker** — an ephemeral Redis instance the reconciler and builder pass work through. Its state
+  is disposable: a lost message is re-fired by the next reconcile tick or caught by the build
+  reaper, so nothing needs to persist it.
 - **Proxy** — Traefik, the single entry point. It authenticates the request, asks the backend
   whether the target service is ready, and forwards only if it is.
 - **Triton services** — vanilla Triton containers, launched in explicit mode so each one loads only
