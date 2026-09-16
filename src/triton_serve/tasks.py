@@ -9,7 +9,10 @@ from sqlalchemy.orm import joinedload
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
 from triton_serve.api.services.reconcile import decide
-from triton_serve.builder.execute import build_image  # noqa: F401  (registers the task on the app)
+from triton_serve.builder.execute import (  # noqa: F401  (registers the tasks on the app)
+    build_image,
+    reap_stale_builds,
+)
 from triton_serve.config import get_settings
 from triton_serve.config.celery import client as worker_client
 from triton_serve.database import database_manager
@@ -47,6 +50,13 @@ def setup_periodic_tasks(sender, **_):
         settings.sentinel_poll_interval,
         update_service_status.s(),  # type: ignore
         name="Update service status",
+    )
+
+    # the default queue, not BUILDER_QUEUE: there it would queue behind the long build it watches
+    sender.add_periodic_task(
+        settings.sentinel_poll_interval,
+        reap_stale_builds.s(),  # type: ignore
+        name="Reap stale image builds",
     )
 
     sender.add_periodic_task(

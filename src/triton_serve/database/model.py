@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, declarative_base, mapped_column, relationship
@@ -175,6 +176,20 @@ class ServiceImage(Base):
     build_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=timezone_aware_now)
     built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    # not onupdate: that fires on any write to the row, a build_log update included, and would then
+    # describe something other than what the column is named after
+    status_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=timezone_aware_now, server_default=func.now()
+    )
+
+    def transition(self, status: ImageStatus) -> None:
+        """Moves the row to a new status, stamping when it got there.
+
+        Args:
+            status (ImageStatus): The status the row moves to.
+        """
+        self.status = status
+        self.status_changed_at = timezone_aware_now()
 
 
 class Service(Base):

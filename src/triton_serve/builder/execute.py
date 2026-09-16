@@ -1,5 +1,6 @@
 import logging
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 from celery import Task
@@ -67,13 +68,20 @@ def _mark_failed(image_hash: str, reason: str) -> None:
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
         if image is not None:
-            image.status = ImageStatus.FAILED
+            image.transition(ImageStatus.FAILED)
             image.build_log = reason[-BUILD_LOG_TAIL:]
             db.commit()
     LOG.error("build %s failed: %s", image_hash[:12], reason[-500:])
 
 
-@app.task(bind=True, name=BUILD_TASK_NAME, queue=BUILDER_QUEUE, max_retries=3)
+@app.task(
+    bind=True,
+    name=BUILD_TASK_NAME,
+    queue=BUILDER_QUEUE,
+    max_retries=3,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
 def build_image(self: Task, image_hash: str) -> None:
     """Builds and pushes the image for a PENDING row, then flips it to READY or FAILED.
 
@@ -94,7 +102,7 @@ def build_image(self: Task, image_hash: str) -> None:
         if image is None or not image.managed or image.status is ImageStatus.READY:
             LOG.info("build %s: nothing to do (missing, unmanaged or already ready)", image_hash[:12])
             return
-        image.status = ImageStatus.BUILDING
+        image.transition(ImageStatus.BUILDING)
         db.commit()
         spec = _spec_from_row(image)
         ref = image.image_ref
@@ -115,11 +123,41 @@ def build_image(self: Task, image_hash: str) -> None:
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
         if image is not None:
-            image.status = ImageStatus.READY
+            image.transition(ImageStatus.READY)
             image.built_at = timezone_aware_now()
             image.build_log = None
             db.commit()
     LOG.info("build %s: ready at %s", image_hash[:12], ref)
+
+
+@app.task
+def reap_stale_builds() -> None:
+    """Fails any managed image row that has sat in PENDING or BUILDING past the stale threshold.
+
+    Covers what late ack cannot: an enqueue lost between the owning commit and the broker, a message
+    the broker itself dropped, and rows orphaned before late ack shipped. The row going FAILED is
+    what lets the reconciler move the service out of WARMING, through its existing IMAGE_FAILED path.
+
+    Re-queueing instead of failing would loop forever on a build that dies deterministically, and
+    bounding that needs an attempt counter this design does not otherwise want.
+    """
+    settings = get_settings()
+    cutoff = timezone_aware_now() - timedelta(seconds=settings.image_build_stale_after)
+    with database_manager.session() as db:
+        stale = (
+            db.query(ServiceImage)
+            .filter(
+                ServiceImage.managed.is_(True),
+                ServiceImage.status.in_((ImageStatus.PENDING, ImageStatus.BUILDING)),
+                ServiceImage.status_changed_at < cutoff,
+            )
+            .all()
+        )
+        for image in stale:
+            LOG.warning("reaping stale build %s, stuck in %s", image.image_hash[:12], image.status.value)
+            image.transition(ImageStatus.FAILED)
+            image.build_log = "builder lost or message never received"
+        db.commit()
 
 
 def enqueue_build(image_hash: str) -> None:
