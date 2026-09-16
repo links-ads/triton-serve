@@ -11,6 +11,7 @@ from triton_serve.builder.execute import build_image, reap_stale_builds
 from triton_serve.builder.resolve import image_from_spec
 from triton_serve.builder.spec import make_build_spec
 from triton_serve.config.schema import AppSettings
+from triton_serve.database import database_manager
 from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
 
 GITHUB_API = "https://api.github.com"
@@ -178,6 +179,40 @@ def test_a_failed_build_restamps_status_changed_at(test_db, unbuildable_image, m
     row = test_db.get(ServiceImage, unbuildable_image.image_hash)
     assert row.status is ImageStatus.FAILED
     assert (timezone_aware_now() - row.status_changed_at).total_seconds() < 60
+
+
+def test_a_reaped_row_is_not_revived_by_a_late_finishing_build(test_db, unbuildable_image, monkeypatch):
+    """The reaper can reach a row whose build is still running, so finishing is not enough to claim
+    it: a build that succeeds after the sweep failed the row must leave that terminal state alone.
+
+    Only the daemon is stubbed here. The row logic under test is the real `build_image` flow, and
+    the push seam is where the sweep is made to land, mid-build.
+    """
+
+    class _Images:
+        def build(self, **kwargs) -> None:
+            return None
+
+    class _Client:
+        images = _Images()
+
+    def _reaped_mid_build(client, ref, settings) -> None:
+        with database_manager.session() as db:
+            row = db.get(ServiceImage, unbuildable_image.image_hash)
+            row.transition(ImageStatus.FAILED)
+            row.build_log = "builder lost or message never received"
+            db.commit()
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", lambda: _Client())
+    monkeypatch.setattr("triton_serve.builder.execute._login", lambda client, settings: None)
+    monkeypatch.setattr("triton_serve.builder.execute._push", _reaped_mid_build)
+
+    build_image(unbuildable_image.image_hash)
+
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert row.built_at is None
 
 
 def test_the_build_task_acknowledges_late():

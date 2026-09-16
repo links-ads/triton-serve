@@ -127,8 +127,8 @@ def build_image(self: Task, image_hash: str) -> None:
             client.images.build(path=context, tag=ref, platform="linux/amd64", rm=True, pull=True)
         _push(client, ref, settings)
     except SoftTimeLimitExceeded:
-        # terminal rather than retried: spending the budget would hold the row out of a terminal
-        # state for hours, and each attempt restamps status_changed_at so the reaper never cuts in
+        # terminal rather than retried: a timeout is not the transient class the budget exists for,
+        # and spending it would leave the service WARMING for hours before the row reads FAILED
         _mark_failed(image_hash, f"build exceeded its {BUILD_SOFT_LIMIT}s limit and was stopped")
         return
     except Exception as exc:
@@ -139,11 +139,17 @@ def build_image(self: Task, image_hash: str) -> None:
 
     with database_manager.session() as db:
         image = db.get(ServiceImage, image_hash)
-        if image is not None:
-            image.transition(ImageStatus.READY)
-            image.built_at = timezone_aware_now()
-            image.build_log = None
-            db.commit()
+        if image is None:
+            return
+        # finishing is not a claim on the row: the reaper may have failed it while this attempt ran,
+        # and that verdict is terminal, so a late finish reports rather than overwrites it
+        if image.status is not ImageStatus.BUILDING:
+            LOG.warning("build %s finished, but the row moved on to %s", image_hash[:12], image.status.value)
+            return
+        image.transition(ImageStatus.READY)
+        image.built_at = timezone_aware_now()
+        image.build_log = None
+        db.commit()
     LOG.info("build %s: ready at %s", image_hash[:12], ref)
 
 
