@@ -36,3 +36,12 @@ def test_visibility_timeout_tracks_overridden_bounds():
 def test_inverted_build_bounds_are_rejected():
     with pytest.raises(ValidationError, match="image_build_timeout"):
         _settings(image_build_timeout=3600, image_build_stale_after=1800)
+
+
+def test_celery_config_pins_the_visibility_timeout():
+    from triton_serve.config import get_settings
+    from triton_serve.config.celery import Config
+
+    assert Config.broker_url.startswith("redis://")
+    assert Config.broker_transport_options["visibility_timeout"] == get_settings().broker_visibility_timeout
+    assert Config.worker_prefetch_multiplier == 1
