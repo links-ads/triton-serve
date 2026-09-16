@@ -166,6 +166,9 @@ def reset_and_wake(db: Session, service_id: int) -> None:
     image = service.image
     if image is not None and image.managed and image.status is not ImageStatus.READY:
         image.transition(ImageStatus.PENDING)
+        # the transition is a no-op for a row already PENDING, and the stamp is what the reaper
+        # reads: without restarting it here, the sweep can fail the row before the builder starts
+        image.status_changed_at = timezone_aware_now()
         image.build_log = None
         retry_hash = image.image_hash
     else:

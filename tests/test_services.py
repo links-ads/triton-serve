@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import UTC
+from datetime import UTC, timedelta
 
 import pytest
 import requests
@@ -470,6 +470,46 @@ def test_invalid_dependency_is_rejected_at_write_time(test_client, test_db):
         assert response.status_code == 422, response.text
     finally:
         model.dependencies = original
+        test_db.commit()
+
+
+def test_retry_freshens_the_stamp_on_a_row_already_pending(test_db, test_settings, monkeypatch):
+    """/retry restarts progress, which is a different fact from the status changing.
+
+    The row is already PENDING here, so the transition is a no-op; without an explicit stamp the
+    reaper still sees a row that has waited two hours and can fail it before the builder starts.
+    """
+    from triton_serve.api.services import domain
+    from triton_serve.builder.resolve import image_from_spec
+    from triton_serve.builder.spec import make_build_spec
+    from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
+
+    spec = make_build_spec(
+        base_image="ghcr.io/links-ads/serve-triton:23.07-py3", apt_packages=[], pip_packages=["six==1.16.2"]
+    )
+    image = image_from_spec(spec, test_settings)
+    image.status = ImageStatus.PENDING
+    image.status_changed_at = timezone_aware_now() - timedelta(hours=2)
+    service = Service(
+        service_name="trt-srv_test_pending",
+        service_image=spec.base_image,
+        last_active_time=timezone_aware_now(),
+        priority=1,
+        image=image,
+    )
+    test_db.add(service)
+    test_db.commit()
+
+    monkeypatch.setattr(domain, "enqueue_build", lambda _: None)
+    try:
+        domain.reset_and_wake(test_db, service.service_id)
+        test_db.refresh(image)
+        assert image.status is ImageStatus.PENDING
+        assert (timezone_aware_now() - image.status_changed_at).total_seconds() < 60
+    finally:
+        test_db.delete(service)
+        test_db.commit()
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == spec.image_hash).delete()
         test_db.commit()
 
 
