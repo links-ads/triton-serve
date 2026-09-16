@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from triton_serve.config.schema import AppSettings
 
 REQUIRED = {
+    "database_host": "database",
     "database_user": "postgres",
     "database_pass": "postgres",
     "backend_host": "backend",
@@ -30,6 +31,7 @@ def test_visibility_timeout_sits_inside_the_safe_band():
 
 def test_visibility_timeout_tracks_overridden_bounds():
     settings = _settings(image_build_timeout=600, image_build_stale_after=1000)
+    assert 600 < settings.broker_visibility_timeout < 1000
     assert settings.broker_visibility_timeout == 800
 
 
