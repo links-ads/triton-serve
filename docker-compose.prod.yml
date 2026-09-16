@@ -27,6 +27,9 @@ services:
   builder:
     restart: unless-stopped
 
+  redis:
+    restart: unless-stopped
+
   backend:
     <<: *override
 

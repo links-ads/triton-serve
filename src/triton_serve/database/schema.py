@@ -111,10 +111,6 @@ class APIKeySchema(APIKeyBaseSchema):
     key_id: int
 
 
-class QueueMessageDeleteResponseSchema(BaseModel):
-    deleted_messages: int
-
-
 class ResourceUsageSchema(BaseModel):
     allocated: int
     in_use: int

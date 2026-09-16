@@ -1,7 +1,7 @@
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,16 +58,16 @@ class AppSettings(BaseSettings):
     database_port: int = 5432
     database_name: str = "serve_db"
 
+    # broker
+    redis_host: str = "redis"
+    redis_port: int = 6379
+
     # worker params
     sentinel_poll_interval: int = 10  # reconcile tick; the loop is a cheap DB read + docker inspect
     docker_timeout: int = 10  # seconds; reconciler Docker client, fail fast not 60s
     service_boot_grace: int = 30  # seconds a no-healthcheck container is BOOTING
     backend_host: str
     backend_port: int
-
-    # queue message purge
-    purge_message_schedule: int = 86400
-    older_than_hours_to_purge: int = 24
 
     @property
     def database_url(self):
@@ -77,5 +77,25 @@ class AppSettings(BaseSettings):
         )
 
     @property
-    def celery_broker_url(self):
-        return f"sqla+{self.database_url}"
+    def celery_broker_url(self) -> str:
+        return f"redis://{self.redis_host}:{self.redis_port}/0"
+
+    @property
+    def broker_visibility_timeout(self) -> int:
+        """Seconds a delivered message stays invisible before Redis hands it to another worker.
+
+        The midpoint of the band the build path requires: above one attempt, so a healthy build is
+        never redelivered while the first worker still runs it, and below the reaper's threshold,
+        so a lost attempt comes back before the row is failed. Redis defaults this to exactly
+        `image_build_stale_after`, which races the reaper, hence pinning it.
+        """
+        return self.image_build_timeout + (self.image_build_stale_after - self.image_build_timeout) // 2
+
+    @model_validator(mode="after")
+    def _check_build_bounds(self) -> AppSettings:
+        if self.image_build_timeout >= self.image_build_stale_after:
+            raise ValueError(
+                "image_build_timeout must be smaller than image_build_stale_after: the broker's "
+                "visibility timeout has to fit between them"
+            )
+        return self
