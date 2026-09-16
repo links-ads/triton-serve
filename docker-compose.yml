@@ -60,8 +60,6 @@ services:
   redis:
     container_name: serve-redis
     image: redis:8.2-alpine
-    # broker state is disposable: a lost message is re-fired by the next reconcile tick or caught
-    # by the build reaper, so persistence would only buy fsync pressure
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
