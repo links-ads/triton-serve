@@ -8,6 +8,10 @@ pulling the 19GB triton image or waiting for a real model load.
 The platform spawns services with `--load-model=<name>` arguments; those are parsed here so the
 model endpoints report exactly the models the service was created with.
 
+A SIGTERM handler is installed so `docker stop` returns promptly with exit 0. Python runs as PID 1
+in this container, and the kernel applies no default signal disposition to PID 1, so without a
+handler the stop would wait out the full grace period and then SIGKILL, reporting 137.
+
 Environment:
     DUMMY_BOOT_DELAY  seconds to wait before binding the port at all (default 0). Models a slow
                       model load: the container is `running` but nothing is listening yet, which
@@ -23,6 +27,7 @@ Environment:
 
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -148,8 +153,11 @@ def main() -> None:
         threading.Thread(target=_exit_after, args=(LIFETIME, EXIT_CODE), daemon=True).start()
 
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    # shutdown() blocks until serve_forever() returns, so it cannot run on the thread serving it
+    signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
     print(f"[dummy] listening on 0.0.0.0:{PORT}", flush=True)
     server.serve_forever()
+    print("[dummy] stopped on SIGTERM", flush=True)
 
 
 if __name__ == "__main__":
