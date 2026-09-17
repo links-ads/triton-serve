@@ -8,6 +8,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from docker import DockerClient
 from docker.errors import DockerException, ImageNotFound
 from httpx import Client
+from sqlalchemy import text
 
 from triton_serve.builder.execute import build_image, reap_stale_builds
 from triton_serve.builder.resolve import image_from_spec
@@ -304,6 +305,20 @@ def test_reap_leaves_everything_else_alone(test_db, stale_rows, image_hash, expe
     assert test_db.get(ServiceImage, image_hash).status is expected
 
 
+def _wait_until_blocked(db, timeout: float = 15.0) -> None:
+    """Waits until another backend is stuck on a lock, so the caller knows the race is really on.
+
+    A fixed sleep would let the sweep start after the commit instead, skip the READY row through its
+    own filter, and leave the test passing green without ever exercising the blocking path.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if db.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar_one():
+            return
+        time.sleep(0.05)
+    raise AssertionError("the sweep never blocked on the row lock, so the race was not exercised")
+
+
 def test_the_reaper_does_not_fail_a_build_that_finishes_during_the_sweep(test_db, test_settings):
     """The sweep reads a row and writes it in two steps, and a build can commit READY in between.
 
@@ -331,8 +346,7 @@ def test_the_reaper_does_not_fail_a_build_that_finishes_during_the_sweep(test_db
             building = db.get(ServiceImage, "reap-race", with_for_update=True)
             sweep = threading.Thread(target=reap_stale_builds, daemon=True)
             sweep.start()
-            # let the sweep reach the row and block on the lock this session is holding
-            time.sleep(1.0)
+            _wait_until_blocked(db)
             building.transition(ImageStatus.READY)
             building.built_at = timezone_aware_now()
             db.commit()
