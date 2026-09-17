@@ -485,3 +485,27 @@ def test_transition_leaves_the_stamp_alone_when_the_status_is_unchanged():
 
     assert image.status is ImageStatus.BUILDING
     assert image.status_changed_at == before
+
+
+def test_transition_restamps_an_unchanged_status_when_asked():
+    """`/retry` re-declares PENDING on a row that is already PENDING, and restarting the reaper's
+    clock is the whole point of that call, so the one caller that needs a fresh stamp asks for it."""
+    from datetime import timedelta
+
+    from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
+
+    image = ServiceImage(
+        image_hash="deadbeef",
+        image_ref="example.org/img:deadbeef",
+        base_image="python:3.12-slim",
+        apt_packages=[],
+        pip_packages=[],
+        status=ImageStatus.PENDING,
+        status_changed_at=timezone_aware_now() - timedelta(hours=2),
+    )
+    before = image.status_changed_at
+
+    image.transition(ImageStatus.PENDING, restamp=True)
+
+    assert image.status is ImageStatus.PENDING
+    assert image.status_changed_at > before

@@ -182,7 +182,7 @@ class ServiceImage(Base):
         DateTime(timezone=True), nullable=False, default=timezone_aware_now, server_default=func.now()
     )
 
-    def transition(self, status: ImageStatus) -> None:
+    def transition(self, status: ImageStatus, restamp: bool = False) -> None:
         """Moves the row to a new status, stamping when it got there.
 
         Re-declaring the status the row already holds leaves the stamp alone. The reaper reads it as
@@ -191,8 +191,10 @@ class ServiceImage(Base):
 
         Args:
             status (ImageStatus): The status the row moves to.
+            restamp (bool): Stamp even when the status is unchanged, for the caller whose purpose is
+                to restart that clock rather than to move the row, such as re-queueing from /retry.
         """
-        if status is not self.status:
+        if restamp or status is not self.status:
             self.status_changed_at = timezone_aware_now()
         self.status = status
 
