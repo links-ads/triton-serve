@@ -73,7 +73,7 @@ def _failure_detail(exc: Exception) -> str:
 
 def _mark_failed(image_hash: str, reason: str) -> None:
     with database_manager.session() as db:
-        image = db.get(ServiceImage, image_hash)
+        image = db.get(ServiceImage, image_hash, with_for_update=True)
         if image is not None:
             image.transition(ImageStatus.FAILED)
             image.build_log = reason[-BUILD_LOG_TAIL:]
@@ -139,7 +139,7 @@ def build_image(self: Task, image_hash: str) -> None:
         raise self.retry(exc=exc, countdown=30 * 2**self.request.retries) from exc
 
     with database_manager.session() as db:
-        image = db.get(ServiceImage, image_hash)
+        image = db.get(ServiceImage, image_hash, with_for_update=True)
         if image is None:
             return
         # finishing is not a claim on the row: the reaper may have failed it while this attempt ran,
@@ -168,6 +168,9 @@ def reap_stale_builds() -> None:
     settings = get_settings()
     cutoff = timezone_aware_now() - timedelta(seconds=settings.image_build_stale_after)
     with database_manager.session() as db:
+        # locked: the sweep reads a row and writes it in two steps, so a build committing READY in
+        # between would be stamped FAILED. under the lock postgres re-checks the filter and the row
+        # that finished drops out of the sweep instead
         stale = (
             db.query(ServiceImage)
             .filter(
@@ -175,6 +178,7 @@ def reap_stale_builds() -> None:
                 ServiceImage.status.in_((ImageStatus.PENDING, ImageStatus.BUILDING)),
                 ServiceImage.status_changed_at < cutoff,
             )
+            .with_for_update()
             .all()
         )
         for image in stale:

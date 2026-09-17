@@ -1,3 +1,5 @@
+import threading
+import time
 from contextlib import suppress
 from datetime import timedelta
 
@@ -300,3 +302,45 @@ def test_reap_leaves_everything_else_alone(test_db, stale_rows, image_hash, expe
     reap_stale_builds()
     test_db.expire_all()
     assert test_db.get(ServiceImage, image_hash).status is expected
+
+
+def test_the_reaper_does_not_fail_a_build_that_finishes_during_the_sweep(test_db, test_settings):
+    """The sweep reads a row and writes it in two steps, and a build can commit READY in between.
+
+    Both sides take the row lock, so the sweep re-reads under it and finds the row already settled
+    rather than stamping FAILED over a finished build. Threads are what make the losing order
+    reachable: it needs two live connections, one of them blocked on the other.
+    """
+    old = timezone_aware_now() - timedelta(seconds=test_settings.image_build_stale_after + 60)
+    test_db.merge(
+        ServiceImage(
+            image_hash="reap-race",
+            image_ref="example.org/img:reap-race",
+            base_image="python:3.12-slim",
+            apt_packages=[],
+            pip_packages=[],
+            status=ImageStatus.BUILDING,
+            managed=True,
+            status_changed_at=old,
+        )
+    )
+    test_db.commit()
+
+    try:
+        with database_manager.session() as db:
+            building = db.get(ServiceImage, "reap-race", with_for_update=True)
+            sweep = threading.Thread(target=reap_stale_builds, daemon=True)
+            sweep.start()
+            # let the sweep reach the row and block on the lock this session is holding
+            time.sleep(1.0)
+            building.transition(ImageStatus.READY)
+            building.built_at = timezone_aware_now()
+            db.commit()
+        sweep.join(timeout=15)
+        assert not sweep.is_alive(), "the sweep never returned"
+
+        test_db.expire_all()
+        assert test_db.get(ServiceImage, "reap-race").status is ImageStatus.READY
+    finally:
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == "reap-race").delete()
+        test_db.commit()
