@@ -61,3 +61,13 @@ def test_a_gap_too_narrow_for_the_hard_limit_is_rejected():
     redeliver ten seconds before the first attempt is stopped."""
     with pytest.raises(ValidationError, match="image_build_stale_after"):
         _settings(image_build_timeout=1800, image_build_stale_after=1900)
+
+
+def test_the_narrowest_accepted_gap_keeps_the_hard_limit_below_the_window():
+    """Pins where the check actually falls. Integer division puts the boundary at a gap of 122
+    seconds, not at a round number, which is why the error says no number at all."""
+    with pytest.raises(ValidationError, match="image_build_stale_after"):
+        _settings(image_build_timeout=1800, image_build_stale_after=1921)
+
+    settings = _settings(image_build_timeout=1800, image_build_stale_after=1922)
+    assert settings.image_build_hard_limit < settings.broker_visibility_timeout

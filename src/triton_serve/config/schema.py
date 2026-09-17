@@ -114,8 +114,8 @@ class AppSettings(BaseSettings):
             )
         if self.image_build_hard_limit >= self.broker_visibility_timeout:
             raise ValueError(
-                "image_build_stale_after must exceed image_build_timeout by more than "
-                f"{2 * BUILD_HARD_LIMIT_MARGIN} seconds, so the attempt is killed before the "
-                "broker's visibility timeout redelivers its message"
+                "image_build_stale_after must leave more room above image_build_timeout: the "
+                "broker's visibility timeout has to stay above the build's hard limit, or the "
+                "message is redelivered while the first attempt is still running"
             )
         return self
