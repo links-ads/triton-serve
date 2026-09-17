@@ -25,7 +25,7 @@ def test_visibility_timeout_sits_inside_the_safe_band():
     """Above one build attempt so a live build is never handed to a second worker, below the
     reaper's threshold so a lost attempt is redelivered before the row is failed."""
     settings = _settings(image_build_timeout=1800, image_build_stale_after=3600)
-    assert settings.image_build_timeout < settings.broker_visibility_timeout < settings.image_build_stale_after
+    assert settings.image_build_timeout < settings.broker_visibility_timeout < settings.build_stale_after
     assert settings.broker_visibility_timeout == 2700
 
 
@@ -64,10 +64,26 @@ def test_a_gap_too_narrow_for_the_hard_limit_is_rejected():
 
 
 def test_the_narrowest_accepted_gap_keeps_the_hard_limit_below_the_window():
-    """Pins where the check actually falls. Integer division puts the boundary at a gap of 122
-    seconds, not at a round number, which is why the error says no number at all."""
+    """Pins where the check falls for a threshold set by hand. A 1800s timeout puts the hard limit
+    at 1980, and the window only clears it from 2162 up, which is why the error names no number."""
     with pytest.raises(ValidationError, match="image_build_stale_after"):
-        _settings(image_build_timeout=1800, image_build_stale_after=1921)
+        _settings(image_build_timeout=1800, image_build_stale_after=2161)
 
-    settings = _settings(image_build_timeout=1800, image_build_stale_after=1922)
+    settings = _settings(image_build_timeout=1800, image_build_stale_after=2162)
     assert settings.image_build_hard_limit < settings.broker_visibility_timeout
+
+
+def test_the_stale_threshold_follows_the_timeout_when_it_is_not_set():
+    """None of this should have to be set by hand: overriding the timeout alone has to leave a band
+    that still validates, which it cannot while the threshold holds an unrelated default."""
+    settings = _settings(image_build_timeout=700)
+
+    assert settings.build_stale_after == 1400
+    assert settings.image_build_hard_limit < settings.broker_visibility_timeout < settings.build_stale_after
+
+
+def test_an_explicit_stale_threshold_still_wins():
+    """It stays tunable, it just stops being something you must keep in sync by hand."""
+    settings = _settings(image_build_timeout=600, image_build_stale_after=2000)
+
+    assert settings.build_stale_after == 2000

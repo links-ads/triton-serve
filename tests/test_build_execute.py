@@ -252,7 +252,7 @@ def test_the_build_task_caps_a_single_attempt(test_settings):
 @pytest.fixture
 def stale_rows(test_db, test_settings):
     """Rows aged past the reap threshold, one per case the sweep has to tell apart."""
-    old = timezone_aware_now() - timedelta(seconds=test_settings.image_build_stale_after + 60)
+    old = timezone_aware_now() - timedelta(seconds=test_settings.build_stale_after + 60)
 
     def _row(image_hash: str, status: ImageStatus, managed: bool, changed_at) -> ServiceImage:
         return ServiceImage(
@@ -326,7 +326,7 @@ def test_the_reaper_does_not_fail_a_build_that_finishes_during_the_sweep(test_db
     rather than stamping FAILED over a finished build. Threads are what make the losing order
     reachable: it needs two live connections, one of them blocked on the other.
     """
-    old = timezone_aware_now() - timedelta(seconds=test_settings.image_build_stale_after + 60)
+    old = timezone_aware_now() - timedelta(seconds=test_settings.build_stale_after + 60)
     test_db.merge(
         ServiceImage(
             image_hash="reap-race",

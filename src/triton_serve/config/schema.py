@@ -12,9 +12,10 @@ class StorageType(StrEnum):
     azure = "azure"
 
 
-# seconds the hard time limit sits above the soft one: room for the task to record the failure
-# before it is killed, and the margin the broker band below has to clear
-BUILD_HARD_LIMIT_MARGIN = 60
+# how far the hard time limit sits above the soft one, as a fraction rather than a fixed number
+# of seconds: room for the task to record the failure before it is killed, at whatever scale the
+# timeout is tuned to, so the band stays valid instead of only holding for large values
+BUILD_HARD_LIMIT_HEADROOM = 0.1
 
 
 class AppSettings(BaseSettings):
@@ -54,7 +55,7 @@ class AppSettings(BaseSettings):
     registry_pull_username: str = ""
     registry_pull_token: SecretStr = SecretStr("")
     image_build_timeout: int = 1800  # seconds; a build streams for minutes, unlike a reconcile call
-    image_build_stale_after: int = 3600  # seconds a PENDING/BUILDING row may sit before it is reaped
+    image_build_stale_after: int | None = None  # overrides the reap threshold; defaults to twice the timeout
 
     # database
     database_user: str
@@ -94,7 +95,17 @@ class AppSettings(BaseSettings):
         so a lost attempt comes back before the row is failed. Redis defaults this to exactly
         `image_build_stale_after`, which races the reaper, hence pinning it.
         """
-        return self.image_build_timeout + (self.image_build_stale_after - self.image_build_timeout) // 2
+        return self.image_build_timeout + (self.build_stale_after - self.image_build_timeout) // 2
+
+    @property
+    def build_stale_after(self) -> int:
+        """Seconds a PENDING or BUILDING row may sit before the reaper fails it.
+
+        Derived from the build timeout unless set outright, because a threshold that has to outlast
+        a build is not something to keep in sync by hand: tuning one value cannot leave the band
+        inconsistent, and neither value has to be configured to get a working stack.
+        """
+        return self.image_build_stale_after or 2 * self.image_build_timeout
 
     @property
     def image_build_hard_limit(self) -> int:
@@ -103,11 +114,11 @@ class AppSettings(BaseSettings):
         A task that ignores the soft signal still has to die before the broker redelivers its
         message, or a second replica can start the same build while the first one still runs.
         """
-        return self.image_build_timeout + BUILD_HARD_LIMIT_MARGIN
+        return int(self.image_build_timeout * (1 + BUILD_HARD_LIMIT_HEADROOM))
 
     @model_validator(mode="after")
     def _check_build_bounds(self) -> AppSettings:
-        if self.image_build_timeout >= self.image_build_stale_after:
+        if self.image_build_timeout >= self.build_stale_after:
             raise ValueError(
                 "image_build_timeout must be smaller than image_build_stale_after: the broker's "
                 "visibility timeout has to fit between them"

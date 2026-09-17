@@ -166,7 +166,7 @@ def reap_stale_builds() -> None:
     bounding that needs an attempt counter this design does not otherwise want.
     """
     settings = get_settings()
-    cutoff = timezone_aware_now() - timedelta(seconds=settings.image_build_stale_after)
+    cutoff = timezone_aware_now() - timedelta(seconds=settings.build_stale_after)
     with database_manager.session() as db:
         # locked: the sweep reads a row and writes it in two steps, so a build committing READY in
         # between would be stamped FAILED. under the lock postgres re-checks the filter and the row
