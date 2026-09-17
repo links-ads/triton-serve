@@ -170,7 +170,8 @@ def reap_stale_builds() -> None:
     with database_manager.session() as db:
         # locked: the sweep reads a row and writes it in two steps, so a build committing READY in
         # between would be stamped FAILED. under the lock postgres re-checks the filter and the row
-        # that finished drops out of the sweep instead
+        # that finished drops out of the sweep instead. ordered so that two sweeps, were they ever
+        # to overlap, could not take the same rows in opposite orders and deadlock
         stale = (
             db.query(ServiceImage)
             .filter(
@@ -178,6 +179,7 @@ def reap_stale_builds() -> None:
                 ServiceImage.status.in_((ImageStatus.PENDING, ImageStatus.BUILDING)),
                 ServiceImage.status_changed_at < cutoff,
             )
+            .order_by(ServiceImage.image_hash)
             .with_for_update()
             .all()
         )
