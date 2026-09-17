@@ -354,6 +354,16 @@ def test_unknown_tool_serve_keys_are_ignored():
     assert parse_dependencies(DATA / "bundle_pyproject").system == ["libgl1", "libglib2.0-0"]
 
 
+def test_lock_export_drops_annotation_comments():
+    """uv annotates each exported line with an indented `# via ...`, which is not a requirement."""
+    assert all(not dep.startswith("#") for dep in parse_dependencies(DATA / "bundle_locked").pip)
+
+
+def test_lock_export_excludes_dev_dependencies():
+    """Dev groups exist for the packager testing locally; baking them into the image is dead weight."""
+    assert parse_dependencies(DATA / "bundle_locked").pip == ["runtime-dep==1.0.0"]
+
+
 def test_requirements_txt_is_still_read_when_no_pyproject():
     deps = parse_dependencies(DATA / "bundle_requirements")
     assert deps.pip == ["numpy==1.26.4"]

@@ -95,13 +95,14 @@ def _export_locked(bundle_path: Path) -> list[str] | None:
     if not (bundle_path / "uv.lock").is_file():
         return None
     result = subprocess.run(
-        ["uv", "export", "--frozen", "--no-hashes", "--no-emit-project", "--format", "requirements-txt"],
+        ["uv", "export", "--frozen", "--no-hashes", "--no-emit-project", "--no-dev", "--format", "requirements-txt"],
         cwd=bundle_path,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, f"uv.lock is present but does not export: {result.stderr.strip()}"
-    return [line.strip() for line in result.stdout.splitlines() if line.strip() and not line.startswith("#")]
+    lines = (line.strip() for line in result.stdout.splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
 
 
 def _parse_pyproject(manifest: Path) -> BundleDependencies:
