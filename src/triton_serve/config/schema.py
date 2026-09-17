@@ -12,6 +12,11 @@ class StorageType(StrEnum):
     azure = "azure"
 
 
+# seconds the hard time limit sits above the soft one: room for the task to record the failure
+# before it is killed, and the margin the broker band below has to clear
+BUILD_HARD_LIMIT_MARGIN = 60
+
+
 class AppSettings(BaseSettings):
     """Application settings, defining variable used throughout the application."""
 
@@ -91,11 +96,26 @@ class AppSettings(BaseSettings):
         """
         return self.image_build_timeout + (self.image_build_stale_after - self.image_build_timeout) // 2
 
+    @property
+    def image_build_hard_limit(self) -> int:
+        """Seconds after which a build attempt is killed outright, backstopping the soft limit.
+
+        A task that ignores the soft signal still has to die before the broker redelivers its
+        message, or a second replica can start the same build while the first one still runs.
+        """
+        return self.image_build_timeout + BUILD_HARD_LIMIT_MARGIN
+
     @model_validator(mode="after")
     def _check_build_bounds(self) -> AppSettings:
         if self.image_build_timeout >= self.image_build_stale_after:
             raise ValueError(
                 "image_build_timeout must be smaller than image_build_stale_after: the broker's "
                 "visibility timeout has to fit between them"
+            )
+        if self.image_build_hard_limit >= self.broker_visibility_timeout:
+            raise ValueError(
+                "image_build_stale_after must exceed image_build_timeout by more than "
+                f"{2 * BUILD_HARD_LIMIT_MARGIN} seconds, so the attempt is killed before the "
+                "broker's visibility timeout redelivers its message"
             )
         return self

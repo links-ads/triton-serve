@@ -23,9 +23,10 @@ BUILD_LOG_TAIL = 8000
 BUILD_TASK_NAME = "triton_serve.builder.build_image"
 # the broker's visibility timeout assumes one attempt cannot outlive image_build_timeout; these are
 # what make that true, since the setting itself only caps a single docker-py read. the hard limit
-# just backstops a task that ignores the soft signal, far enough above it to write the row first
+# backstops a task that ignores the soft signal, and the settings validator is what keeps it below
+# the window the broker redelivers in
 BUILD_SOFT_LIMIT = get_settings().image_build_timeout
-BUILD_HARD_LIMIT = BUILD_SOFT_LIMIT + 60
+BUILD_HARD_LIMIT = get_settings().image_build_hard_limit
 
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:

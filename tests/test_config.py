@@ -47,3 +47,17 @@ def test_celery_config_pins_the_visibility_timeout():
     assert Config.broker_url.startswith("redis://")
     assert Config.broker_transport_options["visibility_timeout"] == get_settings().broker_visibility_timeout
     assert Config.worker_prefetch_multiplier == 1
+
+
+def test_the_hard_limit_sits_under_the_visibility_timeout():
+    """What makes a second builder replica safe: the attempt is killed before the broker gives up on
+    it, so a redelivered message can never find the first attempt still running."""
+    settings = _settings(image_build_timeout=1800, image_build_stale_after=3600)
+    assert settings.image_build_timeout < settings.image_build_hard_limit < settings.broker_visibility_timeout
+
+
+def test_a_gap_too_narrow_for_the_hard_limit_is_rejected():
+    """1800/1900 leaves the visibility timeout at 1850 and the hard limit at 1860: the broker would
+    redeliver ten seconds before the first attempt is stopped."""
+    with pytest.raises(ValidationError, match="image_build_stale_after"):
+        _settings(image_build_timeout=1800, image_build_stale_after=1900)
