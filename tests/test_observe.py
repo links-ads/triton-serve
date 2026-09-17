@@ -42,13 +42,14 @@ class FakeClient:
         self.images = FakeImages(image_present)
 
 
-def _container(status, exit_code=0, health=None, started=None):
+def _container(status, exit_code=0, health=None, started=None, oom_killed=False):
     started = started or datetime.now(UTC)
     return SimpleNamespace(
         status=status,
         attrs={
             "State": {
                 "ExitCode": exit_code,
+                "OOMKilled": oom_killed,
                 "StartedAt": started.isoformat(),
                 "Health": {"Status": health} if health else {},
             }
@@ -117,7 +118,37 @@ def test_exited_zero_is_exited_ok():
 
 def test_exited_nonzero_is_crashed():
     assert (
+        observe(FakeClient(container=_container("exited", 1)), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
+    )
+
+
+def test_exited_on_sigsegv_is_crashed():
+    assert (
+        observe(FakeClient(container=_container("exited", 139)), _svc(), 30, ImageStatus.READY)
+        is ObservedState.CRASHED
+    )
+
+
+def test_exited_on_sigterm_is_exited_ok():
+    # 143 is 128+SIGTERM: the container was asked to stop, it did not fail on its own
+    assert (
+        observe(FakeClient(container=_container("exited", 143)), _svc(), 30, ImageStatus.READY)
+        is ObservedState.EXITED_OK
+    )
+
+
+def test_exited_on_sigkill_is_exited_ok():
+    # 137 is 128+SIGKILL: what a container that ignores SIGTERM reports once the stop grace expires
+    assert (
         observe(FakeClient(container=_container("exited", 137)), _svc(), 30, ImageStatus.READY)
+        is ObservedState.EXITED_OK
+    )
+
+
+def test_oom_killed_is_crashed():
+    # the kernel's OOM killer also uses SIGKILL, but that one is a real crash to back off from
+    assert (
+        observe(FakeClient(container=_container("exited", 137, oom_killed=True)), _svc(), 30, ImageStatus.READY)
         is ObservedState.CRASHED
     )
 

@@ -1,3 +1,4 @@
+import signal
 from datetime import UTC, datetime
 
 from docker import DockerClient
@@ -6,6 +7,11 @@ from docker.models.containers import Container
 
 from triton_serve.api.services.reconcile import ObservedState
 from triton_serve.database.model import ImageStatus, Service, timezone_aware_now
+
+# 128+N is the exit status of a process killed by signal N. Docker's stop sends SIGTERM and then
+# SIGKILL once the grace expires, so a container the reconciler stopped itself reports one of these
+# rather than having failed on its own.
+_STOPPED_BY_SIGNAL = frozenset({128 + signal.SIGTERM, 128 + signal.SIGKILL})
 
 
 def _image_present(client: DockerClient, image_ref: str) -> bool:
@@ -93,5 +99,8 @@ def observe(
         return _running_fact(container, boot_grace_seconds)
     if container.status in ("created", "restarting"):
         return ObservedState.BOOTING
-    exit_code = container.attrs.get("State", {}).get("ExitCode", 0)
-    return ObservedState.EXITED_OK if exit_code == 0 else ObservedState.CRASHED
+    state = container.attrs.get("State", {})
+    exit_code = state.get("ExitCode", 0)
+    # the kernel's OOM killer uses SIGKILL too, and that one is a genuine crash to back off from
+    stopped_by_signal = exit_code in _STOPPED_BY_SIGNAL and not state.get("OOMKilled")
+    return ObservedState.EXITED_OK if exit_code == 0 or stopped_by_signal else ObservedState.CRASHED
