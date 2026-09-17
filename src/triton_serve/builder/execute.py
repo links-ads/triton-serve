@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 from docker import DockerClient
 from docker.errors import APIError, BuildError
 
@@ -20,6 +21,12 @@ from triton_serve.queue import BUILDER_QUEUE, app
 LOG = logging.getLogger(__name__)
 BUILD_LOG_TAIL = 8000
 BUILD_TASK_NAME = "triton_serve.builder.build_image"
+# the broker's visibility timeout assumes one attempt cannot outlive image_build_timeout; these are
+# what make that true, since the setting itself only caps a single docker-py read. the hard limit
+# backstops a task that ignores the soft signal, and the settings validator is what keeps it below
+# the window the broker redelivers in
+BUILD_SOFT_LIMIT = get_settings().image_build_timeout
+BUILD_HARD_LIMIT = get_settings().image_build_hard_limit
 
 
 def _spec_from_row(image: ServiceImage) -> BuildSpec:
@@ -66,7 +73,7 @@ def _failure_detail(exc: Exception) -> str:
 
 def _mark_failed(image_hash: str, reason: str) -> None:
     with database_manager.session() as db:
-        image = db.get(ServiceImage, image_hash)
+        image = db.get(ServiceImage, image_hash, with_for_update=True)
         if image is not None:
             image.transition(ImageStatus.FAILED)
             image.build_log = reason[-BUILD_LOG_TAIL:]
@@ -81,6 +88,8 @@ def _mark_failed(image_hash: str, reason: str) -> None:
     max_retries=3,
     acks_late=True,
     reject_on_worker_lost=True,
+    soft_time_limit=BUILD_SOFT_LIMIT,
+    time_limit=BUILD_HARD_LIMIT,
 )
 def build_image(self: Task, image_hash: str) -> None:
     """Builds and pushes the image for a PENDING row, then flips it to READY or FAILED.
@@ -88,6 +97,10 @@ def build_image(self: Task, image_hash: str) -> None:
     Transient Docker and registry errors are retried with exponential backoff; only once the
     budget is spent does the row go FAILED, which is genuinely terminal because identical inputs
     reproduce identical failures.
+
+    An attempt that outlives its soft time limit skips the budget entirely and fails at once, so the
+    row cannot sit non-terminal long enough for the broker to redeliver the message underneath it.
+    `POST /services/{service_id}/retry` is the way back from there.
 
     Every failure is caught rather than a known set: the row is already BUILDING by the time the
     daemon is touched, and an escaping exception would leave it there forever, which the reconciler
@@ -114,6 +127,11 @@ def build_image(self: Task, image_hash: str) -> None:
             write_build_context(spec, Path(context))
             client.images.build(path=context, tag=ref, platform="linux/amd64", rm=True, pull=True)
         _push(client, ref, settings)
+    except SoftTimeLimitExceeded:
+        # terminal rather than retried: a timeout is not the transient class the budget exists for,
+        # and spending it would leave the service WARMING for hours before the row reads FAILED
+        _mark_failed(image_hash, f"build exceeded its {BUILD_SOFT_LIMIT}s limit and was stopped")
+        return
     except Exception as exc:
         if self.request.retries >= self.max_retries:
             _mark_failed(image_hash, _failure_detail(exc))
@@ -121,12 +139,18 @@ def build_image(self: Task, image_hash: str) -> None:
         raise self.retry(exc=exc, countdown=30 * 2**self.request.retries) from exc
 
     with database_manager.session() as db:
-        image = db.get(ServiceImage, image_hash)
-        if image is not None:
-            image.transition(ImageStatus.READY)
-            image.built_at = timezone_aware_now()
-            image.build_log = None
-            db.commit()
+        image = db.get(ServiceImage, image_hash, with_for_update=True)
+        if image is None:
+            return
+        # finishing is not a claim on the row: the reaper may have failed it while this attempt ran,
+        # and that verdict is terminal, so a late finish reports rather than overwrites it
+        if image.status is not ImageStatus.BUILDING:
+            LOG.warning("build %s finished, but the row moved on to %s", image_hash[:12], image.status.value)
+            return
+        image.transition(ImageStatus.READY)
+        image.built_at = timezone_aware_now()
+        image.build_log = None
+        db.commit()
     LOG.info("build %s: ready at %s", image_hash[:12], ref)
 
 
@@ -142,8 +166,12 @@ def reap_stale_builds() -> None:
     bounding that needs an attempt counter this design does not otherwise want.
     """
     settings = get_settings()
-    cutoff = timezone_aware_now() - timedelta(seconds=settings.image_build_stale_after)
+    cutoff = timezone_aware_now() - timedelta(seconds=settings.build_stale_after)
     with database_manager.session() as db:
+        # locked: the sweep reads a row and writes it in two steps, so a build committing READY in
+        # between would be stamped FAILED. under the lock postgres re-checks the filter and the row
+        # that finished drops out of the sweep instead. ordered so that two sweeps, were they ever
+        # to overlap, could not take the same rows in opposite orders and deadlock
         stale = (
             db.query(ServiceImage)
             .filter(
@@ -151,6 +179,8 @@ def reap_stale_builds() -> None:
                 ServiceImage.status.in_((ImageStatus.PENDING, ImageStatus.BUILDING)),
                 ServiceImage.status_changed_at < cutoff,
             )
+            .order_by(ServiceImage.image_hash)
+            .with_for_update()
             .all()
         )
         for image in stale:

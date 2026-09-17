@@ -1,15 +1,20 @@
+import threading
+import time
 from contextlib import suppress
 from datetime import timedelta
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from docker import DockerClient
 from docker.errors import DockerException, ImageNotFound
 from httpx import Client
+from sqlalchemy import text
 
 from triton_serve.builder.execute import build_image, reap_stale_builds
 from triton_serve.builder.resolve import image_from_spec
 from triton_serve.builder.spec import make_build_spec
 from triton_serve.config.schema import AppSettings
+from triton_serve.database import database_manager
 from triton_serve.database.model import ImageStatus, ServiceImage, timezone_aware_now
 
 GITHUB_API = "https://api.github.com"
@@ -179,15 +184,75 @@ def test_a_failed_build_restamps_status_changed_at(test_db, unbuildable_image, m
     assert (timezone_aware_now() - row.status_changed_at).total_seconds() < 60
 
 
+def test_a_reaped_row_is_not_revived_by_a_late_finishing_build(test_db, unbuildable_image, monkeypatch):
+    """The reaper can reach a row whose build is still running, so finishing is not enough to claim
+    it: a build that succeeds after the sweep failed the row must leave that terminal state alone.
+
+    Only the daemon is stubbed here. The row logic under test is the real `build_image` flow, and
+    the push seam is where the sweep is made to land, mid-build.
+    """
+
+    class _Images:
+        def build(self, **kwargs) -> None:
+            return None
+
+    class _Client:
+        images = _Images()
+
+    def _reaped_mid_build(client, ref, settings) -> None:
+        with database_manager.session() as db:
+            row = db.get(ServiceImage, unbuildable_image.image_hash)
+            row.transition(ImageStatus.FAILED)
+            row.build_log = "builder lost or message never received"
+            db.commit()
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", lambda: _Client())
+    monkeypatch.setattr("triton_serve.builder.execute._login", lambda client, settings: None)
+    monkeypatch.setattr("triton_serve.builder.execute._push", _reaped_mid_build)
+
+    build_image(unbuildable_image.image_hash)
+
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert row.built_at is None
+
+
 def test_the_build_task_acknowledges_late():
     assert build_image.acks_late is True
     assert build_image.reject_on_worker_lost is True
 
 
+def test_a_build_that_outlives_its_limit_fails_without_retrying(test_db, unbuildable_image, monkeypatch):
+    """A timeout is terminal, so the retry budget starts untouched: spending it would keep the row
+    out of a terminal state for hours, and `POST /services/{id}/retry` is the way back."""
+
+    def too_slow() -> DockerClient:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr("triton_serve.builder.execute.get_builder_docker_client", too_slow)
+    build_image(unbuildable_image.image_hash)
+
+    test_db.expire_all()
+    row = test_db.get(ServiceImage, unbuildable_image.image_hash)
+    assert row.status is ImageStatus.FAILED
+    assert "exceeded" in row.build_log
+
+
+def test_the_build_task_caps_a_single_attempt(test_settings):
+    """The visibility timeout is only safe while one attempt cannot outlive `image_build_timeout`.
+
+    Nothing enforced that bound before: the setting caps a single docker-py read, not the build, so
+    a build still running past the window had its message handed to a second worker.
+    """
+    assert build_image.soft_time_limit == test_settings.image_build_timeout
+    assert build_image.time_limit > build_image.soft_time_limit
+
+
 @pytest.fixture
 def stale_rows(test_db, test_settings):
     """Rows aged past the reap threshold, one per case the sweep has to tell apart."""
-    old = timezone_aware_now() - timedelta(seconds=test_settings.image_build_stale_after + 60)
+    old = timezone_aware_now() - timedelta(seconds=test_settings.build_stale_after + 60)
 
     def _row(image_hash: str, status: ImageStatus, managed: bool, changed_at) -> ServiceImage:
         return ServiceImage(
@@ -238,3 +303,58 @@ def test_reap_leaves_everything_else_alone(test_db, stale_rows, image_hash, expe
     reap_stale_builds()
     test_db.expire_all()
     assert test_db.get(ServiceImage, image_hash).status is expected
+
+
+def _wait_until_blocked(db, timeout: float = 15.0) -> None:
+    """Waits until another backend is stuck on a lock, so the caller knows the race is really on.
+
+    A fixed sleep would let the sweep start after the commit instead, skip the READY row through its
+    own filter, and leave the test passing green without ever exercising the blocking path.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if db.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar_one():
+            return
+        time.sleep(0.05)
+    raise AssertionError("the sweep never blocked on the row lock, so the race was not exercised")
+
+
+def test_the_reaper_does_not_fail_a_build_that_finishes_during_the_sweep(test_db, test_settings):
+    """The sweep reads a row and writes it in two steps, and a build can commit READY in between.
+
+    Both sides take the row lock, so the sweep re-reads under it and finds the row already settled
+    rather than stamping FAILED over a finished build. Threads are what make the losing order
+    reachable: it needs two live connections, one of them blocked on the other.
+    """
+    old = timezone_aware_now() - timedelta(seconds=test_settings.build_stale_after + 60)
+    test_db.merge(
+        ServiceImage(
+            image_hash="reap-race",
+            image_ref="example.org/img:reap-race",
+            base_image="python:3.12-slim",
+            apt_packages=[],
+            pip_packages=[],
+            status=ImageStatus.BUILDING,
+            managed=True,
+            status_changed_at=old,
+        )
+    )
+    test_db.commit()
+
+    try:
+        with database_manager.session() as db:
+            building = db.get(ServiceImage, "reap-race", with_for_update=True)
+            sweep = threading.Thread(target=reap_stale_builds, daemon=True)
+            sweep.start()
+            _wait_until_blocked(db)
+            building.transition(ImageStatus.READY)
+            building.built_at = timezone_aware_now()
+            db.commit()
+        sweep.join(timeout=15)
+        assert not sweep.is_alive(), "the sweep never returned"
+
+        test_db.expire_all()
+        assert test_db.get(ServiceImage, "reap-race").status is ImageStatus.READY
+    finally:
+        test_db.query(ServiceImage).filter(ServiceImage.image_hash == "reap-race").delete()
+        test_db.commit()
