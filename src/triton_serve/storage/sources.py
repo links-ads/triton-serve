@@ -4,18 +4,19 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from triton_serve.storage import ModelSource
+from triton_serve.storage.base import ExtractedBundle, ModelSource
 from triton_serve.storage.extractors import ExtractorType, TarExtractor, ZipExtractor
+from triton_serve.storage.validation import parse_dependencies
 
 
 class ArchiveModelSource(ModelSource):
     """Model source that extracts models from an archive file."""
 
-    def __init__(self, package: UploadFile, target_dir: str | None = None):
+    def __init__(self, package: UploadFile, target_dir: str):
+        super().__init__(target_dir)
         self.package = package
         assert package.filename is not None, "Invalid package name"
         self.package_name: str = package.filename
-        self.target_dir = target_dir or "model_repository"
 
     def _get_extractor(self, filename: Path | str) -> type[ExtractorType]:
         """Checks the extension from the filename, returning the correct
@@ -41,7 +42,18 @@ class ArchiveModelSource(ModelSource):
     def origin(self) -> str:
         return self.package_name
 
-    def extract(self, path: Path):
+    def extract(self, path: Path) -> ExtractedBundle:
+        """Unpacks the archive and reads the bundle's manifest.
+
+        Args:
+            path (Path): Path where to unpack the archive.
+
+        Returns:
+            ExtractedBundle: The models directory and the bundle's declared dependencies.
+
+        Raises:
+            AssertionError: If the archive is not a valid bundle.
+        """
         assert self.package is not None, "Missing package"
         extractor = self._get_extractor(filename=self.package_name)
         temp_file = path / self.package_name
@@ -49,44 +61,55 @@ class ArchiveModelSource(ModelSource):
         with open(temp_file, mode="wb+") as buffer:
             shutil.copyfileobj(self.package.file, buffer)
 
-        # do a preliminary check on the archive, to see if it's empty
-        # or to see if it contains the expected structure
+        # the structure is checked on the member list, before anything is written to disk
         with extractor(temp_file) as archive:
-            filenames = {item for item in archive}
-            # check if the archive is not empty and contains the expected structure
-            assert len(filenames) > 0, "Empty archive"
-            assert all([item.startswith(self.target_dir) for item in filenames]), "Invalid archive structure"
+            members = {item for item in archive}
+            assert members, "Empty archive"
+            assert any(item.startswith(f"{self.target_dir}/") for item in members), (
+                f"Invalid archive structure: no {self.target_dir}/ directory"
+            )
+            assert "pyproject.toml" in members, "Invalid archive structure: missing pyproject.toml at the archive root"
             # extract everything: we validate its content later
             archive.extract(path)
 
         temp_file.unlink()
         self.package = None
-        return path / self.target_dir
+        return ExtractedBundle(
+            models=path / self.target_dir,
+            dependencies=parse_dependencies(path, self.target_dir),
+        )
 
 
 class RepositoryModelSource(ModelSource):
     """Model source that extracts models from a git repository."""
 
-    def __init__(self, url: str, target_dir: str | None = None):
+    def __init__(self, url: str, target_dir: str):
         # check that the URL is a valid git SSH URL
         assert url.startswith("git@"), "Invalid git URL, use SSH format (git@...)"
+        super().__init__(target_dir)
         self.url = url
-        self.target_dir = target_dir or "model_repository"
 
     def origin(self) -> str:
         return self.url
 
-    def extract(self, path: Path) -> Path:
-        """Clones the git repository and pulls LFS files.
+    def _fetch(self, path: Path) -> None:
+        subprocess.run(["git", "clone", self.url, str(path)], check=True)
+        subprocess.run(["git", "lfs", "pull"], cwd=path, check=True)
+        subprocess.run(["rm", "-rf", str(path / ".git")], check=True)
+
+    def extract(self, path: Path) -> ExtractedBundle:
+        """Clones the repository, pulls LFS files, and reads the bundle's manifest.
 
         Args:
             path (Path): Path where to clone the repository.
 
         Returns:
-            Path: Path to the extracted model repository.
+            ExtractedBundle: The models directory and the bundle's declared dependencies.
+
+        Raises:
+            AssertionError: If the clone is not a valid bundle.
         """
-        target_path = path / self.target_dir
-        subprocess.run(["git", "clone", self.url, str(path)], check=True)
-        subprocess.run(["git", "lfs", "pull"], cwd=path, check=True)
-        subprocess.run(["rm", "-rf", str(path / ".git")], check=True)
-        return target_path
+        self._fetch(path)
+        models = path / self.target_dir
+        assert models.is_dir(), f"Invalid repository structure: missing {self.target_dir}/ directory"
+        return ExtractedBundle(models=models, dependencies=parse_dependencies(path, self.target_dir))
