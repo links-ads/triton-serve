@@ -524,3 +524,55 @@ def test_transition_restamps_an_unchanged_status_when_asked():
 
     assert image.status is ImageStatus.PENDING
     assert image.status_changed_at > before
+
+
+def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_path, monkeypatch):
+    """A rename moves each version in turn; a failure partway must put back the ones already moved."""
+    from fastapi import HTTPException
+
+    from triton_serve.api.dto import ModelUpdateBody
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import LocalModelStorage
+
+    repository = tmp_path / "models"
+    root = repository / "rename_fail"
+    for version_id in (1, 2):
+        (root / str(version_id)).mkdir(parents=True)
+        (root / str(version_id) / "model.onnx").write_bytes(b"")
+    (root / "config.pbtxt").write_text('name: "rename_fail"\nplatform: "onnxruntime_onnx"\n')
+
+    model = Model(
+        model_name="rename_fail",
+        model_type=ModelType.ONNX,
+        source="bundle.zip",
+        dependencies=[],
+        system_dependencies=[],
+        versions=[ModelVersion(version_id=v, model_uri=str(root / str(v))) for v in (1, 2)],
+    )
+    test_db.add(model)
+    test_db.commit()
+
+    storage = LocalModelStorage(repository)
+    real_update = storage.update
+    calls = {"n": 0}
+
+    def failing_update(model, version, current_uri):
+        calls["n"] += 1
+        # the undo replays update a third time to move version 1 back: only version 2's forward move fails
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_update(model, version, current_uri=current_uri)
+
+    monkeypatch.setattr(storage, "update", failing_update)
+
+    try:
+        with pytest.raises(HTTPException):
+            domain.edit_model_info(db=test_db, storage=storage, model=model, updates=ModelUpdateBody(name="renamed"))
+        for version_id in (1, 2):
+            assert (root / str(version_id)).is_dir(), f"version {version_id} was not restored"
+        assert test_db.get(Model, model.model_id).model_name == "rename_fail"
+    finally:
+        test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+        test_db.delete(model)
+        test_db.commit()
