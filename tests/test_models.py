@@ -2,7 +2,6 @@ import io
 import logging
 import os
 from pathlib import Path
-from shutil import rmtree
 from typing import cast
 
 import pytest
@@ -120,19 +119,16 @@ def test_multi_model_bundle_updates_in_one_transaction(test_client, make_zip):
 
 @pytest.mark.order(after="test_create_models_from_zip_already_existing")
 def test_conflicting_bundle_registers_nothing(test_client, test_settings, make_zip):
-    """A bundle registers as one unit (#134).
+    """A bundle registers as one unit, on disk as well as in the database (#134, #136).
 
     `alpha_onnx` sorts first and is new, `onnx` is already registered: the conflict is raised only
-    after `alpha_onnx` has been staged, which is exactly the case that used to leave it committed.
+    after `alpha_onnx` has been staged, which is exactly the case that used to leave it on disk.
     """
-    try:
-        with make_zip(include_models=["alpha_onnx", "onnx"]) as package:
-            response = test_client.post("/models", files={"package": package})
-        assert response.status_code == 409, response.text
-        assert test_client.get("/models/alpha_onnx").status_code == 404
-    finally:
-        # storage is not part of the transaction, so the staged files outlive the rollback
-        rmtree(test_settings.repository_path / "alpha_onnx", ignore_errors=True)
+    with make_zip(include_models=["alpha_onnx", "onnx"]) as package:
+        response = test_client.post("/models", files={"package": package})
+    assert response.status_code == 409, response.text
+    assert test_client.get("/models/alpha_onnx").status_code == 404
+    assert not (test_settings.repository_path / "alpha_onnx").exists()
 
 
 @pytest.mark.order(after="test_create_models_from_zip")

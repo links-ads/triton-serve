@@ -1,6 +1,7 @@
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -103,6 +104,19 @@ def get_all_models(
     return statement.all()
 
 
+def _undo_saves(storage: ModelStorage, staged: list[tuple[Any, Any]]) -> None:
+    """Removes files written by `save` calls whose transaction did not commit.
+
+    Best-effort: a failure here is logged and skipped so the error that triggered the unwind is the
+    one that reaches the caller.
+    """
+    for model, version in reversed(staged):
+        try:
+            storage.delete(model, version)
+        except Exception:
+            LOG.warning("could not roll back storage for %s:%s", model.model_name, version.version_id, exc_info=True)
+
+
 def create_models_from_source(
     source: ModelSource,
     storage: ModelStorage,
@@ -112,10 +126,8 @@ def create_models_from_source(
     """
     Extracts models from a source archive and creates them in the database.
 
-    A bundle registers as one unit: the whole set commits once, at the end, so a model that fails
-    halfway through does not leave the ones before it registered. Storage is not part of that
-    transaction -- files already moved for the earlier models stay on disk, to be overwritten by
-    the next attempt at the same bundle.
+    A bundle registers as one unit: the whole set commits once, at the end, and a failure removes
+    the files staged before it, so a failed registration leaves neither rows nor files behind.
 
     Args:
         source (ModelSource): The source of the models to extract, either archive or git repository.
@@ -129,6 +141,7 @@ def create_models_from_source(
     Raises:
         HTTPException: If the file is invalid.
     """
+    staged: list[tuple[Any, Any]] = []
     try:
         models = []
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -166,6 +179,7 @@ def create_models_from_source(
                     for version in instance.versions:
                         version.model_id = old_model.model_id  # type: ignore
                         version.model_uri = str(storage.save(old_model, version, origin=bundle.models))  # type: ignore
+                        staged.append((old_model, version))
                         old_model.versions.append(ModelVersion(**version.model_dump()))
                     model = old_model
 
@@ -176,6 +190,7 @@ def create_models_from_source(
                     instance.source = instance.source or models_origin
                     for version in instance.versions:
                         version.model_uri = str(storage.save(instance, version, origin=bundle.models))  # type: ignore
+                        staged.append((instance, version))
                         model_versions.append(ModelVersion(**version.model_dump()))
 
                     model = Model(**{**instance.model_dump(), "versions": model_versions})
@@ -189,10 +204,13 @@ def create_models_from_source(
 
         return models
     except HTTPException:
-        # a conflict raised mid-loop must discard the models already staged before it
+        # a conflict raised mid-loop must discard the models already staged before it, on disk as
+        # well as in the database
+        _undo_saves(storage, staged)
         db.rollback()
         raise
     except (AssertionError, ValueError) as e:
+        _undo_saves(storage, staged)
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}") from e
 
