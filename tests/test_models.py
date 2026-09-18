@@ -36,6 +36,13 @@ def test_create_models_from_zip_wrong_content(test_client, make_zip, model):
     assert response.status_code == 422
 
 
+def test_zip_without_a_root_manifest_is_rejected(test_client, make_zip):
+    with make_zip(include_models=["onnx"], include_manifest=False) as package:
+        response = test_client.post("/models", files={"package": package})
+    assert response.status_code == 422
+    assert "pyproject.toml" in response.json()["detail"]
+
+
 @pytest.mark.order(after="test_get_models_empty")
 @pytest.mark.parametrize("model", ["ensemble", "ensemble_py_step", "onnx", "python"])
 def test_create_models_from_zip(test_client, test_settings, make_zip, model):
