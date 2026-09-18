@@ -2,7 +2,6 @@ import io
 import logging
 import os
 from pathlib import Path
-from shutil import rmtree
 from typing import cast
 
 import pytest
@@ -120,19 +119,16 @@ def test_multi_model_bundle_updates_in_one_transaction(test_client, make_zip):
 
 @pytest.mark.order(after="test_create_models_from_zip_already_existing")
 def test_conflicting_bundle_registers_nothing(test_client, test_settings, make_zip):
-    """A bundle registers as one unit (#134).
+    """A bundle registers as one unit, on disk as well as in the database (#134, #136).
 
     `alpha_onnx` sorts first and is new, `onnx` is already registered: the conflict is raised only
-    after `alpha_onnx` has been staged, which is exactly the case that used to leave it committed.
+    after `alpha_onnx` has been staged, which is exactly the case that used to leave it on disk.
     """
-    try:
-        with make_zip(include_models=["alpha_onnx", "onnx"]) as package:
-            response = test_client.post("/models", files={"package": package})
-        assert response.status_code == 409, response.text
-        assert test_client.get("/models/alpha_onnx").status_code == 404
-    finally:
-        # storage is not part of the transaction, so the staged files outlive the rollback
-        rmtree(test_settings.repository_path / "alpha_onnx", ignore_errors=True)
+    with make_zip(include_models=["alpha_onnx", "onnx"]) as package:
+        response = test_client.post("/models", files={"package": package})
+    assert response.status_code == 409, response.text
+    assert test_client.get("/models/alpha_onnx").status_code == 404
+    assert not (test_settings.repository_path / "alpha_onnx").exists()
 
 
 @pytest.mark.order(after="test_create_models_from_zip")
@@ -528,3 +524,113 @@ def test_transition_restamps_an_unchanged_status_when_asked():
 
     assert image.status is ImageStatus.PENDING
     assert image.status_changed_at > before
+
+
+def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_path, monkeypatch):
+    """A rename moves each version in turn; a failure partway must put back the ones already moved."""
+    from fastapi import HTTPException
+
+    from triton_serve.api.dto import ModelUpdateBody
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import LocalModelStorage
+
+    repository = tmp_path / "models"
+    root = repository / "rename_fail"
+    for version_id in (1, 2):
+        (root / str(version_id)).mkdir(parents=True)
+        (root / str(version_id) / "model.onnx").write_bytes(b"")
+    (root / "config.pbtxt").write_text('name: "rename_fail"\nplatform: "onnxruntime_onnx"\n')
+
+    model = Model(
+        model_name="rename_fail",
+        model_type=ModelType.ONNX,
+        source="bundle.zip",
+        dependencies=[],
+        system_dependencies=[],
+        versions=[ModelVersion(version_id=v, model_uri=str(root / str(v))) for v in (1, 2)],
+    )
+    test_db.add(model)
+    test_db.commit()
+
+    storage = LocalModelStorage(repository)
+    real_update = storage.update
+    calls = {"n": 0}
+
+    def failing_update(_model, version, current_uri):
+        calls["n"] += 1
+        # the undo replays update a third time to move version 1 back: only version 2's forward move fails
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_update(_model, version, current_uri=current_uri)
+
+    monkeypatch.setattr(storage, "update", failing_update)
+
+    try:
+        with pytest.raises(HTTPException):
+            domain.edit_model_info(db=test_db, storage=storage, model=model, updates=ModelUpdateBody(name="renamed"))
+        for version_id in (1, 2):
+            assert (root / str(version_id)).is_dir(), f"version {version_id} was not restored"
+        assert test_db.get(Model, model.model_id).model_name == "rename_fail"
+    finally:
+        test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+        test_db.delete(model)
+        test_db.commit()
+
+
+def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkeypatch):
+    """A bundle registers as one unit: an OSError from `storage.save` on the second model must undo
+    the first model's already-staged files, not just the database rows (#136)."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelVersion
+    from triton_serve.storage.local import LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    # model names unique to this test, so a bundle-wide registration never collides with the
+    # cumulative state the rest of the suite builds up ("undo_first" sorts before "undo_second")
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        for name in ("undo_first", "undo_second"):
+            f.writestr(f"model_repository/{name}/config.pbtxt", "")
+            f.writestr(f"model_repository/{name}/1/model.onnx", b"")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    repository = tmp_path / "models"
+    repository.mkdir()
+    storage = LocalModelStorage(repository)
+    real_save = storage.save
+    calls = {"n": 0}
+
+    def failing_save(model, version, origin):
+        calls["n"] += 1
+        # undo_first sorts first and saves cleanly; undo_second's save is the one that fails
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_save(model, version, origin=origin)
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(OSError):
+            domain.create_models_from_source(source=source, storage=storage, db=test_db, update=False)
+
+        assert not (repository / "undo_first").exists()
+        assert test_db.query(Model).filter(Model.model_name == "undo_first").first() is None
+    finally:
+        # the rollback in domain.create_models_from_source should already have discarded this, but
+        # the session is shared across tests, so clean up defensively rather than leak state
+        if leftover := test_db.query(Model).filter(Model.model_name == "undo_first").first():
+            test_db.query(ModelVersion).filter(ModelVersion.model_id == leftover.model_id).delete()
+            test_db.delete(leftover)
+            test_db.commit()
