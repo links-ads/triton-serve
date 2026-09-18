@@ -384,7 +384,7 @@ def test_legacy_requirements_inside_models_dir_is_rejected():
 
 
 def test_root_requirements_txt_beside_a_manifest_is_ignored():
-    """The example repo keeps one to drive main.py; it describes the local env, not the service."""
+    """A bundle may carry one for its own local tooling; it describes the local env, not the service."""
     assert parse_dependencies(DATA / "bundle_pyproject", "model_repository").pip == [
         "numpy==1.26.4",
         "pillow==10.0.0",
