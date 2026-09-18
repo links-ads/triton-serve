@@ -120,30 +120,34 @@ def _validated(dependencies: BundleDependencies) -> BundleDependencies:
     return dependencies
 
 
-def parse_dependencies(bundle_path: Path) -> BundleDependencies:
-    """Reads a bundle's dependency manifest.
+def parse_dependencies(bundle_path: Path, models_dirname: str) -> BundleDependencies:
+    """Reads a bundle's root dependency manifest.
 
-    `pyproject.toml` is the only accepted manifest. A bundle carrying just a `requirements.txt` is
-    rejected here rather than resolved to no dependencies: that would upload fine, build a clean
-    image, and only fail at inference on a missing import.
+    `pyproject.toml` at the bundle root is the only manifest. `[project.dependencies]` is what the
+    image bakes in; a dev group is the packager's local tooling and never reaches it.
 
     Args:
         bundle_path (Path): The root of the extracted bundle.
+        models_dirname (str): The name of the models directory inside the bundle.
 
     Returns:
-        BundleDependencies: The pip and system dependency lists, empty when there is no manifest.
+        BundleDependencies: The pip and system dependency lists.
 
     Raises:
-        AssertionError: If the manifest is malformed, its lock does not export, a package is
-            invalid, its requires-python excludes the runtime python, or the bundle declares its
-            dependencies in an unsupported manifest.
+        AssertionError: If the manifest is missing or malformed, its lock does not export, a package
+            is invalid, its requires-python excludes the runtime python, or the models directory
+            still carries a legacy `requirements.txt`.
     """
-    if (manifest := bundle_path / "pyproject.toml").is_file():
-        return _validated(_parse_pyproject(manifest))
-    assert not (bundle_path / "requirements.txt").is_file(), (
-        "requirements.txt is not a supported manifest: declare dependencies in pyproject.toml"
+    manifest = bundle_path / "pyproject.toml"
+    assert manifest.is_file(), (
+        f"missing pyproject.toml: a bundle is a directory containing {models_dirname}/ and pyproject.toml"
     )
-    return BundleDependencies()
+    legacy = bundle_path / models_dirname / "requirements.txt"
+    assert not legacy.is_file(), (
+        f"{models_dirname}/requirements.txt is no longer read: move its contents into "
+        "[project.dependencies] in the root pyproject.toml"
+    )
+    return _validated(_parse_pyproject(manifest))
 
 
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
@@ -178,7 +182,7 @@ def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
             raise AssertionError(f"{model_name}: unable to determine model type from files")
 
 
-def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
+def validate_models(repository_path: Path, dependencies: BundleDependencies) -> list[ModelCreateSchema]:
     """Validates the content of the given path to ensure it's compliant with
     a Triton model repository:
     - Each subdirectory must be a model
@@ -189,6 +193,7 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
 
     Args:
         repository_path (Path): path to the repository
+        dependencies (BundleDependencies): The bundle's declared dependencies, stamped onto every model.
 
     Returns:
         list[ModelCreateSchema]: list of validated models
@@ -197,8 +202,6 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
     #  list all directories in the repository, sorted so a bundle always registers in the same order
     model_dirs = sorted((d for d in repository_path.iterdir() if d.is_dir()), key=lambda d: d.name)
     assert model_dirs, "Empty repository"
-
-    dependencies = parse_dependencies(repository_path)
 
     for model_dir in model_dirs:
         model_name = model_dir.name
