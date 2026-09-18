@@ -557,12 +557,12 @@ def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_
     real_update = storage.update
     calls = {"n": 0}
 
-    def failing_update(model, version, current_uri):
+    def failing_update(_model, version, current_uri):
         calls["n"] += 1
         # the undo replays update a third time to move version 1 back: only version 2's forward move fails
         if calls["n"] == 2:
             raise OSError("disk went away")
-        return real_update(model, version, current_uri=current_uri)
+        return real_update(_model, version, current_uri=current_uri)
 
     monkeypatch.setattr(storage, "update", failing_update)
 
@@ -576,3 +576,61 @@ def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_
         test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
         test_db.delete(model)
         test_db.commit()
+
+
+def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkeypatch):
+    """A bundle registers as one unit: an OSError from `storage.save` on the second model must undo
+    the first model's already-staged files, not just the database rows (#136)."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelVersion
+    from triton_serve.storage.local import LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    # model names unique to this test, so a bundle-wide registration never collides with the
+    # cumulative state the rest of the suite builds up ("undo_first" sorts before "undo_second")
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        for name in ("undo_first", "undo_second"):
+            f.writestr(f"model_repository/{name}/config.pbtxt", "")
+            f.writestr(f"model_repository/{name}/1/model.onnx", b"")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    repository = tmp_path / "models"
+    repository.mkdir()
+    storage = LocalModelStorage(repository)
+    real_save = storage.save
+    calls = {"n": 0}
+
+    def failing_save(model, version, origin):
+        calls["n"] += 1
+        # undo_first sorts first and saves cleanly; undo_second's save is the one that fails
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_save(model, version, origin=origin)
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(OSError):
+            domain.create_models_from_source(source=source, storage=storage, db=test_db, update=False)
+
+        assert not (repository / "undo_first").exists()
+        assert test_db.query(Model).filter(Model.model_name == "undo_first").first() is None
+    finally:
+        # the rollback in domain.create_models_from_source should already have discarded this, but
+        # the session is shared across tests, so clean up defensively rather than leak state
+        if leftover := test_db.query(Model).filter(Model.model_name == "undo_first").first():
+            test_db.query(ModelVersion).filter(ModelVersion.model_id == leftover.model_id).delete()
+            test_db.delete(leftover)
+            test_db.commit()

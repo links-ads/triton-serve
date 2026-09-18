@@ -215,6 +215,10 @@ def create_models_from_source(
         _undo_saves(storage, staged)
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}") from e
+    except Exception:
+        _undo_saves(storage, staged)
+        db.rollback()
+        raise
 
 
 def _undo_updates(
