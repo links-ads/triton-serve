@@ -128,6 +128,7 @@ def make_zip() -> Callable:
         exclude_models: list[str] | None = None,
         include_files: list[str] | None = None,
         exclude_files: list[str] | None = None,
+        include_manifest: bool = True,
     ):
         """Utility function to create a zip file with the given models/files.
 
@@ -137,6 +138,7 @@ def make_zip() -> Callable:
             exclude_models (list[str], optional): list of models to exclude. Defaults to None.
             include_files (list[str], optional): list of files to include. Defaults to None.
             exclude_files (list[str], optional): list of files to exclude. Defaults to None.
+            include_manifest (bool, optional): whether to add a root pyproject.toml. Defaults to True.
         """
         archive = io.BytesIO()
         archive.name = archive_name
@@ -159,6 +161,12 @@ def make_zip() -> Callable:
                         model_files = [f for f in model_files if f.name not in exclude_files]
                     for model_file in model_files:
                         f.write(model_file, arcname=model_file.relative_to(data_dir))
+                if include_manifest:
+                    f.writestr(
+                        "pyproject.toml",
+                        '[project]\nname = "test-bundle"\nversion = "0.1.0"\n'
+                        'requires-python = ">=3.10"\ndependencies = []\n',
+                    )
             archive.seek(0)
             yield archive
         finally:

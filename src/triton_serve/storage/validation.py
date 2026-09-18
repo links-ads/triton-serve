@@ -58,24 +58,6 @@ def parse_version_policy(config_file: Path) -> dict:
     return policy
 
 
-def parse_requirements(requirements_file: Path) -> list[str]:
-    """Parse requirements.txt file into a list of requirements.
-
-    Args:
-        requirements_file (Path): path to the requirements file
-
-    Returns:
-        list[str]: list containing the requirements as strings.
-    """
-    dependencies = []
-    if requirements_file.exists() and requirements_file.is_file():
-        for line in requirements_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                dependencies.append(line)
-    return dependencies
-
-
 # the python a built image actually runs: the tritonserver base images ship 3.10
 RUNTIME_PYTHON = Version("3.10")
 
@@ -95,13 +77,14 @@ def _export_locked(bundle_path: Path) -> list[str] | None:
     if not (bundle_path / "uv.lock").is_file():
         return None
     result = subprocess.run(
-        ["uv", "export", "--frozen", "--no-hashes", "--no-emit-project", "--format", "requirements-txt"],
+        ["uv", "export", "--frozen", "--no-hashes", "--no-emit-project", "--no-dev", "--format", "requirements-txt"],
         cwd=bundle_path,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, f"uv.lock is present but does not export: {result.stderr.strip()}"
-    return [line.strip() for line in result.stdout.splitlines() if line.strip() and not line.startswith("#")]
+    lines = (line.strip() for line in result.stdout.splitlines())
+    return [line for line in lines if line and not line.startswith("#")]
 
 
 def _parse_pyproject(manifest: Path) -> BundleDependencies:
@@ -137,26 +120,34 @@ def _validated(dependencies: BundleDependencies) -> BundleDependencies:
     return dependencies
 
 
-def parse_dependencies(bundle_path: Path) -> BundleDependencies:
-    """Reads a bundle's dependency manifest.
+def parse_dependencies(bundle_path: Path, models_dirname: str) -> BundleDependencies:
+    """Reads a bundle's root dependency manifest.
 
-    `pyproject.toml` is preferred and `requirements.txt` remains supported so existing bundles keep
-    working untouched. Both normalize to the same shape here, so nothing downstream knows which
-    format a bundle used.
+    `pyproject.toml` at the bundle root is the only manifest. `[project.dependencies]` is what the
+    image bakes in; a dev group is the packager's local tooling and never reaches it.
 
     Args:
         bundle_path (Path): The root of the extracted bundle.
+        models_dirname (str): The name of the models directory inside the bundle.
 
     Returns:
-        BundleDependencies: The pip and system dependency lists, empty when there is no manifest.
+        BundleDependencies: The pip and system dependency lists.
 
     Raises:
-        AssertionError: If the manifest is malformed, its lock does not export, a package is
-            invalid, or its requires-python excludes the runtime python.
+        AssertionError: If the manifest is missing or malformed, its lock does not export, a package
+            is invalid, its requires-python excludes the runtime python, or the models directory
+            still carries a legacy `requirements.txt`.
     """
-    if (manifest := bundle_path / "pyproject.toml").is_file():
-        return _validated(_parse_pyproject(manifest))
-    return _validated(BundleDependencies(pip=parse_requirements(bundle_path / "requirements.txt")))
+    manifest = bundle_path / "pyproject.toml"
+    assert manifest.is_file(), (
+        f"missing pyproject.toml: a bundle is a directory containing {models_dirname}/ and pyproject.toml"
+    )
+    legacy = bundle_path / models_dirname / "requirements.txt"
+    assert not legacy.is_file(), (
+        f"{models_dirname}/requirements.txt is no longer read: move its contents into "
+        "[project.dependencies] in the root pyproject.toml"
+    )
+    return _validated(_parse_pyproject(manifest))
 
 
 def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
@@ -191,7 +182,7 @@ def infer_model_type(model_name: str, files: list[Path]) -> ModelType:
             raise AssertionError(f"{model_name}: unable to determine model type from files")
 
 
-def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
+def validate_models(repository_path: Path, dependencies: BundleDependencies) -> list[ModelCreateSchema]:
     """Validates the content of the given path to ensure it's compliant with
     a Triton model repository:
     - Each subdirectory must be a model
@@ -202,6 +193,7 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
 
     Args:
         repository_path (Path): path to the repository
+        dependencies (BundleDependencies): The bundle's declared dependencies, stamped onto every model.
 
     Returns:
         list[ModelCreateSchema]: list of validated models
@@ -210,8 +202,6 @@ def validate_models(repository_path: Path) -> list[ModelCreateSchema]:
     #  list all directories in the repository, sorted so a bundle always registers in the same order
     model_dirs = sorted((d for d in repository_path.iterdir() if d.is_dir()), key=lambda d: d.name)
     assert model_dirs, "Empty repository"
-
-    dependencies = parse_dependencies(repository_path)
 
     for model_dir in model_dirs:
         model_name = model_dir.name

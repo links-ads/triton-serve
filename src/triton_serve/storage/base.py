@@ -1,10 +1,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from tarfile import TarFile
 from zipfile import ZipFile
 
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
+from triton_serve.storage.validation import BundleDependencies
 
 
 class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
@@ -44,8 +46,19 @@ class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
             self.archive.extractall(path)
 
 
+@dataclass(frozen=True)
+class ExtractedBundle:
+    """What a source hands back: where the models are, and what the bundle declared."""
+
+    models: Path
+    dependencies: BundleDependencies
+
+
 class ModelSource(ABC):
     """Generic class to represent a source of models."""
+
+    def __init__(self, target_dir: str):
+        self.target_dir = target_dir
 
     @abstractmethod
     def origin(self) -> str:
@@ -57,11 +70,11 @@ class ModelSource(ABC):
         ...
 
     @abstractmethod
-    def extract(self, path: Path) -> Path:
-        """Extracts the models from the source.
+    def extract(self, path: Path) -> ExtractedBundle:
+        """Extracts the bundle from the source.
 
         Returns:
-            Path: local path to the folder with the extracted models.
+            ExtractedBundle: The models directory and the bundle's declared dependencies.
         """
         ...
 

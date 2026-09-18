@@ -133,8 +133,8 @@ def create_models_from_source(
         models = []
         with tempfile.TemporaryDirectory() as tmp_dir:
             models_origin = source.origin()
-            tmp_repository = source.extract(path=Path(tmp_dir))
-            validated_models: list[ModelCreateSchema] = validate_models(tmp_repository)
+            bundle = source.extract(path=Path(tmp_dir))
+            validated_models: list[ModelCreateSchema] = validate_models(bundle.models, bundle.dependencies)
             # store the models in the database
             for instance in validated_models:
                 # verify the model is not already in the database
@@ -165,7 +165,7 @@ def create_models_from_source(
                     # ... then update its versions
                     for version in instance.versions:
                         version.model_id = old_model.model_id  # type: ignore
-                        version.model_uri = str(storage.save(old_model, version, origin=tmp_repository))  # type: ignore
+                        version.model_uri = str(storage.save(old_model, version, origin=bundle.models))  # type: ignore
                         old_model.versions.append(ModelVersion(**version.model_dump()))
                     model = old_model
 
@@ -175,7 +175,7 @@ def create_models_from_source(
                     model_versions = []
                     instance.source = instance.source or models_origin
                     for version in instance.versions:
-                        version.model_uri = str(storage.save(instance, version, origin=tmp_repository))  # type: ignore
+                        version.model_uri = str(storage.save(instance, version, origin=bundle.models))  # type: ignore
                         model_versions.append(ModelVersion(**version.model_dump()))
 
                     model = Model(**{**instance.model_dump(), "versions": model_versions})

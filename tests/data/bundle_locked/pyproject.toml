@@ -1,0 +1,8 @@
+[project]
+name = "bundle-locked"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["runtime-dep==1.0.0"]
+
+[dependency-groups]
+dev = ["dev-dep==2.0.0"]

@@ -17,7 +17,7 @@ from triton_serve.api.models.domain import get_single_model
 from triton_serve.api.services.observe import effective_image_ref
 from triton_serve.builder.execute import enqueue_build
 from triton_serve.builder.registry import RegistryAuth, auth_config
-from triton_serve.builder.resolve import pip_dependencies, resolve_service_image
+from triton_serve.builder.resolve import resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
@@ -317,7 +317,6 @@ def spawn_service_container(
     worker_network: str,
     worker_volume: str,
     models: list[Model],
-    worker_requirements: str,
     resources: ServiceCreateResources,
     devices: list | None = None,
     environment: dict[str, str] | None = None,
@@ -332,8 +331,6 @@ def spawn_service_container(
         worker_network (str): The name of the docker network to use.
         worker_volume (str): The path to the model repository, or a volume name.
         models (list[Model]): The list of models to load.
-        worker_requirements (str): Dependencies for the entrypoint to install at boot. Empty for a
-            managed image, whose dependencies are already baked in.
         resources (ServiceCreateResources): The resources to use for the container.
         devices (list, optional): The list of devices to use. Defaults to None.
         environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
@@ -350,7 +347,6 @@ def spawn_service_container(
         raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
 
     environment = environment or {}
-    environment["WORKER_REQUIREMENTS"] = worker_requirements
 
     # prepare the list of models to load
     triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
@@ -647,17 +643,6 @@ def update_active_time(db: Session, service: Service):
     db.commit()
 
 
-def _boot_requirements(service: Service) -> str:
-    """Dependencies the entrypoint must still install at boot.
-
-    Empty for a managed image: its dependencies are baked in, and re-installing them at boot would
-    defeat the point of building it. Backfilled, unmanaged images keep today's behaviour.
-    """
-    if service.image is not None and service.image.managed:
-        return ""
-    return " ".join(pip_dependencies(service))
-
-
 def recreate_service_container(
     db: Session,
     client: DockerClient,
@@ -703,7 +688,6 @@ def recreate_service_container(
             worker_network=service_network,
             worker_volume=service_models_volume,
             models=service.models,
-            worker_requirements=_boot_requirements(service),
             resources=ServiceCreateResources(
                 gpus=0.0,
                 shm_size=res.shm_size,

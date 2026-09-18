@@ -1,0 +1,32 @@
+version = 1
+revision = 2
+requires-python = ">=3.10"
+
+[[package]]
+name = "bundle-locked"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "runtime-dep" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "dev-dep" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "runtime-dep", specifier = "==1.0.0" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "dev-dep", specifier = "==2.0.0" }]
+
+[[package]]
+name = "dev-dep"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "runtime-dep"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }

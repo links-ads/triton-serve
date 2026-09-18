@@ -36,6 +36,13 @@ def test_create_models_from_zip_wrong_content(test_client, make_zip, model):
     assert response.status_code == 422
 
 
+def test_zip_without_a_root_manifest_is_rejected(test_client, make_zip):
+    with make_zip(include_models=["onnx"], include_manifest=False) as package:
+        response = test_client.post("/models", files={"package": package})
+    assert response.status_code == 422
+    assert "pyproject.toml" in response.json()["detail"]
+
+
 @pytest.mark.order(after="test_get_models_empty")
 @pytest.mark.parametrize("model", ["ensemble", "ensemble_py_step", "onnx", "python"])
 def test_create_models_from_zip(test_client, test_settings, make_zip, model):
@@ -344,52 +351,64 @@ def test_delete_model_not_in_use(name, test_client, test_settings):
 
 
 def test_pyproject_supplies_pip_and_system_dependencies():
-    deps = parse_dependencies(DATA / "bundle_pyproject")
+    deps = parse_dependencies(DATA / "bundle_pyproject", "model_repository")
     assert deps.pip == ["numpy==1.26.4", "pillow==10.0.0"]
     assert deps.system == ["libgl1", "libglib2.0-0"]
 
 
 def test_unknown_tool_serve_keys_are_ignored():
     # `runtime` belongs to issue #130; a bundle carrying it must still parse here
-    assert parse_dependencies(DATA / "bundle_pyproject").system == ["libgl1", "libglib2.0-0"]
+    assert parse_dependencies(DATA / "bundle_pyproject", "model_repository").system == ["libgl1", "libglib2.0-0"]
 
 
-def test_requirements_txt_is_still_read_when_no_pyproject():
-    deps = parse_dependencies(DATA / "bundle_requirements")
-    assert deps.pip == ["numpy==1.26.4"]
-    assert deps.system == []
+def test_lock_export_drops_annotation_comments():
+    """uv annotates each exported line with an indented `# via ...`, which is not a requirement."""
+    assert all(not dep.startswith("#") for dep in parse_dependencies(DATA / "bundle_locked", "model_repository").pip)
 
 
-def test_pyproject_wins_over_requirements_txt(tmp_path: Path):
-    (tmp_path / "requirements.txt").write_text("legacy==1.0.0\n")
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "b"\nversion = "0.1.0"\ndependencies = ["modern==2.0.0"]\n'
-    )
-    assert parse_dependencies(tmp_path).pip == ["modern==2.0.0"]
+def test_lock_export_excludes_dev_dependencies():
+    """Dev groups exist for the packager testing locally; baking them into the image is dead weight."""
+    assert parse_dependencies(DATA / "bundle_locked", "model_repository").pip == ["runtime-dep==1.0.0"]
 
 
-def test_missing_manifest_is_no_dependencies(tmp_path: Path):
-    deps = parse_dependencies(tmp_path)
-    assert deps.pip == []
-    assert deps.system == []
+def test_bundle_without_pyproject_is_rejected():
+    """A bundle that declares nothing and a bundle whose manifest is missing must not look alike."""
+    with pytest.raises(AssertionError, match=r"missing pyproject\.toml"):
+        parse_dependencies(DATA / "bundle_requirements", "model_repository")
+
+
+def test_legacy_requirements_inside_models_dir_is_rejected():
+    """Silently ignoring it would drop the service-side dependencies of every migrating bundle."""
+    with pytest.raises(AssertionError, match=r"model_repository/requirements\.txt"):
+        parse_dependencies(DATA / "bundle_legacy", "model_repository")
+
+
+def test_root_requirements_txt_beside_a_manifest_is_ignored():
+    """A bundle may carry one for its own local tooling; it describes the local env, not the service."""
+    assert parse_dependencies(DATA / "bundle_pyproject", "model_repository").pip == [
+        "numpy==1.26.4",
+        "pillow==10.0.0",
+    ]
 
 
 def test_incompatible_requires_python_is_rejected():
     with pytest.raises(AssertionError, match="requires-python"):
-        parse_dependencies(DATA / "bundle_bad_python")
+        parse_dependencies(DATA / "bundle_bad_python", "model_repository")
 
 
 def test_malformed_pyproject_is_rejected(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project\nname =")
     with pytest.raises(AssertionError, match=r"pyproject\.toml"):
-        parse_dependencies(tmp_path)
+        parse_dependencies(tmp_path, "model_repository")
 
 
 def test_unparseable_requirement_is_rejected_at_upload(tmp_path: Path):
     """Rejecting it here is what keeps a bad bundle from being committed and failing at service create."""
-    (tmp_path / "requirements.txt").write_text("--extra-index-url http://attacker.example\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "b"\nversion = "0.1.0"\ndependencies = ["--extra-index-url http://attacker.example"]\n'
+    )
     with pytest.raises(AssertionError, match="requirement"):
-        parse_dependencies(tmp_path)
+        parse_dependencies(tmp_path, "model_repository")
 
 
 def test_invalid_system_package_is_rejected_at_upload(tmp_path: Path):
@@ -397,7 +416,7 @@ def test_invalid_system_package_is_rejected_at_upload(tmp_path: Path):
         '[project]\nname = "b"\nversion = "0.1.0"\n[tool.serve]\nsystem-packages = ["libgl1; rm -rf /"]\n'
     )
     with pytest.raises(AssertionError, match="apt package"):
-        parse_dependencies(tmp_path)
+        parse_dependencies(tmp_path, "model_repository")
 
 
 def test_changed_dependencies_repoint_affected_services(test_client, test_db, test_settings, monkeypatch):
