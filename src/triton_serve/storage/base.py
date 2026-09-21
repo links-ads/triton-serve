@@ -3,10 +3,28 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from tarfile import TarFile
+from typing import Protocol
 from zipfile import ZipFile
 
-from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 from triton_serve.storage.validation import BundleDependencies
+
+type StorageURI = str
+
+
+class ModelStorageError(Exception):
+    """A bundle does not hold what it declared, so a backend cannot store it."""
+
+
+class StorableModel(Protocol):
+    """All a backend needs of a model: the name its files are filed under."""
+
+    model_name: str
+
+
+class StorableVersion(Protocol):
+    """All a backend needs of a version: the number its files are filed under."""
+
+    version_id: int
 
 
 class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
@@ -80,63 +98,114 @@ class ModelSource(ABC):
 
 
 class ModelStorage(ABC):
-    """Where model files live. Placing them is the whole job.
+    """Where a model's files live, and how they are moved aside when a new version lands.
 
-    Triton reads the model repository straight off a shared volume, so nothing here ever hands
-    model bytes to a caller -- a storage backend only has to put files where Triton will find them.
+    Nothing here hands model bytes back to a caller: a backend only has to put files where the
+    workers will find them, which may be a shared volume or an object store. Locations are
+    therefore URIs, not paths.
+
+    Every implementation raises the same exception for the same condition, so no call site needs to
+    know which backend it holds: `ModelStorageError` for a bundle missing the version it declared,
+    `FileNotFoundError` for an absent source, `FileExistsError` for an occupied destination.
     """
 
-    def __init__(self, base_path: Path) -> None:
-        self.base_path: Path = base_path
-
-    def location(self, model: ModelSchema, version: ModelVersionSchema) -> Path:
-        """Constructs the absolute path to the package, starting from the base path
-        and using both the artifact's name and the artifact's version.
-
-        Args:
-            model (ModelSchema): the model to locate
-            version (ModelVersionSchema): model version
-
-        Returns:
-            Path: absolute path to the package
-        """
-        return self.base_path / model.model_name / str(version.version_id)
-
     @abstractmethod
-    def save(self, model: ModelSchema, version: ModelVersionSchema, origin: Path) -> Path:
-        """Required to store the given data into the storage implementation (locally, blob storage, etc.).
+    def location(self, model: StorableModel, version: StorableVersion) -> StorageURI:
+        """Returns the URI a model version's files live at.
 
         Args:
-            model (ModelSchema): the model being stored.
-            version (ModelVersionSchema): model version.
-            origin (Path): local path to the model root.
+            model (StorableModel): the model to locate.
+            version (StorableVersion): the version to locate.
 
         Returns:
-            Path: path to the model root.
+            StorageURI: where that version's files are, whether or not they exist yet.
         """
         ...
 
     @abstractmethod
-    def update(self, model: ModelSchema, version: ModelVersionSchema, current_uri: Path) -> Path:
-        """Required to update a given URI and move files around.
-        Generates a new URI for the updated model.
+    def save(self, model: StorableModel, version: StorableVersion, origin: Path) -> StorageURI:
+        """Stores one version of a model, taking its files from a locally extracted bundle.
 
         Args:
-            model (ModelSchema): current model name and version.
-            version (ModelVersionSchema): current model version.
-            current_uri (Path): old path to the model root, to be updated.
+            model (StorableModel): the model being stored.
+            version (StorableVersion): the version being stored.
+            origin (Path): local path to the extracted bundle's repository directory.
 
         Returns:
-            Path: updated local or remote path to the model.
+            StorageURI: where the version now lives.
+
+        Raises:
+            ModelStorageError: if the bundle holds no such version, or no config for the model.
         """
         ...
 
     @abstractmethod
-    def delete(self, model: ModelSchema, version: ModelVersionSchema) -> None:
-        """Deletes the given model.
+    def delete(self, model: StorableModel, version: StorableVersion) -> None:
+        """Deletes one version, and the model itself once no version is left.
 
         Args:
-            model (ModelSchema): model name and version.
-            version (ModelVersionSchema): model version.
+            model (StorableModel): the model to delete from.
+            version (StorableVersion): the version to delete.
+
+        Raises:
+            FileNotFoundError: if the version has no files.
+        """
+        ...
+
+    @abstractmethod
+    def rename(self, model: StorableModel, new_name: str) -> None:
+        """Moves every file of a model from its current name to `new_name`.
+
+        `model` still carries the old name when this is called; the caller renames the record only
+        once this returns.
+
+        Args:
+            model (StorableModel): the model to move, under its current name.
+            new_name (str): the name to move it to.
+
+        Raises:
+            FileNotFoundError: if the model has no files.
+            FileExistsError: if `new_name` is already occupied.
+        """
+        ...
+
+    @abstractmethod
+    def stash(self, model: StorableModel) -> StorageURI:
+        """Moves a model's files aside, out of the way of replacements about to be written.
+
+        The stash lives under a reserved location the workers never load as a model.
+
+        Args:
+            model (StorableModel): the model whose files are moved aside.
+
+        Returns:
+            StorageURI: a handle to pass to `restore` or `discard`.
+
+        Raises:
+            FileNotFoundError: if the model has no files.
+            FileExistsError: if a stash is already outstanding for this model, which means a
+                previous transaction died and those files may be the only copy.
+        """
+        ...
+
+    @abstractmethod
+    def restore(self, model: StorableModel, stashed: StorageURI) -> None:
+        """Puts a stash back, replacing anything a failed attempt left at the model's location.
+
+        Args:
+            model (StorableModel): the model to restore.
+            stashed (StorageURI): the handle `stash` returned.
+
+        Raises:
+            FileNotFoundError: if the stash is gone.
+        """
+        ...
+
+    @abstractmethod
+    def discard(self, stashed: StorageURI) -> None:
+        """Drops a stash whose transaction committed. Quiet if it is already gone.
+
+        Args:
+            stashed (StorageURI): the handle `stash` returned.
         """
         ...

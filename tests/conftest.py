@@ -10,11 +10,14 @@ import docker
 import pytest
 import python_multipart
 import urllib3
+from fastapi import UploadFile
 from httpx import Client
 
 from triton_serve.builder.spec import BuildSpec, make_build_spec
 from triton_serve.config import get_settings
 from triton_serve.database import database_manager
+from triton_serve.storage.local import LocalModelStorage
+from triton_serve.storage.sources import ArchiveModelSource
 
 logging.getLogger(python_multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -35,6 +38,13 @@ def build_spec() -> Callable[..., BuildSpec]:
         return make_build_spec(**{"base_image": BASE_IMAGE, "apt_packages": [], "pip_packages": [], **kwargs})
 
     return _spec
+
+
+@pytest.fixture
+def storage(tmp_path: Path) -> LocalModelStorage:
+    repository = tmp_path / "models"
+    repository.mkdir()
+    return LocalModelStorage(repository)
 
 
 @pytest.fixture(scope="session")
@@ -117,6 +127,27 @@ def test_docker():
             LOG.info(f"Container {container.name} removed.")
     finally:
         client.close()
+
+
+@pytest.fixture
+def bundle_source() -> Callable[..., ArchiveModelSource]:
+    """Builds a registrable bundle in memory, so a test spells out only what it is about."""
+
+    def _source(models: dict[str, bytes], archive_name: str = ARCHIVE_NAME) -> ArchiveModelSource:
+        archive = io.BytesIO()
+        with ZipFile(archive, "w") as f:
+            for name, payload in models.items():
+                f.writestr(f"model_repository/{name}/config.pbtxt", "")
+                f.writestr(f"model_repository/{name}/1/model.onnx", payload)
+            f.writestr(
+                "pyproject.toml",
+                '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+            )
+        archive.seek(0)
+        upload = UploadFile(file=archive, filename=archive_name)
+        return ArchiveModelSource(upload, target_dir="model_repository")
+
+    return _source
 
 
 @pytest.fixture(scope="session")
