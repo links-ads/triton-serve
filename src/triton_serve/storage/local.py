@@ -82,3 +82,9 @@ class LocalModelStorage(ModelStorage):
     def discard(self, stashed: StorageURI) -> None:
         with suppress(FileNotFoundError):
             rmtree(stashed, ignore_errors=False)
+
+    def exists(self, uri: StorageURI) -> bool:
+        return Path(uri).exists()
+
+    def read(self, uri: StorageURI) -> bytes:
+        return Path(uri).read_bytes()

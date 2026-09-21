@@ -38,6 +38,16 @@ services:
   redis:
     container_name: serve-redis_test
 
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    container_name: serve-azurite_test
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--skipApiVersionCheck"]
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # Same image as the backend, but with a different command
   # Runs the tests inside the container, calling the backend
   tester:
@@ -50,10 +60,15 @@ services:
       - .env
     environment:
       - RUN_MIGRATIONS=false  # assume backend runs them
+      - AZURITE_ACCOUNT=devstoreaccount1
+      - AZURITE_KEY=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
+      - AZURITE_ENDPOINT=http://azurite:10000/devstoreaccount1
     depends_on:
       database:
         condition: service_healthy
       traefik:
+        condition: service_healthy
+      azurite:
         condition: service_healthy
     container_name: serve-tester_test
     command: test

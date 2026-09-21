@@ -1,9 +1,12 @@
+import hashlib
 import io
 import logging
 import os
+import re
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import TYPE_CHECKING
 from zipfile import ZipFile
 
 import docker
@@ -18,6 +21,9 @@ from triton_serve.config import get_settings
 from triton_serve.database import database_manager
 from triton_serve.storage.local import LocalModelStorage
 from triton_serve.storage.sources import ArchiveModelSource
+
+if TYPE_CHECKING:
+    from triton_serve.storage.azure import AzureModelStorage
 
 logging.getLogger(python_multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -40,11 +46,53 @@ def build_spec() -> Callable[..., BuildSpec]:
     return _spec
 
 
-@pytest.fixture
-def storage(tmp_path: Path) -> LocalModelStorage:
-    repository = tmp_path / "models"
-    repository.mkdir()
-    return LocalModelStorage(repository)
+AZURITE = os.getenv("AZURITE_ENDPOINT", "")
+
+
+def _sanitize_container_name(name: str, prefix: str = "") -> str:
+    """Maps a pytest node id to a legal, unique Azure container name.
+
+    Truncating the collapsed name alone can collide (two parameterised cases sharing a long
+    common prefix), so a short digest of the full name is appended to keep every case distinct.
+    """
+    collapsed = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    digest = hashlib.blake2s(name.encode(), digest_size=3).hexdigest()
+    budget = 63 - len(prefix) - len(digest) - 1
+    body = collapsed[:budget].strip("-")
+    return f"{prefix}{body}-{digest}"
+
+
+def _azure_storage(request: pytest.FixtureRequest) -> AzureModelStorage:
+    from azure.core.exceptions import ResourceExistsError
+    from azure.storage.blob import BlobServiceClient
+
+    from triton_serve.storage.azure import AzureModelStorage
+
+    # one container per test, so the session-scoped suite cannot leak state between cases
+    container = _sanitize_container_name(request.node.name, prefix="conf-")
+    storage = AzureModelStorage(
+        account=os.environ["AZURITE_ACCOUNT"],
+        container=container,
+        credential=os.environ["AZURITE_KEY"],
+        endpoint=AZURITE,
+    )
+    client: BlobServiceClient = storage.client
+    # self-healing: a previous run that died before its finalizer ran would otherwise poison this one
+    with suppress(ResourceExistsError):
+        client.create_container(container)
+    request.addfinalizer(lambda: client.delete_container(container))
+    return storage
+
+
+@pytest.fixture(params=["local", "azure"])
+def storage(request: pytest.FixtureRequest, tmp_path: Path) -> LocalModelStorage | AzureModelStorage:
+    if request.param == "local":
+        repository = tmp_path / "models"
+        repository.mkdir()
+        return LocalModelStorage(repository)
+    if not AZURITE:
+        pytest.skip("AZURITE_ENDPOINT is not set; Azurite is only up under `make test`")
+    return _azure_storage(request)
 
 
 @pytest.fixture(scope="session")

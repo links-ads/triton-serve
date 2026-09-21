@@ -129,7 +129,9 @@ class ModelStorage(ABC):
         Args:
             model (StorableModel): the model being stored.
             version (StorableVersion): the version being stored.
-            origin (Path): local path to the extracted bundle's repository directory.
+            origin (Path): local path to the extracted bundle's repository directory. The version
+                subtree it stores, and the model's config, are consumed by this call; the origin may
+                be reused for other versions of the same bundle.
 
         Returns:
             StorageURI: where the version now lives.

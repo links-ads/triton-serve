@@ -58,7 +58,7 @@ RUN echo "Building production branch"
 
 FROM base AS branch-test
 RUN echo "Building testing branch"
-RUN uv sync --group test
+RUN uv sync --group test --extra azure
 COPY tests/ tests/
 
 FROM branch-${TARGET}
