@@ -5,6 +5,7 @@ import pytest
 from triton_serve.database.model import ModelType
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
 from triton_serve.storage import ModelStorageError
+from triton_serve.storage.local import LocalModelStorage
 
 
 def make_model(name: str) -> ModelSchema:
@@ -141,3 +142,39 @@ def test_discard_of_an_already_gone_stash_is_quiet(storage, tmp_path):
     stashed = storage.stash(model)
     storage.discard(stashed)
     storage.discard(stashed)
+
+
+def test_the_local_backend_mounts_the_repository(tmp_path):
+    repository = tmp_path / "models"
+    repository.mkdir()
+    wiring = LocalModelStorage(repository, volume="serve-test_models").worker_repository()
+
+    assert wiring.uri == "/models"
+    assert wiring.mounts == {"serve-test_models": {"bind": "/models", "mode": "ro"}}
+    assert wiring.environment == {"WORKER_REPOSITORY": "/models"}
+
+
+def test_the_azure_backend_mounts_nothing_and_carries_its_credentials():
+    pytest.importorskip("azure.storage.blob")
+    from triton_serve.storage.azure import AzureModelStorage
+
+    wiring = AzureModelStorage(
+        account="adsmodelrepository", container="model-repository", credential="deadbeef"
+    ).worker_repository()
+
+    assert wiring.uri == "as://adsmodelrepository/model-repository"
+    assert wiring.mounts == {}
+    assert wiring.environment["WORKER_REPOSITORY"] == wiring.uri
+    assert wiring.environment["AZURE_STORAGE_KEY"] == "deadbeef"
+
+
+def test_storage_wiring_wins_over_a_user_supplied_environment():
+    """A service creator must not be able to repoint a worker at a repository of their choosing."""
+    from triton_serve.api.services.domain import merge_environment
+
+    merged = merge_environment(
+        {"WORKER_REPOSITORY": "/somewhere/else", "MY_FLAG": "1"},
+        {"WORKER_REPOSITORY": "/models"},
+    )
+
+    assert merged == {"MY_FLAG": "1", "WORKER_REPOSITORY": "/models"}

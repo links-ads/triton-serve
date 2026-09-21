@@ -20,7 +20,7 @@ def get_storage() -> ModelStorage:
     """
     settings = get_settings()
     if settings.storage_type == StorageType.local:
-        return LocalModelStorage(settings.repository_path)
+        return LocalModelStorage(settings.repository_path, volume=settings.service_volume)
     # imported here so a local deployment never needs the azure extra installed
     from triton_serve.storage.azure import AzureModelStorage
 

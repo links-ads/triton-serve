@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from triton_serve.api.services.domain import get_container_by_name, recreate_service_container
 from triton_serve.api.services.reconcile import Action, Decision
 from triton_serve.builder.registry import pull_auth
+from triton_serve.config import get_storage
 from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import RuntimeStatus, Service, timezone_aware_now
 
@@ -14,7 +15,7 @@ LOG = logging.getLogger(__name__)
 
 def _recreate(db: Session, client: DockerClient, service: Service, settings: AppSettings) -> None:
     recreate_service_container(
-        db, client, service, settings.service_network, settings.service_volume, pull_auth(settings)
+        db, client, service, settings.service_network, get_storage().worker_repository(), pull_auth(settings)
     )
 
 

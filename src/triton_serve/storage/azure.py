@@ -16,6 +16,7 @@ from triton_serve.storage.base import (
     StorableModel,
     StorableVersion,
     StorageURI,
+    WorkerRepository,
 )
 
 LOG = logging.getLogger("uvicorn")
@@ -193,6 +194,18 @@ class AzureModelStorage(ModelStorage):
 
     def read(self, uri: StorageURI) -> bytes:
         return self._container.download_blob(self._relative(uri)).readall()
+
+    def worker_repository(self) -> WorkerRepository:
+        uri = f"as://{self.account}/{self.container}/{self.prefix}".rstrip("/")
+        return WorkerRepository(
+            uri=uri,
+            mounts={},
+            environment={
+                "WORKER_REPOSITORY": uri,
+                "AZURE_STORAGE_ACCOUNT": self.account,
+                "AZURE_STORAGE_KEY": self._credential,
+            },
+        )
 
     def _relative(self, uri: StorageURI) -> str:
         return uri.removeprefix(f"as://{self.account}/{self.container}/")

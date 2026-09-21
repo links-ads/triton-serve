@@ -2,7 +2,14 @@ from contextlib import suppress
 from pathlib import Path
 from shutil import move, rmtree
 
-from triton_serve.storage.base import ModelStorage, ModelStorageError, StorableModel, StorableVersion, StorageURI
+from triton_serve.storage.base import (
+    ModelStorage,
+    ModelStorageError,
+    StorableModel,
+    StorableVersion,
+    StorageURI,
+    WorkerRepository,
+)
 
 STASH_DIRNAME = ".stash"
 
@@ -16,8 +23,10 @@ class LocalModelStorage(ModelStorage):
     model-control mode, where only the names it is told to load are looked at.
     """
 
-    def __init__(self, base_path: Path) -> None:
+    def __init__(self, base_path: Path, volume: str = "", mountpoint: str = "/models") -> None:
         self.base_path = base_path
+        self.volume = volume
+        self.mountpoint = mountpoint
 
     def _model_root(self, model_name: str) -> Path:
         return self.base_path / model_name
@@ -82,6 +91,14 @@ class LocalModelStorage(ModelStorage):
     def discard(self, stashed: StorageURI) -> None:
         with suppress(FileNotFoundError):
             rmtree(stashed, ignore_errors=False)
+
+    def worker_repository(self) -> WorkerRepository:
+        mount = {self.volume: {"bind": self.mountpoint, "mode": "ro"}} if self.volume else {}
+        return WorkerRepository(
+            uri=self.mountpoint,
+            mounts=mount,
+            environment={"WORKER_REPOSITORY": self.mountpoint},
+        )
 
     def exists(self, uri: StorageURI) -> bool:
         return Path(uri).exists()

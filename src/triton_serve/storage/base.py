@@ -72,6 +72,19 @@ class ExtractedBundle:
     dependencies: BundleDependencies
 
 
+@dataclass(frozen=True)
+class WorkerRepository:
+    """How a worker container reaches the model repository.
+
+    The storage backend owns this because only it knows whether the repository is a volume to mount
+    or a URI to read over the network.
+    """
+
+    uri: str
+    mounts: dict[str, dict[str, str]]
+    environment: dict[str, str]
+
+
 class ModelSource(ABC):
     """Generic class to represent a source of models."""
 
@@ -209,5 +222,15 @@ class ModelStorage(ABC):
 
         Args:
             stashed (StorageURI): the handle `stash` returned.
+        """
+        ...
+
+    @abstractmethod
+    def worker_repository(self) -> WorkerRepository:
+        """Returns the mounts and environment a worker needs to read this repository.
+
+        Returns:
+            WorkerRepository: the repository URI, the volumes to mount, and the environment that
+                points the worker at it.
         """
         ...
