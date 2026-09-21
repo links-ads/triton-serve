@@ -12,7 +12,7 @@ from triton_serve.builder.resolve import resolve_service_image, services_using_m
 from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import Model, ModelVersion, timezone_aware_now
 from triton_serve.database.schema import ModelCreateSchema
-from triton_serve.storage import ModelSource, ModelStorage
+from triton_serve.storage import ModelSource, ModelStorage, StorageURI
 from triton_serve.storage.validation import validate_models
 
 LOG = logging.getLogger("uvicorn")
@@ -117,6 +117,19 @@ def _undo_saves(storage: ModelStorage, staged: list[tuple[Any, Any]]) -> None:
             LOG.warning("could not roll back storage for %s:%s", model.model_name, version.version_id, exc_info=True)
 
 
+def _restore_stashes(storage: ModelStorage, stashes: list[tuple[Model, StorageURI]]) -> None:
+    """Puts back the files stashed for models whose update did not commit.
+
+    Runs after `_undo_saves`: restoring replaces whatever the failed attempt left at the model's
+    location, and the two must not race for it. Best-effort, as with `_undo_saves`.
+    """
+    for model, stashed in reversed(stashes):
+        try:
+            storage.restore(model, stashed)
+        except Exception:
+            LOG.error("could not restore stashed files for %s from %s", model.model_name, stashed, exc_info=True)
+
+
 def create_models_from_source(
     source: ModelSource,
     storage: ModelStorage,
@@ -127,9 +140,8 @@ def create_models_from_source(
     Extracts models from a source archive and creates them in the database.
 
     A bundle registers as one unit: the whole set commits once, at the end, and a failure removes
-    the files this registration staged. On the `update=True` path, though, a model's previous
-    versions are deleted from storage before the replacements are staged, and that deletion has no
-    inverse, so a failure after it cannot bring those versions back.
+    the files this registration staged. On the `update=True` path a model's existing files are
+    moved aside before the replacements are staged, and put back if the bundle does not commit.
 
     Args:
         source (ModelSource): The source of the models to extract, either archive or git repository.
@@ -144,6 +156,8 @@ def create_models_from_source(
         HTTPException: If the file is invalid.
     """
     staged: list[tuple[Any, Any]] = []
+    stashes: list[tuple[Model, StorageURI]] = []
+    committed = False
     try:
         models = []
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -172,15 +186,24 @@ def create_models_from_source(
                     old_model.system_dependencies = instance.system_dependencies  # type: ignore
                     old_model.version_policy = instance.version_policy  # type: ignore
                     old_model.updated_at = timezone_aware_now()
-                    # clean up the versions
+                    # clean up the versions, holding the old files aside until this bundle commits
+                    try:
+                        stashes.append((old_model, storage.stash(old_model)))
+                    except FileExistsError as e:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Cannot update '{instance.model_name}': a previous update did not complete and its "
+                                f"stashed files may be the only copy. Recover them before updating again. {e}"
+                            ),
+                        ) from e
                     for version in old_model.versions:
-                        storage.delete(old_model, version)
                         db.delete(version)
                     old_model.versions = []
                     # ... then update its versions
                     for version in instance.versions:
                         version.model_id = old_model.model_id  # type: ignore
-                        version.model_uri = str(storage.save(old_model, version, origin=bundle.models))  # type: ignore
+                        version.model_uri = storage.save(old_model, version, origin=bundle.models)
                         staged.append((old_model, version))
                         old_model.versions.append(ModelVersion(**version.model_dump()))
                     model = old_model
@@ -191,7 +214,7 @@ def create_models_from_source(
                     model_versions = []
                     instance.source = instance.source or models_origin
                     for version in instance.versions:
-                        version.model_uri = str(storage.save(instance, version, origin=bundle.models))  # type: ignore
+                        version.model_uri = storage.save(instance, version, origin=bundle.models)
                         staged.append((instance, version))
                         model_versions.append(ModelVersion(**version.model_dump()))
 
@@ -201,43 +224,48 @@ def create_models_from_source(
                 models.append(model)
 
             db.commit()
+            committed = True
             for model in models:
                 db.refresh(model)
+            for _, stashed in stashes:
+                try:
+                    storage.discard(stashed)
+                except Exception:
+                    LOG.warning("could not discard stashed files at %s", stashed, exc_info=True)
 
         return models
     except HTTPException:
-        # a conflict raised mid-loop must discard the models already staged before it, on disk as
-        # well as in the database
-        _undo_saves(storage, staged)
+        # a conflict raised mid-loop must undo the staged and stashed files for models already
+        # touched before it, on disk as well as in the database. past the commit the files are the
+        # committed state, and unwinding them would revert an update the database already accepted
+        if not committed:
+            _undo_saves(storage, staged)
+            _restore_stashes(storage, stashes)
         db.rollback()
         raise
     except (AssertionError, ValueError) as e:
-        _undo_saves(storage, staged)
+        if not committed:
+            _undo_saves(storage, staged)
+            _restore_stashes(storage, stashes)
         db.rollback()
         raise HTTPException(status_code=422, detail=f"Cannot register model(s): {e}") from e
     except Exception:
-        _undo_saves(storage, staged)
+        if not committed:
+            _undo_saves(storage, staged)
+            _restore_stashes(storage, stashes)
         db.rollback()
         raise
 
 
-def _undo_updates(
-    storage: ModelStorage, model: Model, original_name: str, moved: list[tuple[ModelVersion, str]]
-) -> None:
-    """Moves relocated versions back under the model's original name.
-
-    The name is restored first because `storage.update` derives the destination from it. Best-effort,
-    for the same reason as `_undo_saves`.
-    """
+def _undo_rename(storage: ModelStorage, model: Model, original_name: str, renamed: bool) -> None:
+    """Moves a model back under its original name. Best-effort, for the same reason as `_undo_saves`."""
+    if not renamed:
+        return
+    try:
+        storage.rename(model, original_name)
+    except Exception:
+        LOG.warning("could not restore %s to %s", model.model_name, original_name, exc_info=True)
     model.model_name = original_name
-    for version, previous_uri in reversed(moved):
-        try:
-            storage.update(model, version, current_uri=Path(version.model_uri))
-            version.model_uri = previous_uri
-        except Exception:
-            LOG.warning(
-                "could not restore %s:%s to %s", original_name, version.version_id, previous_uri, exc_info=True
-            )
 
 
 def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: ModelUpdateBody) -> Model:
@@ -258,26 +286,26 @@ def edit_model_info(db: Session, storage: ModelStorage, model: Model, updates: M
         Model: The updated model.
     """
     original_name = model.model_name
-    moved: list[tuple[ModelVersion, str]] = []
+    renamed = False
     try:
         updated_name = updates.name or model.model_name
         # check if the updated model exists
         assert get_single_model(db=db, model_name=updated_name) is None, f"Model '{updated_name}' already exists"
-        # update the model
-        model.model_name = updated_name
+        if updated_name != original_name:
+            storage.rename(model, updated_name)
+            renamed = True
+            model.model_name = updated_name
+            for version in model.versions:
+                version.model_uri = storage.location(model, version)
         model.source = updates.source or model.source
         model.updated_at = timezone_aware_now()
-        for version in model.versions:
-            previous_uri = version.model_uri
-            version.model_uri = str(storage.update(model, version, current_uri=Path(previous_uri)))
-            moved.append((version, previous_uri))
         db.commit()
         db.refresh(model)
         return model
     except AssertionError as e:
         raise HTTPException(status_code=409, detail=f"Cannot update model: {e}") from e
     except Exception as e:
-        _undo_updates(storage, model, original_name, moved)
+        _undo_rename(storage, model, original_name, renamed)
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Cannot update model: {e}") from e
 

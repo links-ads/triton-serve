@@ -141,13 +141,13 @@ def test_create_models_from_repo_wrong_url(test_client):
 @pytest.mark.order(after="test_create_models_from_zip")
 def test_create_models_from_repo(test_client, test_settings, test_repository):
     repository_root = test_settings.repository_path
-    model_dirs = {d for d in repository_root.iterdir() if d.is_dir()}
+    model_dirs = {d for d in repository_root.iterdir() if d.is_dir() and not d.name.startswith(".")}
 
     response = test_client.post("/models/repository", params={"repository_url": test_repository})
     LOG.debug(f"Response: {response.text}")
     assert response.status_code == 201
 
-    updated_model_dirs = {d for d in repository_root.iterdir() if d.is_dir()}
+    updated_model_dirs = {d for d in repository_root.iterdir() if d.is_dir() and not d.name.startswith(".")}
     diff = updated_model_dirs - model_dirs
     assert len(diff) > 0
 
@@ -526,8 +526,8 @@ def test_transition_restamps_an_unchanged_status_when_asked():
     assert image.status_changed_at > before
 
 
-def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_path, monkeypatch):
-    """A rename moves each version in turn; a failure partway must put back the ones already moved."""
+def test_a_failed_rename_leaves_the_model_at_its_original_name(test_db, tmp_path, monkeypatch):
+    """The rename itself succeeds and the failure lands after it: the unwind has to move it back."""
     from fastapi import HTTPException
 
     from triton_serve.api.dto import ModelUpdateBody
@@ -554,23 +554,19 @@ def test_a_failed_rename_leaves_every_version_at_its_original_path(test_db, tmp_
     test_db.commit()
 
     storage = LocalModelStorage(repository)
-    real_update = storage.update
-    calls = {"n": 0}
 
-    def failing_update(_model, version, current_uri):
-        calls["n"] += 1
-        # the undo replays update a third time to move version 1 back: only version 2's forward move fails
-        if calls["n"] == 2:
-            raise OSError("disk went away")
-        return real_update(_model, version, current_uri=current_uri)
+    def failing_location(_model, _version):
+        raise OSError("disk went away")
 
-    monkeypatch.setattr(storage, "update", failing_update)
+    # `rename` computes its own paths, so the undo still works with this patched out
+    monkeypatch.setattr(storage, "location", failing_location)
 
     try:
         with pytest.raises(HTTPException):
             domain.edit_model_info(db=test_db, storage=storage, model=model, updates=ModelUpdateBody(name="renamed"))
         for version_id in (1, 2):
             assert (root / str(version_id)).is_dir(), f"version {version_id} was not restored"
+        assert not (repository / "renamed").exists(), "the failed rename left a directory behind"
         assert test_db.get(Model, model.model_id).model_name == "rename_fail"
     finally:
         test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
@@ -634,3 +630,280 @@ def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkey
             test_db.query(ModelVersion).filter(ModelVersion.model_id == leftover.model_id).delete()
             test_db.delete(leftover)
             test_db.commit()
+
+
+def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp_path, monkeypatch):
+    """The #150 case: the update path clears a model's old versions before staging replacements, so
+    a failure later in the bundle used to lose them outright."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    repository = tmp_path / "models"
+    repository.mkdir()
+    names = ("stash_first", "stash_second")
+    for name in names:
+        version_dir = repository / name / "1"
+        version_dir.mkdir(parents=True)
+        (version_dir / "model.onnx").write_bytes(b"old")
+        (repository / name / "config.pbtxt").write_text("")
+
+    # the update path refuses a bundle whose origin differs from the registered source
+    models = [
+        Model(
+            model_name=name,
+            model_type=ModelType.ONNX,
+            source="repository.zip",
+            dependencies=[],
+            system_dependencies=[],
+            versions=[ModelVersion(version_id=1, model_uri=str(repository / name / "1"))],
+        )
+        for name in names
+    ]
+    test_db.add_all(models)
+    test_db.commit()
+
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        for name in names:
+            f.writestr(f"model_repository/{name}/config.pbtxt", "")
+            f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    storage = LocalModelStorage(repository)
+    real_save = storage.save
+    calls = {"n": 0}
+
+    def failing_save(model, version, origin):
+        calls["n"] += 1
+        # stash_first sorts first and saves cleanly; stash_second's save is the one that fails
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_save(model, version, origin=origin)
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(OSError):
+            domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
+
+        for name in names:
+            restored = repository / name / "1" / "model.onnx"
+            assert restored.exists(), f"{name} lost its existing version"
+            assert restored.read_bytes() == b"old", f"{name} kept the replacement instead of its own files"
+        assert not any((repository / STASH_DIRNAME).iterdir()), "a stash was left outstanding"
+    finally:
+        for model in models:
+            test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+            test_db.delete(model)
+        test_db.commit()
+
+
+def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, tmp_path, monkeypatch):
+    """The narrowest #150 window: the stash has already moved the model's files away and nothing
+    has been written in their place, so the restore holds the only copy of them."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import HTTPException, UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    name = "stashwindow_model"
+    repository = tmp_path / "models"
+    version_dir = repository / name / "1"
+    version_dir.mkdir(parents=True)
+    (version_dir / "model.onnx").write_bytes(b"old")
+    (repository / name / "config.pbtxt").write_text(f'name: "{name}"\nplatform: "onnxruntime_onnx"\n')
+
+    model = Model(
+        model_name=name,
+        model_type=ModelType.ONNX,
+        source="repository.zip",
+        dependencies=[],
+        system_dependencies=[],
+        versions=[ModelVersion(version_id=1, model_uri=str(version_dir))],
+    )
+    test_db.add(model)
+    test_db.commit()
+
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        f.writestr(f"model_repository/{name}/config.pbtxt", "")
+        f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    storage = LocalModelStorage(repository)
+
+    def failing_save(model, version, origin):
+        raise AssertionError(f"Missing config file in {model.model_name}")
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(HTTPException) as failure:
+            domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
+
+        assert failure.value.status_code == 422
+        assert (repository / name / "1" / "model.onnx").read_bytes() == b"old"
+        assert (repository / name / "config.pbtxt").read_text().startswith(f'name: "{name}"')
+        assert not any((repository / STASH_DIRNAME).iterdir()), "a stash was left outstanding"
+    finally:
+        test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+        test_db.delete(model)
+        test_db.commit()
+
+
+def test_an_outstanding_stash_refuses_the_update_with_a_conflict(test_db, tmp_path):
+    """A stash left behind by a process that died mid-update means the model's files may only exist
+    there: the update must say so instead of failing opaquely."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import HTTPException, UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    name = "stashleak_model"
+    repository = tmp_path / "models"
+    version_dir = repository / name / "1"
+    version_dir.mkdir(parents=True)
+    (version_dir / "model.onnx").write_bytes(b"current")
+    (repository / name / "config.pbtxt").write_text(f'name: "{name}"\nplatform: "onnxruntime_onnx"\n')
+
+    leaked = repository / STASH_DIRNAME / name
+    (leaked / "1").mkdir(parents=True)
+    (leaked / "1" / "model.onnx").write_bytes(b"orphaned")
+
+    model = Model(
+        model_name=name,
+        model_type=ModelType.ONNX,
+        source="repository.zip",
+        dependencies=[],
+        system_dependencies=[],
+        versions=[ModelVersion(version_id=1, model_uri=str(version_dir))],
+    )
+    test_db.add(model)
+    test_db.commit()
+
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        f.writestr(f"model_repository/{name}/config.pbtxt", "")
+        f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(HTTPException) as failure:
+            domain.create_models_from_source(
+                source=source, storage=LocalModelStorage(repository), db=test_db, update=True
+            )
+
+        assert failure.value.status_code == 409
+        assert str(leaked) in failure.value.detail
+        assert (leaked / "1" / "model.onnx").read_bytes() == b"orphaned", "the orphaned stash was touched"
+    finally:
+        test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+        test_db.delete(model)
+        test_db.commit()
+
+
+def test_a_failed_mixed_bundle_restores_the_update_and_leaves_no_new_model(test_db, tmp_path, monkeypatch):
+    """A bundle may update one model and register another: a failure on the new one must both
+    restore the updated model's files and leave nothing behind for the new one."""
+    import io
+    from zipfile import ZipFile
+
+    from fastapi import UploadFile
+
+    from triton_serve.api.models import domain
+    from triton_serve.database.model import Model, ModelType, ModelVersion
+    from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
+    from triton_serve.storage.sources import ArchiveModelSource
+
+    # validate_models sorts model directories by name, so "mixa_existing" is processed first
+    existing, fresh = "mixa_existing", "mixb_new"
+    repository = tmp_path / "models"
+    version_dir = repository / existing / "1"
+    version_dir.mkdir(parents=True)
+    (version_dir / "model.onnx").write_bytes(b"old")
+    (repository / existing / "config.pbtxt").write_text(f'name: "{existing}"\nplatform: "onnxruntime_onnx"\n')
+
+    model = Model(
+        model_name=existing,
+        model_type=ModelType.ONNX,
+        source="repository.zip",
+        dependencies=[],
+        system_dependencies=[],
+        versions=[ModelVersion(version_id=1, model_uri=str(version_dir))],
+    )
+    test_db.add(model)
+    test_db.commit()
+
+    archive = io.BytesIO()
+    with ZipFile(archive, "w") as f:
+        for name in (existing, fresh):
+            f.writestr(f"model_repository/{name}/config.pbtxt", "")
+            f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
+        f.writestr(
+            "pyproject.toml",
+            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
+        )
+    archive.seek(0)
+
+    storage = LocalModelStorage(repository)
+    real_save = storage.save
+    calls = {"n": 0}
+
+    def failing_save(model, version, origin):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        return real_save(model, version, origin=origin)
+
+    monkeypatch.setattr(storage, "save", failing_save)
+
+    try:
+        upload = UploadFile(file=archive, filename="repository.zip")
+        source = ArchiveModelSource(upload, target_dir="model_repository")
+        with pytest.raises(OSError):
+            domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
+
+        assert (repository / existing / "1" / "model.onnx").read_bytes() == b"old"
+        assert (repository / existing / "config.pbtxt").read_text().startswith(f'name: "{existing}"')
+        assert not (repository / fresh).exists(), "the new model left files behind"
+        assert test_db.query(Model).filter(Model.model_name == fresh).first() is None
+        assert not any((repository / STASH_DIRNAME).iterdir()), "a stash was left outstanding"
+    finally:
+        test_db.query(ModelVersion).filter(ModelVersion.model_id == model.model_id).delete()
+        test_db.delete(model)
+        test_db.commit()

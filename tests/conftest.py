@@ -15,6 +15,7 @@ from httpx import Client
 from triton_serve.builder.spec import BuildSpec, make_build_spec
 from triton_serve.config import get_settings
 from triton_serve.database import database_manager
+from triton_serve.storage.local import LocalModelStorage
 
 logging.getLogger(python_multipart.__name__).setLevel(logging.WARNING)
 logging.getLogger(docker.__name__).setLevel(logging.WARNING)
@@ -35,6 +36,13 @@ def build_spec() -> Callable[..., BuildSpec]:
         return make_build_spec(**{"base_image": BASE_IMAGE, "apt_packages": [], "pip_packages": [], **kwargs})
 
     return _spec
+
+
+@pytest.fixture
+def storage(tmp_path: Path) -> LocalModelStorage:
+    repository = tmp_path / "models"
+    repository.mkdir()
+    return LocalModelStorage(repository)
 
 
 @pytest.fixture(scope="session")
