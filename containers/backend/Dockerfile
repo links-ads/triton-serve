@@ -51,7 +51,7 @@ RUN chmod +x /docker-entrypoint.sh
 # Stage 3: Add additional dependencies for development, production and testing
 FROM base AS branch-dev
 RUN echo "Building development branch"
-RUN uv sync --group dev
+RUN uv sync --group dev --extra azure
 
 FROM base AS branch-prod
 RUN echo "Building production branch"
