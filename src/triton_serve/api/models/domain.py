@@ -12,7 +12,7 @@ from triton_serve.builder.resolve import resolve_service_image, services_using_m
 from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import Model, ModelVersion, timezone_aware_now
 from triton_serve.database.schema import ModelCreateSchema
-from triton_serve.storage import ModelSource, ModelStorage, StorageURI
+from triton_serve.storage import ModelSource, ModelStorage, ModelStorageError, StorageURI
 from triton_serve.storage.validation import validate_models
 
 LOG = logging.getLogger("uvicorn")
@@ -243,7 +243,7 @@ def create_models_from_source(
             _restore_stashes(storage, stashes)
         db.rollback()
         raise
-    except (AssertionError, ValueError) as e:
+    except (AssertionError, ModelStorageError, ValueError) as e:
         if not committed:
             _undo_saves(storage, staged)
             _restore_stashes(storage, stashes)

@@ -2,7 +2,7 @@ from contextlib import suppress
 from pathlib import Path
 from shutil import move, rmtree
 
-from triton_serve.storage.base import ModelStorage, StorableModel, StorableVersion, StorageURI
+from triton_serve.storage.base import ModelStorage, ModelStorageError, StorableModel, StorableVersion, StorageURI
 
 STASH_DIRNAME = ".stash"
 
@@ -33,12 +33,13 @@ class LocalModelStorage(ModelStorage):
         model_root.mkdir(parents=True, exist_ok=True)
         config_tmp = origin / model.model_name / "config.pbtxt"
         version_tmp = origin / model.model_name / str(version.version_id)
-        assert version_tmp.exists(), f"Version {model.model_name}:{version.version_id} does not exist"
+        if not version_tmp.exists():
+            raise ModelStorageError(f"Version {model.model_name}:{version.version_id} does not exist")
         # a bundle that omits the config only registers against a model that already has one
         if config_tmp.exists():
             move(config_tmp, dst=model_root / "config.pbtxt")
-        else:
-            assert (model_root / "config.pbtxt").exists(), f"Missing config file in {model.model_name}"
+        elif not (model_root / "config.pbtxt").exists():
+            raise ModelStorageError(f"Missing config file in {model.model_name}")
         move(version_tmp, dst=model_root)
         return self.location(model, version)
 

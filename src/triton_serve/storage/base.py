@@ -11,6 +11,10 @@ from triton_serve.storage.validation import BundleDependencies
 type StorageURI = str
 
 
+class ModelStorageError(Exception):
+    """A bundle does not hold what it declared, so a backend cannot store it."""
+
+
 class StorableModel(Protocol):
     """All a backend needs of a model: the name its files are filed under."""
 
@@ -101,7 +105,7 @@ class ModelStorage(ABC):
     therefore URIs, not paths.
 
     Every implementation raises the same exception for the same condition, so no call site needs to
-    know which backend it holds: `AssertionError` for a bundle missing the version it declared,
+    know which backend it holds: `ModelStorageError` for a bundle missing the version it declared,
     `FileNotFoundError` for an absent source, `FileExistsError` for an occupied destination.
     """
 
@@ -131,7 +135,7 @@ class ModelStorage(ABC):
             StorageURI: where the version now lives.
 
         Raises:
-            AssertionError: if the bundle holds no such version, or no config for the model.
+            ModelStorageError: if the bundle holds no such version, or no config for the model.
         """
         ...
 

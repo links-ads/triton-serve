@@ -4,6 +4,7 @@ import pytest
 
 from triton_serve.database.model import ModelType
 from triton_serve.database.schema import ModelSchema, ModelVersionSchema
+from triton_serve.storage import ModelStorageError
 
 
 def make_model(name: str) -> ModelSchema:
@@ -40,7 +41,7 @@ def test_a_second_version_joins_the_same_model(storage, tmp_path):
 
 def test_save_without_a_version_is_rejected(storage, tmp_path):
     origin = make_origin(tmp_path, "conf_missing", 1)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ModelStorageError):
         storage.save(make_model("conf_missing"), make_version(7), origin=origin)
 
 
