@@ -30,6 +30,11 @@ dependencies = [
     "uvicorn[standard]>=0.41.0",
 ]
 
+[project.optional-dependencies]
+azure = [
+    "azure-storage-blob>=12.23.0",
+]
+
 [dependency-groups]
 dev = ["gitchangelog>=3.0.4", "pyright>=1.1.408", "ruff>=0.5.5"]
 docs = ["mkdocs-material>=9.2.0", "mdx-include>=1.4.0"]

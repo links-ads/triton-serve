@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 # copy source, alembic dirs, pyproject.toml and other files
 COPY . ./
-RUN uv sync --locked
+RUN uv sync --locked --extra azure
 
 # copy the entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh

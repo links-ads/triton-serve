@@ -38,6 +38,15 @@ class AppSettings(BaseSettings):
     configs_path: Path = Path("/var/serve/configs")
     storage_type: StorageType = StorageType.local
 
+    # azure blob storage; only read when storage_type is azure
+    azure_storage_account: str = ""
+    azure_storage_container: str = "model-repository"
+    azure_storage_prefix: str = ""
+    azure_stash_prefix: str = ".stash"
+    azure_storage_key: SecretStr = SecretStr("")
+    azure_storage_endpoint: str = ""  # overrides the public endpoint; set to reach Azurite
+    azure_auth_type: str = "key"
+
     service_default_image: str = "ghcr.io/links-ads/serve-triton:23.07-py3"
     service_network: str = "triton-serve_default"
     service_volume: str = "triton-serve_models"
@@ -129,4 +138,14 @@ class AppSettings(BaseSettings):
                 "broker's visibility timeout has to stay above the build's hard limit, or the "
                 "message is redelivered while the first attempt is still running"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_azure_settings(self) -> AppSettings:
+        if self.storage_type != StorageType.azure:
+            return self
+        if not self.azure_storage_account:
+            raise ValueError("azure_storage_account is required when storage_type is azure")
+        if not self.azure_storage_key.get_secret_value():
+            raise ValueError("azure_storage_key is required when storage_type is azure")
         return self
