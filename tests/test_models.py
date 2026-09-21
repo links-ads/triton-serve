@@ -574,31 +574,16 @@ def test_a_failed_rename_leaves_the_model_at_its_original_name(test_db, tmp_path
         test_db.commit()
 
 
-def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkeypatch):
+def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkeypatch, bundle_source):
     """A bundle registers as one unit: an OSError from `storage.save` on the second model must undo
     the first model's already-staged files, not just the database rows (#136)."""
-    import io
-    from zipfile import ZipFile
-
-    from fastapi import UploadFile
-
     from triton_serve.api.models import domain
     from triton_serve.database.model import Model, ModelVersion
     from triton_serve.storage.local import LocalModelStorage
-    from triton_serve.storage.sources import ArchiveModelSource
 
     # model names unique to this test, so a bundle-wide registration never collides with the
     # cumulative state the rest of the suite builds up ("undo_first" sorts before "undo_second")
-    archive = io.BytesIO()
-    with ZipFile(archive, "w") as f:
-        for name in ("undo_first", "undo_second"):
-            f.writestr(f"model_repository/{name}/config.pbtxt", "")
-            f.writestr(f"model_repository/{name}/1/model.onnx", b"")
-        f.writestr(
-            "pyproject.toml",
-            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
-        )
-    archive.seek(0)
+    source = bundle_source({"undo_first": b"", "undo_second": b""})
 
     repository = tmp_path / "models"
     repository.mkdir()
@@ -616,8 +601,6 @@ def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkey
     monkeypatch.setattr(storage, "save", failing_save)
 
     try:
-        upload = UploadFile(file=archive, filename="repository.zip")
-        source = ArchiveModelSource(upload, target_dir="model_repository")
         with pytest.raises(OSError):
             domain.create_models_from_source(source=source, storage=storage, db=test_db, update=False)
 
@@ -632,18 +615,12 @@ def test_a_failed_save_leaves_no_earlier_model_on_disk(test_db, tmp_path, monkey
             test_db.commit()
 
 
-def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp_path, monkeypatch):
+def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp_path, monkeypatch, bundle_source):
     """The #150 case: the update path clears a model's old versions before staging replacements, so
     a failure later in the bundle used to lose them outright."""
-    import io
-    from zipfile import ZipFile
-
-    from fastapi import UploadFile
-
     from triton_serve.api.models import domain
     from triton_serve.database.model import Model, ModelType, ModelVersion
     from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
-    from triton_serve.storage.sources import ArchiveModelSource
 
     repository = tmp_path / "models"
     repository.mkdir()
@@ -669,16 +646,7 @@ def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp
     test_db.add_all(models)
     test_db.commit()
 
-    archive = io.BytesIO()
-    with ZipFile(archive, "w") as f:
-        for name in names:
-            f.writestr(f"model_repository/{name}/config.pbtxt", "")
-            f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
-        f.writestr(
-            "pyproject.toml",
-            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
-        )
-    archive.seek(0)
+    source = bundle_source({name: b"new" for name in names})
 
     storage = LocalModelStorage(repository)
     real_save = storage.save
@@ -694,8 +662,6 @@ def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp
     monkeypatch.setattr(storage, "save", failing_save)
 
     try:
-        upload = UploadFile(file=archive, filename="repository.zip")
-        source = ArchiveModelSource(upload, target_dir="model_repository")
         with pytest.raises(OSError):
             domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
 
@@ -711,18 +677,14 @@ def test_a_failed_bundle_update_leaves_every_prior_version_in_place(test_db, tmp
         test_db.commit()
 
 
-def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, tmp_path, monkeypatch):
+def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, tmp_path, monkeypatch, bundle_source):
     """The narrowest #150 window: the stash has already moved the model's files away and nothing
     has been written in their place, so the restore holds the only copy of them."""
-    import io
-    from zipfile import ZipFile
-
-    from fastapi import HTTPException, UploadFile
+    from fastapi import HTTPException
 
     from triton_serve.api.models import domain
     from triton_serve.database.model import Model, ModelType, ModelVersion
     from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
-    from triton_serve.storage.sources import ArchiveModelSource
 
     name = "stashwindow_model"
     repository = tmp_path / "models"
@@ -742,15 +704,7 @@ def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, t
     test_db.add(model)
     test_db.commit()
 
-    archive = io.BytesIO()
-    with ZipFile(archive, "w") as f:
-        f.writestr(f"model_repository/{name}/config.pbtxt", "")
-        f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
-        f.writestr(
-            "pyproject.toml",
-            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
-        )
-    archive.seek(0)
+    source = bundle_source({name: b"new"})
 
     storage = LocalModelStorage(repository)
 
@@ -760,8 +714,6 @@ def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, t
     monkeypatch.setattr(storage, "save", failing_save)
 
     try:
-        upload = UploadFile(file=archive, filename="repository.zip")
-        source = ArchiveModelSource(upload, target_dir="model_repository")
         with pytest.raises(HTTPException) as failure:
             domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
 
@@ -775,18 +727,14 @@ def test_a_failed_update_restores_a_stash_taken_before_the_first_save(test_db, t
         test_db.commit()
 
 
-def test_an_outstanding_stash_refuses_the_update_with_a_conflict(test_db, tmp_path):
+def test_an_outstanding_stash_refuses_the_update_with_a_conflict(test_db, tmp_path, bundle_source):
     """A stash left behind by a process that died mid-update means the model's files may only exist
     there: the update must say so instead of failing opaquely."""
-    import io
-    from zipfile import ZipFile
-
-    from fastapi import HTTPException, UploadFile
+    from fastapi import HTTPException
 
     from triton_serve.api.models import domain
     from triton_serve.database.model import Model, ModelType, ModelVersion
     from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
-    from triton_serve.storage.sources import ArchiveModelSource
 
     name = "stashleak_model"
     repository = tmp_path / "models"
@@ -810,19 +758,9 @@ def test_an_outstanding_stash_refuses_the_update_with_a_conflict(test_db, tmp_pa
     test_db.add(model)
     test_db.commit()
 
-    archive = io.BytesIO()
-    with ZipFile(archive, "w") as f:
-        f.writestr(f"model_repository/{name}/config.pbtxt", "")
-        f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
-        f.writestr(
-            "pyproject.toml",
-            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
-        )
-    archive.seek(0)
+    source = bundle_source({name: b"new"})
 
     try:
-        upload = UploadFile(file=archive, filename="repository.zip")
-        source = ArchiveModelSource(upload, target_dir="model_repository")
         with pytest.raises(HTTPException) as failure:
             domain.create_models_from_source(
                 source=source, storage=LocalModelStorage(repository), db=test_db, update=True
@@ -837,18 +775,14 @@ def test_an_outstanding_stash_refuses_the_update_with_a_conflict(test_db, tmp_pa
         test_db.commit()
 
 
-def test_a_failed_mixed_bundle_restores_the_update_and_leaves_no_new_model(test_db, tmp_path, monkeypatch):
+def test_a_failed_mixed_bundle_restores_the_update_and_leaves_no_new_model(
+    test_db, tmp_path, monkeypatch, bundle_source
+):
     """A bundle may update one model and register another: a failure on the new one must both
     restore the updated model's files and leave nothing behind for the new one."""
-    import io
-    from zipfile import ZipFile
-
-    from fastapi import UploadFile
-
     from triton_serve.api.models import domain
     from triton_serve.database.model import Model, ModelType, ModelVersion
     from triton_serve.storage.local import STASH_DIRNAME, LocalModelStorage
-    from triton_serve.storage.sources import ArchiveModelSource
 
     # validate_models sorts model directories by name, so "mixa_existing" is processed first
     existing, fresh = "mixa_existing", "mixb_new"
@@ -869,16 +803,7 @@ def test_a_failed_mixed_bundle_restores_the_update_and_leaves_no_new_model(test_
     test_db.add(model)
     test_db.commit()
 
-    archive = io.BytesIO()
-    with ZipFile(archive, "w") as f:
-        for name in (existing, fresh):
-            f.writestr(f"model_repository/{name}/config.pbtxt", "")
-            f.writestr(f"model_repository/{name}/1/model.onnx", b"new")
-        f.writestr(
-            "pyproject.toml",
-            '[project]\nname = "test-bundle"\nversion = "0.1.0"\nrequires-python = ">=3.10"\ndependencies = []\n',
-        )
-    archive.seek(0)
+    source = bundle_source({existing: b"new", fresh: b"new"})
 
     storage = LocalModelStorage(repository)
     real_save = storage.save
@@ -893,8 +818,6 @@ def test_a_failed_mixed_bundle_restores_the_update_and_leaves_no_new_model(test_
     monkeypatch.setattr(storage, "save", failing_save)
 
     try:
-        upload = UploadFile(file=archive, filename="repository.zip")
-        source = ArchiveModelSource(upload, target_dir="model_repository")
         with pytest.raises(OSError):
             domain.create_models_from_source(source=source, storage=storage, db=test_db, update=True)
 

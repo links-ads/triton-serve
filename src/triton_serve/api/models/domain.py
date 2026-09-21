@@ -173,8 +173,6 @@ def create_models_from_source(
                             status_code=409,
                             detail=f"Model '{instance.model_name}' already exists",
                         )
-                    # if update is enabled, update the model fields...
-                    # first check if the model has the same source
                     if old_model.source != models_origin:
                         raise ValueError(
                             f"Old model source '{old_model.source}' does not match new source '{models_origin}' for '{instance.model_name}'."
@@ -208,8 +206,6 @@ def create_models_from_source(
                         old_model.versions.append(ModelVersion(**version.model_dump()))
                     model = old_model
 
-                # if the model does not exist, create a new model
-                # store files in the repository and create a new model instance
                 else:
                     model_versions = []
                     instance.source = instance.source or models_origin
@@ -235,9 +231,8 @@ def create_models_from_source(
 
         return models
     except HTTPException:
-        # a conflict raised mid-loop must undo the staged and stashed files for models already
-        # touched before it, on disk as well as in the database. past the commit the files are the
-        # committed state, and unwinding them would revert an update the database already accepted
+        # past the commit the files ARE the committed state: unwinding would revert an
+        # update the database already accepted
         if not committed:
             _undo_saves(storage, staged)
             _restore_stashes(storage, stashes)
