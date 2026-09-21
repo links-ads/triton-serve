@@ -5,6 +5,7 @@ from triton_serve.storage.base import (
     ModelStorage,
     ModelStorageError,
     StorageURI,
+    WorkerRepository,
 )
 from triton_serve.storage.local import LocalModelStorage
 
@@ -16,4 +17,5 @@ __all__ = [
     "ModelStorage",
     "ModelStorageError",
     "StorageURI",
+    "WorkerRepository",
 ]

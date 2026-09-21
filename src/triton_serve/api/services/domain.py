@@ -33,7 +33,7 @@ from triton_serve.database.model import (
     ServiceResources,
     timezone_aware_now,
 )
-from triton_serve.storage.base import WorkerRepository
+from triton_serve.storage import WorkerRepository
 
 LOG = logging.getLogger("uvicorn")
 

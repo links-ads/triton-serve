@@ -154,6 +154,14 @@ def test_the_local_backend_mounts_the_repository(tmp_path):
     assert wiring.environment == {"WORKER_REPOSITORY": "/models"}
 
 
+def test_the_local_backend_mounts_nothing_without_a_volume(tmp_path):
+    repository = tmp_path / "models"
+    repository.mkdir()
+    wiring = LocalModelStorage(repository).worker_repository()
+
+    assert wiring.mounts == {}
+
+
 def test_the_azure_backend_mounts_nothing_and_carries_its_credentials():
     pytest.importorskip("azure.storage.blob")
     from triton_serve.storage.azure import AzureModelStorage

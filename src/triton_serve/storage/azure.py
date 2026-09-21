@@ -67,7 +67,9 @@ class AzureModelStorage(ModelStorage):
         return self._key(model_name)
 
     def _stash_key(self, model_name: str) -> str:
-        return self._key(self.stash_prefix, model_name)
+        # deliberately outside self.prefix: with azure_storage_prefix="" the repository root is
+        # the container root, so the separation only holds with a non-empty prefix configured
+        return "/".join(part for part in (self.stash_prefix, model_name) if part)
 
     def _blobs_under(self, prefix: str) -> list[str]:
         return [blob.name for blob in self._container.list_blobs(name_starts_with=f"{prefix}/")]
@@ -124,9 +126,9 @@ class AzureModelStorage(ModelStorage):
             key = f"{version_prefix}/{file.relative_to(version_tmp).as_posix()}"
             with file.open("rb") as handle:
                 self._container.upload_blob(name=key, data=handle, overwrite=True)
-        # on a first save the model is not loadable until the config lands; when the config
-        # already exists, a failed upload can leave a partial version, which the database and
-        # #149 are what cover
+        # on update, stash already moved the config away, so version 1 uploads with no config
+        # present and this branch is skipped; the window only opens at versions 2..N of a
+        # multi-version bundle, once version 1's save has uploaded the config and unlinked config_tmp
         if config_tmp.exists():
             with config_tmp.open("rb") as handle:
                 self._container.upload_blob(name=config_key, data=handle, overwrite=True)
@@ -190,7 +192,10 @@ class AzureModelStorage(ModelStorage):
                 continue
 
     def exists(self, uri: StorageURI) -> bool:
-        return bool(self._blobs_under(self._relative(uri)))
+        relative = self._relative(uri)
+        if self._blobs_under(relative):
+            return True
+        return self._container.get_blob_client(relative).exists()
 
     def read(self, uri: StorageURI) -> bytes:
         return self._container.download_blob(self._relative(uri)).readall()

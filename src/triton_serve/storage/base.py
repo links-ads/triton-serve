@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tarfile import TarFile
 from typing import Protocol
@@ -82,7 +82,7 @@ class WorkerRepository:
 
     uri: str
     mounts: dict[str, dict[str, str]]
-    environment: dict[str, str]
+    environment: dict[str, str] = field(repr=False)
 
 
 class ModelSource(ABC):

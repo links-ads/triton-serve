@@ -148,4 +148,6 @@ class AppSettings(BaseSettings):
             raise ValueError("azure_storage_account is required when storage_type is azure")
         if not self.azure_storage_key.get_secret_value():
             raise ValueError("azure_storage_key is required when storage_type is azure")
+        if self.azure_auth_type != "key":
+            raise ValueError("azure_auth_type must be 'key'; managed identity requires Triton r26.05+")
         return self
