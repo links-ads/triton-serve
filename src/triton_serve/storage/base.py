@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tarfile import TarFile
 from typing import Protocol
@@ -72,6 +72,19 @@ class ExtractedBundle:
     dependencies: BundleDependencies
 
 
+@dataclass(frozen=True)
+class WorkerRepository:
+    """How a worker container reaches the model repository.
+
+    The storage backend owns this because only it knows whether the repository is a volume to mount
+    or a URI to read over the network.
+    """
+
+    uri: str
+    mounts: dict[str, dict[str, str]]
+    environment: dict[str, str] = field(repr=False)
+
+
 class ModelSource(ABC):
     """Generic class to represent a source of models."""
 
@@ -129,7 +142,9 @@ class ModelStorage(ABC):
         Args:
             model (StorableModel): the model being stored.
             version (StorableVersion): the version being stored.
-            origin (Path): local path to the extracted bundle's repository directory.
+            origin (Path): local path to the extracted bundle's repository directory. The version
+                subtree it stores, and the model's config, are consumed by this call; the origin may
+                be reused for other versions of the same bundle.
 
         Returns:
             StorageURI: where the version now lives.
@@ -207,5 +222,39 @@ class ModelStorage(ABC):
 
         Args:
             stashed (StorageURI): the handle `stash` returned.
+        """
+        ...
+
+    @abstractmethod
+    def exists(self, uri: StorageURI) -> bool:
+        """Reports whether anything is stored at a URI, whether a single file or a subtree.
+
+        Args:
+            uri (StorageURI): a URI this backend produced.
+
+        Returns:
+            bool: True if the URI resolves to stored content.
+        """
+        ...
+
+    @abstractmethod
+    def read(self, uri: StorageURI) -> bytes:
+        """Reads back a single stored file.
+
+        Args:
+            uri (StorageURI): a URI this backend produced, naming one file.
+
+        Returns:
+            bytes: the file's contents.
+        """
+        ...
+
+    @abstractmethod
+    def worker_repository(self) -> WorkerRepository:
+        """Returns the mounts and environment a worker needs to read this repository.
+
+        Returns:
+            WorkerRepository: the repository URI, the volumes to mount, and the environment that
+                points the worker at it.
         """
         ...

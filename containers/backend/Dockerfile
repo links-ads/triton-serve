@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 # copy source, alembic dirs, pyproject.toml and other files
 COPY . ./
-RUN uv sync --locked
+RUN uv sync --locked --extra azure
 
 # copy the entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh
@@ -51,14 +51,14 @@ RUN chmod +x /docker-entrypoint.sh
 # Stage 3: Add additional dependencies for development, production and testing
 FROM base AS branch-dev
 RUN echo "Building development branch"
-RUN uv sync --group dev
+RUN uv sync --group dev --extra azure
 
 FROM base AS branch-prod
 RUN echo "Building production branch"
 
 FROM base AS branch-test
 RUN echo "Building testing branch"
-RUN uv sync --group test
+RUN uv sync --group test --extra azure
 COPY tests/ tests/
 
 FROM branch-${TARGET}

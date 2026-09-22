@@ -87,3 +87,62 @@ def test_an_explicit_stale_threshold_still_wins():
     settings = _settings(image_build_timeout=600, image_build_stale_after=2000)
 
     assert settings.build_stale_after == 2000
+
+
+def test_azure_storage_without_an_account_is_rejected():
+    """The failure belongs at startup, not at the first upload hours later."""
+    with pytest.raises(ValidationError, match="azure_storage_account"):
+        _settings(storage_type="azure")
+
+
+def test_azure_storage_without_a_key_is_rejected():
+    with pytest.raises(ValidationError, match="azure_storage_key"):
+        _settings(storage_type="azure", azure_storage_account="adsmodelrepository")
+
+
+def test_a_configured_azure_account_validates():
+    settings = _settings(
+        storage_type="azure",
+        azure_storage_account="adsmodelrepository",
+        azure_storage_key="deadbeef",
+    )
+    assert settings.azure_storage_container == "model-repository"
+    assert settings.azure_storage_key.get_secret_value() == "deadbeef"
+
+
+def test_local_storage_needs_no_azure_settings():
+    assert _settings().azure_storage_account == ""
+
+
+def test_the_account_key_is_not_in_the_repr():
+    """It reaches every worker's environment; it must not also reach every log line."""
+    settings = _settings(
+        storage_type="azure",
+        azure_storage_account="adsmodelrepository",
+        azure_storage_key="deadbeef",
+    )
+    assert "deadbeef" not in repr(settings)
+
+
+def test_the_azure_prefix_defaults_to_a_subdirectory_of_the_container():
+    assert _settings().azure_storage_prefix == "models"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"azure_storage_prefix": ""},
+        {"azure_stash_prefix": ""},
+        {"azure_storage_prefix": "models", "azure_stash_prefix": "models"},
+        {"azure_storage_prefix": "models", "azure_stash_prefix": "models/.stash"},
+    ],
+)
+def test_an_azure_layout_that_exposes_the_stash_is_rejected(overrides):
+    """The workers are pointed at the prefix; anything under it is loadable as a model."""
+    with pytest.raises(ValidationError):
+        _settings(
+            storage_type="azure",
+            azure_storage_account="adsmodelrepository",
+            azure_storage_key="deadbeef",
+            **overrides,
+        )

@@ -33,6 +33,7 @@ from triton_serve.database.model import (
     ServiceResources,
     timezone_aware_now,
 )
+from triton_serve.storage import WorkerRepository
 
 LOG = logging.getLogger("uvicorn")
 
@@ -310,12 +311,17 @@ def docker_healthcheck(healthcheck: dict | None) -> dict | None:
     }
 
 
+def merge_environment(user: dict[str, str], storage: dict[str, str]) -> dict[str, str]:
+    """Storage wiring wins: a service creator must not be able to repoint a worker's repository."""
+    return {**user, **storage}
+
+
 def spawn_service_container(
     client: DockerClient,
     image_id: str,
     worker_name: str,
     worker_network: str,
-    worker_volume: str,
+    repository: WorkerRepository,
     models: list[Model],
     resources: ServiceCreateResources,
     devices: list | None = None,
@@ -329,7 +335,8 @@ def spawn_service_container(
         image_id (str): The identifier of the docker image to use.
         worker_name (str): The name of the worker container.
         worker_network (str): The name of the docker network to use.
-        worker_volume (str): The path to the model repository, or a volume name.
+        repository (WorkerRepository): The mounts and environment that point the worker at the
+            model repository.
         models (list[Model]): The list of models to load.
         resources (ServiceCreateResources): The resources to use for the container.
         devices (list, optional): The list of devices to use. Defaults to None.
@@ -346,13 +353,12 @@ def spawn_service_container(
     if worker_name in [container.name for container in client.containers.list(all=True)]:
         raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
 
-    environment = environment or {}
+    environment = merge_environment(environment or {}, repository.environment)
 
     # prepare the list of models to load
     triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
 
-    # prepare volumes for the container
-    volumes = {str(worker_volume): {"bind": "/models", "mode": "ro"}}
+    volumes = repository.mounts
 
     gpus, runtime = None, None
     if devices:
@@ -648,7 +654,7 @@ def recreate_service_container(
     client: DockerClient,
     service: Service,
     service_network: str,
-    service_models_volume: str,
+    repository: WorkerRepository,
     pull_credentials: RegistryAuth,
 ) -> Service:
     """Tears down the current container (if any) and spawns a fresh one from DB state.
@@ -660,7 +666,8 @@ def recreate_service_container(
         client (DockerClient): The Docker client.
         service (Service): The service ORM object.
         service_network (str): The Docker network name.
-        service_models_volume (str): The volume name or path for models.
+        repository (WorkerRepository): The mounts and environment that point the worker at the
+            model repository.
         pull_credentials (RegistryAuth): Credentials for pulling a private image.
 
     Returns:
@@ -686,7 +693,7 @@ def recreate_service_container(
             image_id=cast(str, image.id),
             worker_name=service.service_name,
             worker_network=service_network,
-            worker_volume=service_models_volume,
+            repository=repository,
             models=service.models,
             resources=ServiceCreateResources(
                 gpus=0.0,

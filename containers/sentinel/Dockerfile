@@ -9,7 +9,7 @@ COPY --from=base /uv /uvx /bin/
 
 WORKDIR /app
 COPY . ./
-RUN uv sync --locked
+RUN uv sync --locked --extra azure
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
