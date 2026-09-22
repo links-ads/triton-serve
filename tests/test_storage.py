@@ -162,18 +162,56 @@ def test_the_local_backend_mounts_nothing_without_a_volume(tmp_path):
     assert wiring.mounts == {}
 
 
-def test_the_azure_backend_mounts_nothing_and_carries_its_credentials():
-    pytest.importorskip("azure.storage.blob")
+def _azure_backend(**kwargs):
     from triton_serve.storage.azure import AzureModelStorage
 
-    wiring = AzureModelStorage(
-        account="adsmodelrepository", container="model-repository", credential="deadbeef"
-    ).worker_repository()
+    return AzureModelStorage(
+        **{
+            "account": "adsmodelrepository",
+            "container": "model-repository",
+            "credential": "deadbeef",
+            "prefix": "models",
+            **kwargs,
+        }
+    )
 
-    assert wiring.uri == "as://adsmodelrepository/model-repository"
+
+def test_the_azure_backend_mounts_nothing_and_carries_its_credentials():
+    pytest.importorskip("azure.storage.blob")
+    wiring = _azure_backend().worker_repository()
+
+    assert wiring.uri == "as://adsmodelrepository/model-repository/models"
     assert wiring.mounts == {}
     assert wiring.environment["WORKER_REPOSITORY"] == wiring.uri
     assert wiring.environment["AZURE_STORAGE_KEY"] == "deadbeef"
+
+
+@pytest.mark.parametrize("prefix", ["models", "team/models"])
+def test_the_azure_stash_stays_outside_what_the_workers_can_see(prefix):
+    """A stash under the repository prefix would be loaded as a model named `.stash`."""
+    pytest.importorskip("azure.storage.blob")
+    backend = _azure_backend(prefix=prefix)
+
+    stashed = backend._stash_key("resnet")
+
+    assert not stashed.startswith(f"{backend.prefix}/")
+    assert stashed == ".stash/resnet"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"prefix": ""},
+        {"prefix": "/"},
+        {"stash_prefix": ""},
+        {"prefix": "models", "stash_prefix": "models"},
+        {"prefix": "models", "stash_prefix": "models/.stash"},
+    ],
+)
+def test_an_azure_layout_that_exposes_the_stash_is_refused(kwargs):
+    pytest.importorskip("azure.storage.blob")
+    with pytest.raises(ValueError):
+        _azure_backend(**kwargs)
 
 
 def test_storage_wiring_wins_over_a_user_supplied_environment():

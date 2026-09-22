@@ -226,6 +226,30 @@ class ModelStorage(ABC):
         ...
 
     @abstractmethod
+    def exists(self, uri: StorageURI) -> bool:
+        """Reports whether anything is stored at a URI, whether a single file or a subtree.
+
+        Args:
+            uri (StorageURI): a URI this backend produced.
+
+        Returns:
+            bool: True if the URI resolves to stored content.
+        """
+        ...
+
+    @abstractmethod
+    def read(self, uri: StorageURI) -> bytes:
+        """Reads back a single stored file.
+
+        Args:
+            uri (StorageURI): a URI this backend produced, naming one file.
+
+        Returns:
+            bytes: the file's contents.
+        """
+        ...
+
+    @abstractmethod
     def worker_repository(self) -> WorkerRepository:
         """Returns the mounts and environment a worker needs to read this repository.
 

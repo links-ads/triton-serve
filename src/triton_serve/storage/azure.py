@@ -40,7 +40,7 @@ class AzureModelStorage(ModelStorage):
         account: str,
         container: str,
         credential: str,
-        prefix: str = "",
+        prefix: str,
         stash_prefix: str = ".stash",
         endpoint: str = "",
     ) -> None:
@@ -48,17 +48,27 @@ class AzureModelStorage(ModelStorage):
         self.container = container
         self.prefix = prefix.strip("/")
         self.stash_prefix = stash_prefix.strip("/")
-        # underscored and never logged: the settings layer holds it as a SecretStr and unwraps it
-        # exactly once, here, because Task 3 has to hand it to every worker container
+        self._check_prefixes()
         self._credential = credential
         self.client = BlobServiceClient(
             account_url=endpoint or f"https://{account}.blob.core.windows.net",
             credential={"account_name": account, "account_key": credential},
         )
+        self._container: ContainerClient = self.client.get_container_client(container)
 
-    @property
-    def _container(self) -> ContainerClient:
-        return self.client.get_container_client(self.container)
+    def _check_prefixes(self) -> None:
+        """Guards the invariant the stash rests on: it must sit outside what the workers can see.
+
+        The settings layer enforces the same thing, but this class is also constructed directly, and
+        a stash reachable from the repository prefix is a silent correctness bug rather than a
+        startup failure.
+        """
+        if not self.prefix:
+            raise ValueError("azure storage needs a non-empty prefix: the stash lives beside it")
+        if not self.stash_prefix:
+            raise ValueError("azure storage needs a non-empty stash prefix")
+        if self.stash_prefix == self.prefix or self.stash_prefix.startswith(f"{self.prefix}/"):
+            raise ValueError(f"the stash prefix {self.stash_prefix!r} sits inside the repository prefix")
 
     def _key(self, *parts: str) -> str:
         return "/".join(part for part in (self.prefix, *parts) if part)
@@ -67,9 +77,8 @@ class AzureModelStorage(ModelStorage):
         return self._key(model_name)
 
     def _stash_key(self, model_name: str) -> str:
-        # deliberately outside self.prefix: with azure_storage_prefix="" the repository root is
-        # the container root, so the separation only holds with a non-empty prefix configured
-        return "/".join(part for part in (self.stash_prefix, model_name) if part)
+        # outside self.prefix by construction: the workers are pointed at the prefix, never here
+        return f"{self.stash_prefix}/{model_name}"
 
     def _blobs_under(self, prefix: str) -> list[str]:
         return [blob.name for blob in self._container.list_blobs(name_starts_with=f"{prefix}/")]
@@ -126,9 +135,7 @@ class AzureModelStorage(ModelStorage):
             key = f"{version_prefix}/{file.relative_to(version_tmp).as_posix()}"
             with file.open("rb") as handle:
                 self._container.upload_blob(name=key, data=handle, overwrite=True)
-        # on update, stash already moved the config away, so version 1 uploads with no config
-        # present and this branch is skipped; the window only opens at versions 2..N of a
-        # multi-version bundle, once version 1's save has uploaded the config and unlinked config_tmp
+        # stash moves the config away on update, so the partial-version window opens only at 2..N
         if config_tmp.exists():
             with config_tmp.open("rb") as handle:
                 self._container.upload_blob(name=config_key, data=handle, overwrite=True)

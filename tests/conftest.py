@@ -74,6 +74,8 @@ def _azure_storage(request: pytest.FixtureRequest) -> AzureModelStorage:
         account=os.environ["AZURITE_ACCOUNT"],
         container=container,
         credential=os.environ["AZURITE_KEY"],
+        # a real prefix, not the container root: the only layout the settings layer allows
+        prefix="models",
         endpoint=AZURITE,
     )
     client: BlobServiceClient = storage.client

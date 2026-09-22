@@ -122,3 +122,27 @@ def test_the_account_key_is_not_in_the_repr():
         azure_storage_key="deadbeef",
     )
     assert "deadbeef" not in repr(settings)
+
+
+def test_the_azure_prefix_defaults_to_a_subdirectory_of_the_container():
+    assert _settings().azure_storage_prefix == "models"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"azure_storage_prefix": ""},
+        {"azure_stash_prefix": ""},
+        {"azure_storage_prefix": "models", "azure_stash_prefix": "models"},
+        {"azure_storage_prefix": "models", "azure_stash_prefix": "models/.stash"},
+    ],
+)
+def test_an_azure_layout_that_exposes_the_stash_is_rejected(overrides):
+    """The workers are pointed at the prefix; anything under it is loadable as a model."""
+    with pytest.raises(ValidationError):
+        _settings(
+            storage_type="azure",
+            azure_storage_account="adsmodelrepository",
+            azure_storage_key="deadbeef",
+            **overrides,
+        )

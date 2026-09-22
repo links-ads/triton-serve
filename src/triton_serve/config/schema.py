@@ -41,7 +41,7 @@ class AppSettings(BaseSettings):
     # azure blob storage; only read when storage_type is azure
     azure_storage_account: str = ""
     azure_storage_container: str = "model-repository"
-    azure_storage_prefix: str = ""
+    azure_storage_prefix: str = "models"
     azure_stash_prefix: str = ".stash"
     azure_storage_key: SecretStr = SecretStr("")
     azure_storage_endpoint: str = ""  # overrides the public endpoint; set to reach Azurite
@@ -150,4 +150,15 @@ class AppSettings(BaseSettings):
             raise ValueError("azure_storage_key is required when storage_type is azure")
         if self.azure_auth_type != "key":
             raise ValueError("azure_auth_type must be 'key'; managed identity requires Triton r26.05+")
+        prefix = self.azure_storage_prefix.strip("/")
+        stash = self.azure_stash_prefix.strip("/")
+        if not prefix:
+            raise ValueError("azure_storage_prefix must not be empty: the stash lives beside it, not under it")
+        if not stash:
+            raise ValueError("azure_stash_prefix must not be empty")
+        if stash == prefix or stash.startswith(f"{prefix}/"):
+            raise ValueError(
+                f"azure_stash_prefix {stash!r} sits inside azure_storage_prefix {prefix!r}, where the "
+                "workers would load stashed files as models"
+            )
         return self
