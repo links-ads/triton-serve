@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from celery.signals import worker_process_init, worker_process_shutdown
 from sqlalchemy.orm import joinedload
@@ -11,17 +11,19 @@ from triton_serve.builder.execute import (  # noqa: F401  (registers the tasks o
     build_image,
     reap_stale_builds,
 )
-from triton_serve.config import get_settings
+from triton_serve.config import get_settings, get_storage
 from triton_serve.database import database_manager
-from triton_serve.database.model import DesiredState, RuntimeStatus, Service, timezone_aware_now
+from triton_serve.database.model import DesiredState, Model, ModelVersion, RuntimeStatus, Service, timezone_aware_now
 from triton_serve.extensions import get_reconciler_docker_client
 from triton_serve.queue import app
+from triton_serve.storage.base import StoredVersion
 
 LOG = logging.getLogger(__name__)
 
 # single-flight guard: only one reconcile pass may touch Docker at a time. an overrunning tick
 # (slow daemon, image pull) must never run concurrently with the next and both decide RECREATE.
 _RECONCILE_LOCK_KEY = 0x7213_10CE
+_SWEEP_LOCK_KEY = 0x7213_5EEB
 
 settings = get_settings()
 
@@ -56,6 +58,12 @@ def setup_periodic_tasks(sender, **_):
         name="Reap stale image builds",
     )
 
+    sender.add_periodic_task(
+        settings.repository_sweep_interval,
+        sweep_orphaned_files.s(),  # type: ignore
+        name="Sweep orphaned model files",
+    )
+
 
 def _replica_target(service: Service, now: datetime) -> int:
     """1 if within the inactivity window (recent traffic / wake), else 0. AVAILABLE only."""
@@ -66,6 +74,19 @@ def _replica_target(service: Service, now: datetime) -> int:
 def _backoff_seconds(attempts: int, base: int, cap: int) -> int:
     """How many seconds before retrying"""
     return min(base * (2 ** max(attempts - 1, 0)), cap)
+
+
+def _orphans(stored: list[StoredVersion], known: set[tuple[str, int]], cutoff: datetime) -> list[StoredVersion]:
+    """Picks the stored versions no database row accounts for and that are older than the cutoff.
+
+    Returns nothing when the database reports no rows at all: an empty repository is a legitimate
+    state, but an empty database beside a full repository is an outage or a truncated read, and
+    acting on it would delete every model on the platform.
+    """
+    if stored and not known:
+        LOG.error("sweep found %d stored versions and no database rows; deleting nothing", len(stored))
+        return []
+    return [v for v in stored if (v.model_name, v.version_id) not in known and v.modified_at < cutoff]
 
 
 @app.task
@@ -130,3 +151,35 @@ def update_service_status() -> None:
                 except Exception as e:
                     LOG.error("Reconcile failed for service %s: %s", service.service_id, e)
                     db.rollback()
+
+
+@app.task
+def sweep_orphaned_files() -> None:
+    """Deletes stored model versions that no `model_versions` row accounts for.
+
+    The backstop for what #136's in-process undo cannot reach: a crash between the files landing and
+    the rows committing leaves files with no owner, and against a blob container those are invisible
+    rather than something anyone trips over.
+    """
+    settings = get_settings()
+    storage = get_storage()
+    cutoff = timezone_aware_now() - timedelta(seconds=settings.orphan_min_age)
+    with database_manager.advisory_lock(_SWEEP_LOCK_KEY) as acquired:
+        if not acquired:
+            LOG.info("another sweep holds the advisory lock; skipping this tick")
+            return
+        stored = storage.list_versions()
+        with database_manager.session() as db:
+            known = {
+                (name, version_id)
+                for name, version_id in db.query(Model.model_name, ModelVersion.version_id).join(
+                    ModelVersion, Model.model_id == ModelVersion.model_id
+                )
+            }
+        for version in _orphans(stored, known, cutoff):
+            try:
+                storage.delete(version, version)
+                LOG.warning("swept orphaned version %s:%d", version.model_name, version.version_id)
+            except Exception as e:
+                # a backstop must never be the thing that kills a beat worker
+                LOG.error("could not sweep %s:%d: %s", version.model_name, version.version_id, e)

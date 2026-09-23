@@ -81,6 +81,8 @@ class AppSettings(BaseSettings):
     sentinel_poll_interval: int = 10  # reconcile tick; the loop is a cheap DB read + docker inspect
     docker_timeout: int = 10  # seconds; reconciler Docker client, fail fast not 60s
     service_boot_grace: int = 30  # seconds a no-healthcheck container is BOOTING
+    repository_sweep_interval: int = 86400  # a backstop belongs on a daily tick, not the reconcile tick
+    orphan_min_age: int = 3600  # grace before a stored version may be considered abandoned
     backend_host: str
     backend_port: int
 
