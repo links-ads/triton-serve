@@ -92,6 +92,10 @@ class LocalModelStorage(ModelStorage):
         with suppress(FileNotFoundError):
             rmtree(stashed, ignore_errors=False)
 
+    def check_reachable(self) -> None:
+        if not self.base_path.is_dir():
+            raise FileNotFoundError(f"the model repository {self.base_path} is not a directory")
+
     def worker_repository(self) -> WorkerRepository:
         mount = {self.volume: {"bind": self.mountpoint, "mode": "ro"}} if self.volume else {}
         return WorkerRepository(

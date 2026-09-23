@@ -10,7 +10,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, services
 from triton_serve.api.services.domain import rebuild_service_config
-from triton_serve.config import AppSettings, get_traefik
+from triton_serve.config import AppSettings, get_storage, get_traefik
 from triton_serve.database import database_manager
 from triton_serve.database.model import Service
 from triton_serve.database.validation import check_resources
@@ -47,6 +47,9 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
         Checks if the resources saved in the database match the current resources,
         and closes the database connection when the app is shutting down.
         """
+        # deliberately not wrapped like the two steps below: a storage backend we cannot reach is a
+        # misconfiguration that must stop the boot, not a warning someone finds after the first 500
+        get_storage().check_reachable()
         with database_manager.session() as session:
             try:
                 check_resources(session=session)

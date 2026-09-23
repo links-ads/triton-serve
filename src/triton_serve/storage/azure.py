@@ -205,7 +205,20 @@ class AzureModelStorage(ModelStorage):
         return self._container.get_blob_client(relative).exists()
 
     def read(self, uri: StorageURI) -> bytes:
-        return self._container.download_blob(self._relative(uri)).readall()
+        relative = self._relative(uri)
+        try:
+            return self._container.download_blob(relative).readall()
+        except ResourceNotFoundError as error:
+            raise FileNotFoundError(f"no blob at {relative!r} in container {self.container!r}") from error
+
+    def check_reachable(self) -> None:
+        try:
+            self._container.get_container_properties()
+        except Exception as error:
+            raise ConnectionError(
+                f"azure container {self.container!r} on account {self.account!r} is unreachable "
+                f"(prefix {self.prefix!r}): {error}"
+            ) from error
 
     def worker_repository(self) -> WorkerRepository:
         uri = f"as://{self.account}/{self.container}/{self.prefix}".rstrip("/")

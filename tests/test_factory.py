@@ -1,7 +1,10 @@
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
+from triton_serve import factory
+from triton_serve.config import get_settings
 from triton_serve.factory import register_exception_handlers
 
 
@@ -18,3 +21,17 @@ def test_database_errors_return_an_opaque_500():
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal database error"}
+
+
+def test_an_unreachable_storage_backend_stops_startup(monkeypatch):
+    """The other startup steps warn and continue; this one must not, or a typo boots healthy."""
+
+    class Unreachable:
+        def check_reachable(self) -> None:
+            raise ConnectionError("container 'model-repository' is unreachable")
+
+    monkeypatch.setattr(factory, "get_storage", lambda: Unreachable())
+    app = factory.create_app(get_settings(), init_database=False)
+
+    with pytest.raises(ConnectionError, match="unreachable"), TestClient(app):
+        pass
