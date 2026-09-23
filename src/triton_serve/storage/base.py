@@ -250,6 +250,18 @@ class ModelStorage(ABC):
         ...
 
     @abstractmethod
+    def check_reachable(self) -> None:
+        """Confirms the backend is usable, so a misconfiguration fails at startup.
+
+        Abstract rather than a no-op default: a backend that silently skipped this would
+        typecheck and then fail on the first request, which is the failure this exists to prevent.
+
+        Raises:
+            Exception: a backend-specific error naming what could not be reached.
+        """
+        ...
+
+    @abstractmethod
     def worker_repository(self) -> WorkerRepository:
         """Returns the mounts and environment a worker needs to read this repository.
 

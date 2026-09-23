@@ -144,6 +144,32 @@ def test_discard_of_an_already_gone_stash_is_quiet(storage, tmp_path):
     storage.discard(stashed)
 
 
+def test_a_reachable_backend_passes_its_own_check(storage):
+    assert storage.check_reachable() is None
+
+
+def test_a_local_repository_that_is_not_there_is_refused(tmp_path):
+    backend = LocalModelStorage(tmp_path / "absent")
+    with pytest.raises(FileNotFoundError, match="absent"):
+        backend.check_reachable()
+
+
+def test_an_azure_container_that_does_not_exist_is_refused(storage):
+    """Points a second backend at a container the fixture never created, on the same Azurite."""
+    if type(storage).__name__ != "AzureModelStorage":
+        pytest.skip("the local backend has no container to miss")
+    backend = type(storage)(
+        account=storage.account,
+        container="never-created",
+        credential=storage._credential,
+        prefix="models",
+        # BlobServiceClient.url is the account url with a trailing slash, which the sdk normalises
+        endpoint=storage.client.url,
+    )
+    with pytest.raises(ConnectionError, match="never-created"):
+        backend.check_reachable()
+
+
 def test_the_local_backend_mounts_the_repository(tmp_path):
     repository = tmp_path / "models"
     repository.mkdir()
