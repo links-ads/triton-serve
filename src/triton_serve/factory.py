@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, services
-from triton_serve.config import AppSettings, get_storage, get_traefik
+from triton_serve.config import AppSettings, TraefikConfigManager, get_storage, get_traefik
 from triton_serve.database import database_manager
 from triton_serve.database.model import Service
 from triton_serve.database.validation import check_resources
@@ -17,13 +17,17 @@ from triton_serve.database.validation import check_resources
 log = logging.getLogger(uvicorn.__name__)
 
 
-def sync_traefik_configs(session, settings: AppSettings) -> None:
+def sync_traefik_configs(session, traefik: TraefikConfigManager, settings: AppSettings) -> None:
     """Rebuilds every non-deleted service's Traefik config from database truth, and removes the rest.
 
     Deleting is half the job: a service removed while the API was down otherwise keeps a live route
     forever, which is how five stale configs accumulated in production.
+
+    Args:
+        session: an open database session.
+        traefik (TraefikConfigManager): the manager owning the config directory.
+        settings (AppSettings): the application settings, for the service URL prefix.
     """
-    traefik = get_traefik()
     services = session.query(Service).filter(Service.deleted_at.is_(None)).all()
     on_disk = traefik.names()
     # an empty result beside a full directory is an outage or a truncated read, never a mandate to
@@ -69,7 +73,7 @@ def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
                 log.warning("Validation error at startup: %s", str(e))
                 log.warning("Triton Serve may need to be reinitialized")
             try:
-                sync_traefik_configs(session, settings)
+                sync_traefik_configs(session, get_traefik(), settings)
             except Exception as e:
                 log.warning("Failed to sync Traefik configs at startup: %s", e)
         yield
