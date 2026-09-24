@@ -91,7 +91,9 @@ creation and updates, API key administration, and the resource allocation
 overview.
 
 Keys come in three types. A `SERVICE` key reaches only the services it is
-associated with; `ADMIN` keys reach every service. The `api_keys` setting seeds
+associated with; an `ADMIN` key reaches every service; a `USER` key gets
+management access through the API but no service access at all, since reaching a
+service requires an `ADMIN` or `SERVICE` key. The `api_keys` setting seeds
 the master keys as `ADMIN` rows, but only when the populate migration first
 runs — editing it afterwards has no effect on access, so rotate master keys
 through the key API, not through configuration.
