@@ -36,12 +36,7 @@ def sync_traefik_configs(session, settings: AppSettings) -> None:
         rebuild_service_config(session, traefik, service, settings.service_prefix, settings.api_keys)
     for stale in on_disk - {service.service_name for service in services}:
         log.warning("removing orphaned traefik config for %s", stale)
-        try:
-            traefik.delete(service_name=stale)
-        except OSError as error:
-            # a leftover file is the state we are already in, so it must not abort the rest of the
-            # sweep or the boot
-            log.warning("could not remove orphaned traefik config %s: %s", stale, error)
+        traefik.delete(service_name=stale)
 
 
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
