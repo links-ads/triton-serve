@@ -153,8 +153,10 @@ def test_triton_ping_unauthorized(name):
         if response.status_code != 404:
             break
         time.sleep(5)
-    assert response.status_code == 403
-    assert "Invalid API Key" in response.json()["message"]
+    # a request with no key is unauthenticated, not forbidden: forwardAuth reaches the backend's
+    # APIKeyHeader, which answers 401 with FastAPI's `detail`
+    assert response.status_code == 401
+    assert "Not authenticated" in response.json()["detail"]
 
 
 @pytest.mark.order(after="test_triton_ping_unauthorized")

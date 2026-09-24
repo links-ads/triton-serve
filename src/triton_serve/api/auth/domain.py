@@ -176,3 +176,22 @@ def remove_service_from_key(db: Session, key: APIKey, service: Service) -> APIKe
     db.commit()
     db.refresh(key)
     return key
+
+
+def key_allows_service(key: APIKey, service: Service) -> bool:
+    """Reports whether a key is entitled to reach one service.
+
+    ADMIN keys are the platform's master keys and reach every service; a SERVICE key reaches only
+    the services it is associated with. No other key type arrives here, because `require_service`
+    rejects them first.
+
+    Args:
+        key (APIKey): the authenticated key.
+        service (Service): the service being requested.
+
+    Returns:
+        bool: True if the key may reach the service.
+    """
+    if key.key_type == KeyType.ADMIN:
+        return True
+    return any(associated.service_id == service.service_id for associated in key.services)

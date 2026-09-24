@@ -2,21 +2,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
-import yaml
 
 from triton_serve.api.dto import APIKeyCreateBody, ServiceKeyCreateBody
 from triton_serve.database.model import APIKey, DesiredState, KeyType, RuntimeStatus, Service
 
 LOG = logging.getLogger(pytest.__name__)
-
-
-def _service_config_keys(settings, service_name: str) -> list[str]:
-    """Reads the API keys persisted in a service's Traefik config file on disk."""
-    config_path = settings.configs_path / f"{service_name}.yaml"
-    with open(config_path) as file:
-        config = yaml.safe_load(file)
-    middlewares = config["http"]["middlewares"]
-    return middlewares[f"{service_name}-auth"]["plugin"]["traefik-api-key-middleware"]["keys"]
 
 
 @pytest.fixture
@@ -36,6 +26,18 @@ def create_api_key(test_db):
         return api_key
 
     return _create_api_key
+
+
+@pytest.fixture
+def status_of(test_client, test_db):
+    def _status_of(service_name: str, key: str):
+        # READY so an entitled key projects to 200: the request path itself never spawns a container
+        service = test_db.query(Service).filter(Service.service_name == service_name).one()
+        service.runtime_status = RuntimeStatus.READY
+        test_db.commit()
+        return test_client.get(f"/status/{service_name}", headers={"X-API-Key": key})
+
+    return _status_of
 
 
 @pytest.mark.order(after="test_models.py::test_create_models_from_zip")
@@ -66,7 +68,7 @@ def test_create_api_key(test_client, key_type):
 
 
 @pytest.mark.order(after="test_services.py::test_delete_is_db_only")
-def test_create_service_key(test_client, test_settings):
+def test_create_service_key(test_client, status_of):
     service_name = "trt-srv_test_test_service"
     # First, create a service
     service_response = test_client.post(
@@ -93,8 +95,8 @@ def test_create_service_key(test_client, test_settings):
     assert len(data["services"]) == 1
     assert data["services"][0]["service_id"] == service_id
 
-    # the new key must be written to the service's Traefik config on disk
-    assert data["value"] in _service_config_keys(test_settings, service_name)
+    # the new key must reach the service it was created for
+    assert status_of(service_name, data["value"]).status_code == 200
 
 
 @pytest.mark.order(after="test_api_key_unauthorized")
@@ -161,7 +163,7 @@ def test_revoke_api_key(test_client, create_api_key, test_db):
 def test_add_service_to_key(
     test_client,
     create_api_key,
-    test_settings,
+    status_of,
 ):
     api_key = create_api_key(KeyType.SERVICE, "svc1", "status_check")
     service_name = "trt-srv_test_another_test_service"
@@ -187,16 +189,16 @@ def test_add_service_to_key(
     assert len(data["services"]) == 1
     assert data["services"][0]["service_id"] == service_id
 
-    # associating an existing key must update the on-disk config (issue 105)
-    assert api_key.value in _service_config_keys(test_settings, service_name)
+    # associating an existing key must let it reach the service (issue 105)
+    assert status_of(service_name, api_key.value).status_code == 200
 
     retry = test_client.post(f"/keys/{api_key.key_id}/services/{service_id}")
     assert retry.status_code == 400
 
 
 @pytest.mark.order(after="test_add_service_to_key")
-def test_status_endpoint_auth(test_client, test_db):
-    from triton_serve.database.model import RuntimeStatus, Service
+def test_status_endpoint_auth(test_client, status_of):
+    service_name = "trt-srv_test_another_test_service"
 
     # using the client, get the service key associated with test project
     response = test_client.get("/keys", params={"project": "status_check"})
@@ -206,46 +208,14 @@ def test_status_endpoint_auth(test_client, test_db):
     assert len(data) > 0
     key = data[0]["value"]
 
-    # mark the service READY so a passing key projects to 200 (the request path never spawns)
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-
-    # Test with user key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": "test_key_userkey1"},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 403
-
-    # Test with no key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": ""},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 401
-
-    # Test with invalid key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": "invalid_key"},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 401
-
-    # test with the service key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": key},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 200
+    assert status_of(service_name, "test_key_userkey1").status_code == 403
+    assert status_of(service_name, "").status_code == 401
+    assert status_of(service_name, "invalid_key").status_code == 401
+    assert status_of(service_name, key).status_code == 200
 
 
 @pytest.mark.order(after="test_add_service_to_key")
-def test_remove_service_from_key(test_client, create_api_key, test_settings):
+def test_remove_service_from_key(test_client, create_api_key, status_of):
     api_key = create_api_key(KeyType.SERVICE, "svc2", "test_project")
     service_name = "trt-srv_yet_another_test_service"
 
@@ -262,12 +232,12 @@ def test_remove_service_from_key(test_client, create_api_key, test_settings):
     service_id = service_response.json()["service_id"]
 
     test_client.post(f"/keys/{api_key.key_id}/services/{service_id}")
-    assert api_key.value in _service_config_keys(test_settings, service_name)
+    assert status_of(service_name, api_key.value).status_code == 200
 
     # Remove service from key
     response = test_client.delete(f"/keys/{api_key.key_id}/services/{service_id}")
     assert response.status_code == 204
-    assert api_key.value not in _service_config_keys(test_settings, service_name)
+    assert status_of(service_name, api_key.value).status_code == 403
 
 
 @pytest.mark.order(after="test_revoke_api_key")
@@ -343,3 +313,36 @@ def test_remove_service_from_non_service_key(test_client, create_api_key):
     assert response.status_code == 400
     response = test_client.delete(f"/keys/{api_key2.key_id}/services/1")
     assert response.status_code == 400
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_rejects_a_service_key_for_another_service(create_api_key, status_of):
+    """A SERVICE key reaches only the services it is associated with."""
+    outsider = create_api_key(KeyType.SERVICE, "outsider", "scoping")
+
+    assert status_of("trt-srv_test_another_test_service", outsider.value).status_code == 403
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_accepts_the_master_admin_key_for_any_service(test_settings, status_of):
+    """Master keys are seeded as ADMIN rows by the populate migration and reach everything."""
+    assert status_of("trt-srv_test_another_test_service", test_settings.api_keys[0]).status_code == 200
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, create_api_key, test_db):
+    """403 must precede the status match: every branch of it records wake intent."""
+    outsider = create_api_key(KeyType.SERVICE, "nowake", "scoping")
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.IDLE
+    test_db.commit()
+    before = service.last_active_time
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": outsider.value},
+    )
+
+    assert response.status_code == 403
+    test_db.refresh(service)
+    assert service.last_active_time == before

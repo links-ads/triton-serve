@@ -22,9 +22,10 @@ when it goes idle.
   work through. Its state is disposable: a lost message is re-fired by the
   next reconcile tick or caught by the build reaper, so nothing needs to
   persist it.
-- **Proxy** — Traefik, the single entry point. It authenticates the request,
-  asks the backend whether the target service is ready, and forwards only if
-  it is.
+- **Proxy** — Traefik, the single entry point. It asks the backend about every
+  request: the backend authenticates the key, checks it is entitled to that
+  service, and reports whether the service is ready. Traefik forwards only if
+  all three hold.
 - **Triton services** — vanilla Triton containers, launched in explicit mode
   so each one loads only the models it was asked for.
 
@@ -88,6 +89,14 @@ The backend serves its own interactive OpenAPI documentation. Behind the
 proxy it lives at `/api/docs`, covering model upload and management, service
 creation and updates, API key administration, and the resource allocation
 overview.
+
+Keys come in three types. A `SERVICE` key reaches only the services it is
+associated with; an `ADMIN` key reaches every service; a `USER` key gets
+management access through the API but no service access at all, since reaching a
+service requires an `ADMIN` or `SERVICE` key. The `api_keys` setting seeds
+the master keys as `ADMIN` rows, but only when the populate migration first
+runs — editing it afterwards has no effect on access, so rotate master keys
+through the key API, not through configuration.
 
 ## Development
 
