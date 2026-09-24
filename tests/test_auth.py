@@ -28,6 +28,18 @@ def create_api_key(test_db):
     return _create_api_key
 
 
+@pytest.fixture
+def status_of(test_client, test_db):
+    def _status_of(service_name: str, key: str):
+        # READY so an entitled key projects to 200: the request path itself never spawns a container
+        service = test_db.query(Service).filter(Service.service_name == service_name).one()
+        service.runtime_status = RuntimeStatus.READY
+        test_db.commit()
+        return test_client.get(f"/status/{service_name}", headers={"X-API-Key": key})
+
+    return _status_of
+
+
 @pytest.mark.order(after="test_models.py::test_create_models_from_zip")
 def test_api_key_authorized(test_client, test_settings):
     # make a get request for /models and set the X-API-Key header to the app_secret
@@ -56,7 +68,7 @@ def test_create_api_key(test_client, key_type):
 
 
 @pytest.mark.order(after="test_services.py::test_delete_is_db_only")
-def test_create_service_key(test_client, test_db):
+def test_create_service_key(test_client, status_of):
     service_name = "trt-srv_test_test_service"
     # First, create a service
     service_response = test_client.post(
@@ -84,11 +96,7 @@ def test_create_service_key(test_client, test_db):
     assert data["services"][0]["service_id"] == service_id
 
     # the new key must reach the service it was created for
-    service = test_db.query(Service).filter(Service.service_name == service_name).one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-    status = test_client.get(f"/status/{service_name}", headers={"X-API-Key": data["value"]})
-    assert status.status_code == 200
+    assert status_of(service_name, data["value"]).status_code == 200
 
 
 @pytest.mark.order(after="test_api_key_unauthorized")
@@ -155,7 +163,7 @@ def test_revoke_api_key(test_client, create_api_key, test_db):
 def test_add_service_to_key(
     test_client,
     create_api_key,
-    test_db,
+    status_of,
 ):
     api_key = create_api_key(KeyType.SERVICE, "svc1", "status_check")
     service_name = "trt-srv_test_another_test_service"
@@ -182,19 +190,15 @@ def test_add_service_to_key(
     assert data["services"][0]["service_id"] == service_id
 
     # associating an existing key must let it reach the service (issue 105)
-    service = test_db.query(Service).filter(Service.service_name == service_name).one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-    status = test_client.get(f"/status/{service_name}", headers={"X-API-Key": api_key.value})
-    assert status.status_code == 200
+    assert status_of(service_name, api_key.value).status_code == 200
 
     retry = test_client.post(f"/keys/{api_key.key_id}/services/{service_id}")
     assert retry.status_code == 400
 
 
 @pytest.mark.order(after="test_add_service_to_key")
-def test_status_endpoint_auth(test_client, test_db):
-    from triton_serve.database.model import RuntimeStatus, Service
+def test_status_endpoint_auth(test_client, status_of):
+    service_name = "trt-srv_test_another_test_service"
 
     # using the client, get the service key associated with test project
     response = test_client.get("/keys", params={"project": "status_check"})
@@ -204,46 +208,14 @@ def test_status_endpoint_auth(test_client, test_db):
     assert len(data) > 0
     key = data[0]["value"]
 
-    # mark the service READY so a passing key projects to 200 (the request path never spawns)
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-
-    # Test with user key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": "test_key_userkey1"},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 403
-
-    # Test with no key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": ""},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 401
-
-    # Test with invalid key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": "invalid_key"},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 401
-
-    # test with the service key
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": key},
-    )
-    LOG.debug(response.text)
-    assert response.status_code == 200
+    assert status_of(service_name, "test_key_userkey1").status_code == 403
+    assert status_of(service_name, "").status_code == 401
+    assert status_of(service_name, "invalid_key").status_code == 401
+    assert status_of(service_name, key).status_code == 200
 
 
 @pytest.mark.order(after="test_add_service_to_key")
-def test_remove_service_from_key(test_client, create_api_key, test_db):
+def test_remove_service_from_key(test_client, create_api_key, status_of):
     api_key = create_api_key(KeyType.SERVICE, "svc2", "test_project")
     service_name = "trt-srv_yet_another_test_service"
 
@@ -260,15 +232,12 @@ def test_remove_service_from_key(test_client, create_api_key, test_db):
     service_id = service_response.json()["service_id"]
 
     test_client.post(f"/keys/{api_key.key_id}/services/{service_id}")
-    service = test_db.query(Service).filter(Service.service_name == service_name).one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-    assert test_client.get(f"/status/{service_name}", headers={"X-API-Key": api_key.value}).status_code == 200
+    assert status_of(service_name, api_key.value).status_code == 200
 
     # Remove service from key
     response = test_client.delete(f"/keys/{api_key.key_id}/services/{service_id}")
     assert response.status_code == 204
-    assert test_client.get(f"/status/{service_name}", headers={"X-API-Key": api_key.value}).status_code == 403
+    assert status_of(service_name, api_key.value).status_code == 403
 
 
 @pytest.mark.order(after="test_revoke_api_key")
@@ -347,34 +316,17 @@ def test_remove_service_from_non_service_key(test_client, create_api_key):
 
 
 @pytest.mark.order(after="test_status_endpoint_auth")
-def test_status_rejects_a_service_key_for_another_service(test_client, create_api_key, test_db):
+def test_status_rejects_a_service_key_for_another_service(create_api_key, status_of):
     """A SERVICE key reaches only the services it is associated with."""
     outsider = create_api_key(KeyType.SERVICE, "outsider", "scoping")
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
 
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": outsider.value},
-    )
-
-    assert response.status_code == 403
+    assert status_of("trt-srv_test_another_test_service", outsider.value).status_code == 403
 
 
 @pytest.mark.order(after="test_status_endpoint_auth")
-def test_status_accepts_the_master_admin_key_for_any_service(test_client, test_settings, test_db):
+def test_status_accepts_the_master_admin_key_for_any_service(test_settings, status_of):
     """Master keys are seeded as ADMIN rows by the populate migration and reach everything."""
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
-    service.runtime_status = RuntimeStatus.READY
-    test_db.commit()
-
-    response = test_client.get(
-        "/status/trt-srv_test_another_test_service",
-        headers={"X-API-Key": test_settings.api_keys[0]},
-    )
-
-    assert response.status_code == 200
+    assert status_of("trt-srv_test_another_test_service", test_settings.api_keys[0]).status_code == 200
 
 
 @pytest.mark.order(after="test_status_endpoint_auth")
