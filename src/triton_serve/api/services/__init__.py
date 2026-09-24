@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
+from triton_serve.api.auth.domain import key_allows_service
 from triton_serve.api.dto import ServiceCreateBody, ServiceUpdateBody
 from triton_serve.api.services import domain
 from triton_serve.config import (
@@ -11,7 +12,7 @@ from triton_serve.config import (
     get_settings,
     get_traefik,
 )
-from triton_serve.database.model import DesiredState, RuntimeStatus
+from triton_serve.database.model import APIKey, DesiredState, RuntimeStatus
 from triton_serve.database.schema import ServiceSchema
 from triton_serve.extensions import get_db
 from triton_serve.security import require_admin, require_elevated, require_service
@@ -219,6 +220,7 @@ def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depen
     tags=["operations"],
     responses={
         200: {"description": "Service is READY; forward the request."},
+        403: {"description": "The key is not entitled to this service."},
         404: {"description": "No such service, or it is RETIRED."},
         503: {"description": "Service is not ready (warming, idle, recovering, suspended, or failed)."},
     },
@@ -226,7 +228,7 @@ def retry_service(service_id: int, db: Session = Depends(get_db), _: Any = Depen
 def service_status(
     service_name: str,
     db: Session = Depends(get_db),
-    _: Any = Depends(require_service),
+    key: APIKey = Depends(require_service),
 ) -> Response:
     """traefik forwardAuth hook. Reads the persisted runtime_status ONLY -- never Docker.
 
@@ -236,6 +238,10 @@ def service_status(
     service = domain.get_service_record_by_name(db=db, service_name=service_name)
     if service is None or service.runtime_status == RuntimeStatus.RETIRED:
         return Response(status_code=404)
+    # before the match, not inside it: every non-terminal branch below records wake intent, which
+    # an unentitled caller must not be able to trigger
+    if not key_allows_service(key, service):
+        return Response(status_code=403)
 
     match service.runtime_status:
         case RuntimeStatus.READY:

@@ -343,3 +343,53 @@ def test_remove_service_from_non_service_key(test_client, create_api_key):
     assert response.status_code == 400
     response = test_client.delete(f"/keys/{api_key2.key_id}/services/1")
     assert response.status_code == 400
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_rejects_a_service_key_for_another_service(test_client, create_api_key, test_db):
+    """A SERVICE key reaches only the services it is associated with."""
+    outsider = create_api_key(KeyType.SERVICE, "outsider", "scoping")
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    test_db.commit()
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": outsider.value},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_accepts_the_master_admin_key_for_any_service(test_client, test_settings, test_db):
+    """Master keys are seeded as ADMIN rows by the populate migration and reach everything."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    test_db.commit()
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": test_settings.api_keys[0]},
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, create_api_key, test_db):
+    """403 must precede the status match: every branch of it records wake intent."""
+    outsider = create_api_key(KeyType.SERVICE, "nowake", "scoping")
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.IDLE
+    test_db.commit()
+    before = service.last_active_time
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": outsider.value},
+    )
+
+    assert response.status_code == 403
+    test_db.refresh(service)
+    assert service.last_active_time == before
