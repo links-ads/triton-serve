@@ -21,14 +21,13 @@ class TraefikConfigManager:
         if yaml_file_name.exists():
             yaml_file_name.unlink()
 
-    def add(self, service_prefix: str, service_name: str, api_keys: list[str]):
+    def add(self, service_prefix: str, service_name: str):
         """
         Updates the traefik config with the specified service.
 
         Args:
             service_prefix (str): The url prefix to use for the service.
             service_name (str): The name of the service.
-            api_keys (list[str]): The list of api keys to use for the service.
 
         Returns:
             `None`
@@ -45,16 +44,6 @@ class TraefikConfigManager:
                     f"{service_name}-stripprefix": {
                         "stripPrefix": {"prefixes": [prefix_name]},
                     },
-                    f"{service_name}-auth": {
-                        "plugin": {
-                            "traefik-api-key-middleware": {
-                                "authenticationHeader": True,
-                                "authenticationheaderName": "X-API-Key",
-                                "removeHeadersOnSuccess": False,
-                                "keys": api_keys,
-                            }
-                        }
-                    },
                     f"{service_name}-forward": {
                         "forwardAuth": {
                             "address": f"http://backend:5000/status/{service_name}",
@@ -66,9 +55,8 @@ class TraefikConfigManager:
                         "rule": path_prefix,
                         "entryPoints": ["http"],
                         "middlewares": [
-                            f"{service_name}-auth@file",  # we first check that the key is associated with the service
-                            f"{service_name}-forward@file",  # then we check that the service is running (if it is stopped, we start it)
-                            f"{service_name}-stripprefix@file",  # we strip the prefix from the request
+                            f"{service_name}-forward@file",  # the backend authorizes the key and reports readiness
+                            f"{service_name}-stripprefix@file",
                         ],
                         "service": service_name,
                     }

@@ -9,7 +9,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.cors import CORSMiddleware
 
 from triton_serve.api import allocations, auth, models, services
-from triton_serve.api.services.domain import rebuild_service_config
 from triton_serve.config import AppSettings, get_storage, get_traefik
 from triton_serve.database import database_manager
 from triton_serve.database.model import Service
@@ -33,7 +32,7 @@ def sync_traefik_configs(session, settings: AppSettings) -> None:
         log.error("traefik sync found %d config files and no live services; deleting nothing", len(on_disk))
         return
     for service in services:
-        rebuild_service_config(session, traefik, service, settings.service_prefix, settings.api_keys)
+        traefik.add(service_prefix=settings.service_prefix, service_name=service.service_name)
     for stale in on_disk - {service.service_name for service in services}:
         log.warning("removing orphaned traefik config for %s", stale)
         traefik.delete(service_name=stale)

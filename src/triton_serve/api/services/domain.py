@@ -21,12 +21,10 @@ from triton_serve.builder.resolve import resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
-    APIKey,
     DesiredState,
     Device,
     DeviceAllocation,
     ImageStatus,
-    KeyType,
     Model,
     RuntimeStatus,
     Service,
@@ -49,41 +47,6 @@ def get_container_by_name(client: DockerClient, name: str) -> Container | None:
         return client.containers.get(name)
     except NotFound:
         return None
-
-
-def rebuild_service_config(
-    db: Session,
-    traefik: TraefikConfigManager,
-    service: Service,
-    service_prefix: str,
-    default_keys: list[str],
-) -> None:
-    """Rewrites a service's Traefik config file from database truth.
-
-    Single source of truth for a service's config: idempotent and safe to call on key
-    assignment, creation, refresh, and startup sync alike. The written key set is the
-    default (master) keys plus every non-expired service key associated with the service.
-
-    Args:
-        db (Session): The database session.
-        traefik (TraefikConfigManager): The Traefik config manager.
-        service (Service): The service whose config to rebuild.
-        service_prefix (str): The url prefix to use for the service.
-        default_keys (list[str]): The default/master keys always granted access.
-    """
-    keys = list(default_keys)
-    associated_keys = (
-        db.query(APIKey)
-        .join(APIKey.services)
-        .filter(
-            Service.service_id == service.service_id,
-            APIKey.key_type == KeyType.SERVICE,
-            APIKey.expires_at > timezone_aware_now(),
-        )
-        .all()
-    )
-    keys.extend(api_key.value for api_key in associated_keys if api_key.value not in keys)
-    traefik.add(service_prefix=service_prefix, service_name=service.service_name, api_keys=keys)
 
 
 def list_services(
@@ -538,7 +501,6 @@ def create_service(
     service_timeout: int,
     service_priority: int,
     model_infos: list[str],
-    service_api_keys: list[str] | None = None,
     service_healthcheck: ServiceHealthcheck | None = None,
 ) -> Service:
     """Declaratively creates a service record; the reconciler spawns the container out of band.
@@ -559,7 +521,6 @@ def create_service(
         service_timeout (int): The timeout for the service.
         service_priority (int): The priority for the service.
         model_infos (list): The list of models to load.
-        service_api_keys (list[str], optional): The list of API keys to use for the service.
         service_healthcheck (ServiceHealthcheck, optional): The container healthcheck, if any.
 
     Returns:
@@ -590,13 +551,7 @@ def create_service(
             device_infos=device_infos,
             device_percent=device_percent,
         )
-        rebuild_service_config(
-            db=db,
-            traefik=traefik,
-            service=service,
-            service_prefix=service_url_prefix,
-            default_keys=service_api_keys or [],
-        )
+        traefik.add(service_prefix=service_url_prefix, service_name=service.service_name)
         db.commit()
         db.refresh(service)
         # strictly after the commit: an enqueue before it could race a transaction that rolls back

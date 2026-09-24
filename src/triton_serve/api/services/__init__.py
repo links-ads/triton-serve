@@ -144,7 +144,6 @@ def create_service(
         service_timeout=service_params.timeout,
         service_priority=service_params.priority,
         model_infos=service_params.models,
-        service_api_keys=settings.api_keys,
         service_healthcheck=service_params.healthcheck,
     )
 

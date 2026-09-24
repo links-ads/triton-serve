@@ -18,9 +18,7 @@ from triton_serve.api.dto import (
     KeyType,
     ServiceKeyCreateBody,
 )
-from triton_serve.api.services.domain import get_service_or_not_found, rebuild_service_config
-from triton_serve.config import AppSettings, get_settings, get_traefik
-from triton_serve.config.traefik import TraefikConfigManager
+from triton_serve.api.services.domain import get_service_or_not_found
 from triton_serve.database.schema import APIKeySchema
 from triton_serve.extensions import get_db
 from triton_serve.security import require_admin
@@ -151,8 +149,6 @@ def create_service_key(
     service_id: int,
     key_data: ServiceKeyCreateBody,
     db: Session = Depends(get_db),
-    traefik: TraefikConfigManager = Depends(get_traefik),
-    settings: AppSettings = Depends(get_settings),
     _: Any = Depends(require_admin),
 ):
     """
@@ -170,8 +166,6 @@ def create_service_key(
         services=[service],
     )
 
-    # Rebuild the Traefik configuration from database truth
-    rebuild_service_config(db, traefik, service, settings.service_prefix, settings.api_keys)
     return new_key
 
 
@@ -180,8 +174,6 @@ def add_service_key(
     key_id: int,
     service_id: int,
     db: Session = Depends(get_db),
-    traefik: TraefikConfigManager = Depends(get_traefik),
-    settings: AppSettings = Depends(get_settings),
     _: Any = Depends(require_admin),
 ):
     """
@@ -197,7 +189,6 @@ def add_service_key(
     service = get_service_or_not_found(db=db, service_id=service_id)
 
     updated_key = add_service_to_key(db=db, key=key, service=service)
-    rebuild_service_config(db, traefik, service, settings.service_prefix, settings.api_keys)
 
     return updated_key
 
@@ -207,8 +198,6 @@ def remove_service_key(
     key_id: int,
     service_id: int,
     db: Session = Depends(get_db),
-    traefik: TraefikConfigManager = Depends(get_traefik),
-    settings: AppSettings = Depends(get_settings),
     _: Any = Depends(require_admin),
 ):
     """
@@ -227,4 +216,3 @@ def remove_service_key(
         raise HTTPException(status_code=400, detail="This key is not associated with the specified service")
 
     remove_service_from_key(db=db, key=key, service=service)
-    rebuild_service_config(db, traefik, service, settings.service_prefix, settings.api_keys)

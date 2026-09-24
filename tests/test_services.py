@@ -153,8 +153,10 @@ def test_triton_ping_unauthorized(name):
         if response.status_code != 404:
             break
         time.sleep(5)
-    assert response.status_code == 403
-    assert "Invalid API Key" in response.json()["message"]
+    # no key at all: with the edge plugin gone the backend's forwardAuth answers, so this is now
+    # APIKeyHeader's 401 with FastAPI's `detail`, not the plugin's 403 with its own `message`
+    assert response.status_code == 401
+    assert "Not authenticated" in response.json()["detail"]
 
 
 @pytest.mark.order(after="test_triton_ping_unauthorized")

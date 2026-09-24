@@ -35,9 +35,3 @@ providers:
   file:
     directory: /etc/traefik/configs
     watch: true
-
-experimental:
-  plugins:
-    traefik-api-key-middleware:
-      moduleName: "github.com/dtomlinson91/traefik-api-key-middleware"
-      version: "v0.1.2"
