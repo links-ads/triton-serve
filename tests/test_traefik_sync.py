@@ -23,11 +23,6 @@ def db_session():
 
 
 @pytest.fixture
-def traefik(tmp_path):
-    return TraefikConfigManager(tmp_path)
-
-
-@pytest.fixture
 def service(db_session):
     svc = Service(
         service_name="demo",
