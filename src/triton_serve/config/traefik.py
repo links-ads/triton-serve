@@ -7,6 +7,14 @@ class TraefikConfigManager:
     def __init__(self, configs_path: Path):
         self.configs_path = configs_path
 
+    def names(self) -> set[str]:
+        """Reports the service names that currently have a config file on disk.
+
+        Returns:
+            set[str]: one name per managed config file.
+        """
+        return {path.stem for path in self.configs_path.glob("*.yaml")}
+
     def delete(self, service_name: str):
         """
         Deletes the traefik service file for the specified service.

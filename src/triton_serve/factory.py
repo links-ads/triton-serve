@@ -25,7 +25,7 @@ def sync_traefik_configs(session, settings: AppSettings) -> None:
     """
     traefik = get_traefik()
     services = session.query(Service).filter(Service.deleted_at.is_(None)).all()
-    on_disk = {path.stem for path in settings.configs_path.glob("*.yaml")}
+    on_disk = traefik.names()
     # an empty result beside a full directory is an outage or a truncated read, never a mandate to
     # delete every route on the platform
     if on_disk and not services:
