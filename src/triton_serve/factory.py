@@ -19,11 +19,29 @@ log = logging.getLogger(uvicorn.__name__)
 
 
 def sync_traefik_configs(session, settings: AppSettings) -> None:
-    """Rebuilds every non-deleted service's Traefik config from database truth."""
+    """Rebuilds every non-deleted service's Traefik config from database truth, and removes the rest.
+
+    Deleting is half the job: a service removed while the API was down otherwise keeps a live route
+    forever, which is how five stale configs accumulated in production.
+    """
     traefik = get_traefik()
     services = session.query(Service).filter(Service.deleted_at.is_(None)).all()
+    on_disk = {path.stem for path in settings.configs_path.glob("*.yaml")}
+    # an empty result beside a full directory is an outage or a truncated read, never a mandate to
+    # delete every route on the platform
+    if on_disk and not services:
+        log.error("traefik sync found %d config files and no live services; deleting nothing", len(on_disk))
+        return
     for service in services:
         rebuild_service_config(session, traefik, service, settings.service_prefix, settings.api_keys)
+    for stale in on_disk - {service.service_name for service in services}:
+        log.warning("removing orphaned traefik config for %s", stale)
+        try:
+            traefik.delete(service_name=stale)
+        except OSError as error:
+            # a leftover file is the state we are already in, so it must not abort the rest of the
+            # sweep or the boot
+            log.warning("could not remove orphaned traefik config %s: %s", stale, error)
 
 
 def create_app(settings: AppSettings, init_database: bool = True) -> FastAPI:
