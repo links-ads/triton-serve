@@ -1,4 +1,5 @@
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from shutil import move, rmtree
 
@@ -8,6 +9,7 @@ from triton_serve.storage.base import (
     StorableModel,
     StorableVersion,
     StorageURI,
+    StoredVersion,
     WorkerRepository,
 )
 
@@ -95,6 +97,21 @@ class LocalModelStorage(ModelStorage):
     def check_reachable(self) -> None:
         if not self.base_path.is_dir():
             raise FileNotFoundError(f"the model repository {self.base_path} is not a directory")
+
+    def list_versions(self) -> list[StoredVersion]:
+        if not self.base_path.is_dir():
+            return []
+        versions = []
+        for model_root in self.base_path.iterdir():
+            # the stash sits inside the repository, and holds the only copy of a model mid-transaction
+            if not model_root.is_dir() or model_root.name == STASH_DIRNAME:
+                continue
+            for version_dir in model_root.iterdir():
+                if not version_dir.is_dir() or not version_dir.name.isdigit():
+                    continue
+                modified = datetime.fromtimestamp(version_dir.stat().st_mtime, tz=UTC)
+                versions.append(StoredVersion(model_root.name, int(version_dir.name), modified))
+        return versions
 
     def worker_repository(self) -> WorkerRepository:
         mount = {self.volume: {"bind": self.mountpoint, "mode": "ro"}} if self.volume else {}

@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from tarfile import TarFile
 from typing import Protocol
@@ -25,6 +26,21 @@ class StorableVersion(Protocol):
     """All a backend needs of a version: the number its files are filed under."""
 
     version_id: int
+
+
+@dataclass
+class StoredVersion:
+    """One model version as a backend actually holds it.
+
+    Satisfies StorableModel and StorableVersion structurally, so the sweep hands it straight back to
+    `delete` instead of needing a database row for something the database does not know about. Not
+    frozen for that reason: both protocols declare plain mutable attributes, which a frozen
+    dataclass's read-only fields do not satisfy.
+    """
+
+    model_name: str
+    version_id: int
+    modified_at: datetime
 
 
 class BaseExtractor[ArchiveT: (ZipFile, TarFile)](ABC):
@@ -258,6 +274,19 @@ class ModelStorage(ABC):
 
         Raises:
             Exception: a backend-specific error naming what could not be reached.
+        """
+        ...
+
+    @abstractmethod
+    def list_versions(self) -> list[StoredVersion]:
+        """Lists every model version this backend is actually holding.
+
+        Reports what is stored, not what should be: the sweep compares it against the database.
+        Anything that is not a `<model>/<version>` pair with a numeric version is skipped, so loose
+        files, a model root holding only a config, and the stash never appear here.
+
+        Returns:
+            list[StoredVersion]: every stored version, each with the time it last changed.
         """
         ...
 

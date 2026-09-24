@@ -1,11 +1,13 @@
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 from shutil import rmtree
 
 from azure.core.exceptions import ResourceNotFoundError  # pyright: ignore[reportMissingImports]
 from azure.storage.blob import (  # pyright: ignore[reportMissingImports]
     BlobClient,
+    BlobProperties,
     BlobServiceClient,
     ContainerClient,
 )
@@ -16,6 +18,7 @@ from triton_serve.storage.base import (
     StorableModel,
     StorableVersion,
     StorageURI,
+    StoredVersion,
     WorkerRepository,
 )
 
@@ -80,8 +83,11 @@ class AzureModelStorage(ModelStorage):
         # outside self.prefix by construction: the workers are pointed at the prefix, never here
         return f"{self.stash_prefix}/{model_name}"
 
+    def _blob_properties_under(self, prefix: str) -> list[BlobProperties]:
+        return list(self._container.list_blobs(name_starts_with=f"{prefix}/"))
+
     def _blobs_under(self, prefix: str) -> list[str]:
-        return [blob.name for blob in self._container.list_blobs(name_starts_with=f"{prefix}/")]
+        return [blob.name for blob in self._blob_properties_under(prefix)]
 
     def _move(self, source_prefix: str, destination_prefix: str) -> None:
         """Copies every blob under one prefix to another, then deletes the originals.
@@ -219,6 +225,18 @@ class AzureModelStorage(ModelStorage):
                 f"azure container {self.container!r} on account {self.account!r} is unreachable "
                 f"(prefix {self.prefix!r}): {error}"
             ) from error
+
+    def list_versions(self) -> list[StoredVersion]:
+        newest: dict[tuple[str, int], datetime] = {}
+        for blob in self._blob_properties_under(self.prefix):
+            parts = blob.name[len(self.prefix) + 1 :].split("/")
+            # <model>/<version>/<file>; anything shorter is a loose blob or a model root's config
+            if len(parts) < 3 or not parts[1].isdigit():
+                continue
+            key = (parts[0], int(parts[1]))
+            if blob.last_modified is not None and (key not in newest or blob.last_modified > newest[key]):
+                newest[key] = blob.last_modified
+        return [StoredVersion(name, version, modified) for (name, version), modified in newest.items()]
 
     def worker_repository(self) -> WorkerRepository:
         uri = f"as://{self.account}/{self.container}/{self.prefix}".rstrip("/")

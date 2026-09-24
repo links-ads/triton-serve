@@ -256,3 +256,46 @@ def test_storage_wiring_wins_over_a_user_supplied_environment():
     )
 
     assert merged == {"MY_FLAG": "1", "WORKER_REPOSITORY": "/models"}
+
+
+def test_list_versions_reports_a_saved_version(storage, tmp_path):
+    model, version = make_model("conf_list"), make_version(1)
+    storage.save(model, version, origin=make_origin(tmp_path, "conf_list", 1))
+
+    stored = [(v.model_name, v.version_id) for v in storage.list_versions() if v.model_name == "conf_list"]
+
+    assert stored == [("conf_list", 1)]
+
+
+def test_list_versions_forgets_a_deleted_version(storage, tmp_path):
+    model = make_model("conf_list_del")
+    storage.save(model, make_version(1), origin=make_origin(tmp_path, "conf_list_del", 1))
+    storage.save(model, make_version(2), origin=make_origin(tmp_path, "conf_list_del", 2))
+
+    storage.delete(model, make_version(1))
+
+    stored = {(v.model_name, v.version_id) for v in storage.list_versions()}
+    assert ("conf_list_del", 1) not in stored
+    assert ("conf_list_del", 2) in stored
+
+
+def test_list_versions_never_reports_an_outstanding_stash(tmp_path):
+    """A stash is the only copy of a model mid-transaction; listing it would let the sweep delete it."""
+    repository = tmp_path / "models"
+    repository.mkdir()
+    backend = LocalModelStorage(repository)
+    model = make_model("conf_stash_list")
+    backend.save(model, make_version(1), origin=make_origin(tmp_path, "conf_stash_list", 1))
+
+    backend.stash(model)
+
+    assert backend.list_versions() == []
+
+
+def test_list_versions_ignores_a_model_root_with_only_a_config(tmp_path):
+    """#136 can leave a config behind with no versions; model roots are out of scope for the sweep."""
+    repository = tmp_path / "models"
+    (repository / "conf_leftover").mkdir(parents=True)
+    (repository / "conf_leftover" / "config.pbtxt").write_text("")
+
+    assert LocalModelStorage(repository).list_versions() == []
