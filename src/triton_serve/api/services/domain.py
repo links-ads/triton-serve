@@ -136,7 +136,7 @@ def get_service_and_entitlement(db: Session, service_name: str, key: APIKey) -> 
         .filter(Service.service_name == service_name, Service.deleted_at.is_(None))
         .one_or_none()
     )
-    return (row[0], row[1]) if row is not None else None
+    return (row.Service, row.associated) if row is not None else None
 
 
 def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:

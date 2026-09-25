@@ -335,6 +335,7 @@ def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, c
     outsider = create_api_key(KeyType.SERVICE, "nowake", "scoping")
     service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
     service.runtime_status = RuntimeStatus.IDLE
+    service.last_active_time = datetime.now(UTC) - timedelta(seconds=40)
     test_db.commit()
     before = service.last_active_time
 
@@ -439,8 +440,8 @@ def test_status_still_records_wake_intent_for_an_idle_service(test_client, test_
 
 @pytest.mark.order(after="test_status_endpoint_auth")
 def test_status_reports_404_before_403_for_an_unknown_service(test_client, create_api_key):
-    """Absence outranks entitlement. The single-statement lookup must still return the row
-    regardless of entitlement, or this collapses into a 403."""
+    """An unknown service name yields 404 even for a key entitled to nothing: absence outranks
+    entitlement."""
     outsider = create_api_key(KeyType.SERVICE, "ordering", "scoping")
 
     response = test_client.get(
