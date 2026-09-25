@@ -449,3 +449,26 @@ def test_status_reports_404_before_403_for_an_unknown_service(test_client, creat
     )
 
     assert response.status_code == 404
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_refuses_a_service_key_associated_with_a_different_service(test_client, create_api_key, status_of):
+    """A key entitled to one service must not reach another. This is the case a correlated
+    EXISTS and an uncorrelated one ("associated with *some* service") disagree on."""
+    key = create_api_key(KeyType.SERVICE, "crosswise", "scoping")
+
+    other_response = test_client.post(
+        "/services",
+        json={
+            "name": "trt-srv_test_crosswise_other_service",
+            "models": ["onnx"],
+            "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
+        },
+    )
+    assert other_response.status_code == 201
+    other_service_id = other_response.json()["service_id"]
+
+    associate = test_client.post(f"/keys/{key.key_id}/services/{other_service_id}")
+    assert associate.status_code == 200
+
+    assert status_of("trt-srv_test_another_test_service", key.value).status_code == 403
