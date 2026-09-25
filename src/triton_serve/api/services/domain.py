@@ -593,14 +593,26 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     db.commit()
 
 
-def update_active_time(db: Session, service: Service):
-    """Updates the last active time of a service.
+# the reconciler compares last_active_time against the service's own inactivity_timeout, so the
+# staleness a suppressed write introduces must stay far below that timeout or a service under
+# traffic would be scaled to zero mid-service. a hundredth keeps two orders of magnitude of
+# margin, and integer division means any timeout below 100s writes every time -- the case where
+# coalescing could not be safe disables itself instead of needing its own validation.
+LIVENESS_WRITE_DIVISOR = 100
+
+
+def record_activity(db: Session, service: Service) -> None:
+    """Records that a service is being used, coalescing writes the reconciler cannot observe.
 
     Args:
         db (Session): The database session.
-        service (Service): The service to update.
+        service (Service): The service being reached.
     """
-    service.last_active_time = timezone_aware_now()
+    now = timezone_aware_now()
+    liveness_write_window = service.inactivity_timeout // LIVENESS_WRITE_DIVISOR
+    if (now - service.last_active_time).total_seconds() < liveness_write_window:
+        return
+    service.last_active_time = now
     db.commit()
 
 

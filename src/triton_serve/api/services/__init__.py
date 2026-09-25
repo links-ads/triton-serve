@@ -244,15 +244,15 @@ def service_status(
 
     match service.runtime_status:
         case RuntimeStatus.READY:
-            domain.update_active_time(db=db, service=service)
+            domain.record_activity(db=db, service=service)
             return Response(status_code=200)
         case RuntimeStatus.IDLE:
-            domain.update_active_time(db=db, service=service)  # wake intent -> replica_target=1 next tick
+            domain.record_activity(db=db, service=service)  # wake intent -> replica_target=1 next tick
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case RuntimeStatus.WARMING | RuntimeStatus.RECOVERING:
             # a client still polling through a slow boot keeps the service wanted, so the
             # reconciler does not scale it back to zero mid-wake once inactivity elapses
-            domain.update_active_time(db=db, service=service)
+            domain.record_activity(db=db, service=service)
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case _:  # SUSPENDED, FAILED
             return Response(status_code=503)
