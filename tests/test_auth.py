@@ -335,6 +335,8 @@ def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, c
     outsider = create_api_key(KeyType.SERVICE, "nowake", "scoping")
     service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
     service.runtime_status = RuntimeStatus.IDLE
+    service.inactivity_timeout = 3600  # a 36s coalescing window, so the 40s age below would be written
+    service.last_active_time = datetime.now(UTC) - timedelta(seconds=40)
     test_db.commit()
     before = service.last_active_time
 
@@ -343,6 +345,136 @@ def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, c
         headers={"X-API-Key": outsider.value},
     )
 
-    assert response.status_code == 403
+    # timestamp first: displacing the 403 guard must fail here, not on the status code
     test_db.refresh(service)
     assert service.last_active_time == before
+    assert response.status_code == 403
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_does_not_rewrite_a_fresh_liveness_timestamp(test_client, test_db, test_settings):
+    """The reconciler cannot observe sub-window precision, so a fresh timestamp is left alone."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    service.inactivity_timeout = 3600  # a 36s coalescing window
+    service.last_active_time = datetime.now(UTC)
+    test_db.commit()
+    before = service.last_active_time
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": test_settings.api_keys[0]},
+    )
+
+    assert response.status_code == 200
+    test_db.refresh(service)
+    assert service.last_active_time == before
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_writes_liveness_once_the_window_has_elapsed(test_client, test_db, test_settings):
+    """Past the window the write must land, or the reconciler would scale a live service to zero."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    service.inactivity_timeout = 3600
+    service.last_active_time = datetime.now(UTC) - timedelta(seconds=40)
+    test_db.commit()
+    before = service.last_active_time
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": test_settings.api_keys[0]},
+    )
+
+    assert response.status_code == 200
+    test_db.refresh(service)
+    assert service.last_active_time > before
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_always_writes_liveness_for_a_short_inactivity_timeout(test_client, test_db, test_settings):
+    """A timeout below the divisor yields a zero window: coalescing disables itself rather than
+    letting a service be stopped while it is serving. Pinned so nobody adds a floor."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.READY
+    service.inactivity_timeout = 5  # 5 // 100 == 0
+    service.last_active_time = datetime.now(UTC)
+    test_db.commit()
+    before = service.last_active_time
+
+    try:
+        response = test_client.get(
+            "/status/trt-srv_test_another_test_service",
+            headers={"X-API-Key": test_settings.api_keys[0]},
+        )
+
+        # the reconciler may have moved the service off READY under a 5s timeout; either branch
+        # records activity, so the timestamp is the assertion that matters here
+        assert response.status_code in (200, 503)
+        test_db.refresh(service)
+        assert service.last_active_time > before
+    finally:
+        service.inactivity_timeout = 3600
+        service.last_active_time = datetime.now(UTC)
+        test_db.commit()
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_still_records_wake_intent_for_an_idle_service(test_client, test_db, test_settings):
+    """Scale-from-zero depends on the IDLE branch recording intent; coalescing must not break it."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
+    service.runtime_status = RuntimeStatus.IDLE
+    service.inactivity_timeout = 3600
+    service.last_active_time = datetime.now(UTC) - timedelta(seconds=40)
+    test_db.commit()
+    before = service.last_active_time
+
+    response = test_client.get(
+        "/status/trt-srv_test_another_test_service",
+        headers={"X-API-Key": test_settings.api_keys[0]},
+    )
+
+    assert response.status_code == 503
+    assert "Retry-After" in response.headers
+    test_db.refresh(service)
+    assert service.last_active_time > before
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_reports_404_before_403_for_an_unknown_service(test_client, create_api_key):
+    """An unknown service name yields 404 even for a key entitled to nothing: absence outranks
+    entitlement."""
+    outsider = create_api_key(KeyType.SERVICE, "ordering", "scoping")
+
+    response = test_client.get(
+        "/status/trt-srv_test_no_such_service",
+        headers={"X-API-Key": outsider.value},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_refuses_a_service_key_associated_with_a_different_service(test_client, create_api_key, status_of):
+    """A key entitled to one service must not reach another. This is the case a correlated
+    EXISTS and an uncorrelated one ("associated with *some* service") disagree on."""
+    key = create_api_key(KeyType.SERVICE, "crosswise", "scoping")
+
+    other_response = test_client.post(
+        "/services",
+        json={
+            "name": "trt-srv_test_crosswise_other_service",
+            "models": ["onnx"],
+            "resources": {"gpus": 0, "shm_size": 256, "mem_size": 4096},
+        },
+    )
+    assert other_response.status_code == 201
+    other_service_id = other_response.json()["service_id"]
+
+    try:
+        associate = test_client.post(f"/keys/{key.key_id}/services/{other_service_id}")
+        assert associate.status_code == 200
+
+        assert status_of("trt-srv_test_another_test_service", key.value).status_code == 403
+    finally:
+        test_client.delete(f"/services/{other_service_id}")

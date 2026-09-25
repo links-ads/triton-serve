@@ -234,25 +234,26 @@ def service_status(
     Not-ready never returns 2XX (a 2XX makes forwardAuth forward to a dead backend).
     IDLE additionally records wake intent; the reconciler brings the service up out of band.
     """
-    service = domain.get_service_record_by_name(db=db, service_name=service_name)
-    if service is None or service.runtime_status == RuntimeStatus.RETIRED:
+    resolved = domain.get_service_with_key_association(db=db, service_name=service_name, key=key)
+    if resolved is None or resolved[0].runtime_status == RuntimeStatus.RETIRED:
         return Response(status_code=404)
+    service, associated = resolved
     # before the match, not inside it: every non-terminal branch below records wake intent, which
     # an unentitled caller must not be able to trigger
-    if not key_allows_service(key, service):
+    if not key_allows_service(key, associated):
         return Response(status_code=403)
 
     match service.runtime_status:
         case RuntimeStatus.READY:
-            domain.update_active_time(db=db, service=service)
+            domain.record_activity(db=db, service=service)
             return Response(status_code=200)
         case RuntimeStatus.IDLE:
-            domain.update_active_time(db=db, service=service)  # wake intent -> replica_target=1 next tick
+            domain.record_activity(db=db, service=service)  # wake intent -> replica_target=1 next tick
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case RuntimeStatus.WARMING | RuntimeStatus.RECOVERING:
             # a client still polling through a slow boot keeps the service wanted, so the
             # reconciler does not scale it back to zero mid-wake once inactivity elapses
-            domain.update_active_time(db=db, service=service)
+            domain.record_activity(db=db, service=service)
             return Response(status_code=503, headers={"Retry-After": _RETRY_AFTER})
         case _:  # SUSPENDED, FAILED
             return Response(status_code=503)

@@ -21,6 +21,7 @@ from triton_serve.builder.resolve import resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
+    APIKey,
     DesiredState,
     Device,
     DeviceAllocation,
@@ -29,6 +30,7 @@ from triton_serve.database.model import (
     RuntimeStatus,
     Service,
     ServiceResources,
+    key_service_association,
     timezone_aware_now,
 )
 from triton_serve.storage import WorkerRepository
@@ -106,9 +108,35 @@ def get_service_or_not_found(db: Session, service_id: int) -> Service:
     return service
 
 
-def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
-    """Pure DB lookup for the status projection hook. No Docker call."""
-    return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
+def get_service_with_key_association(db: Session, service_name: str, key: APIKey) -> tuple[Service, bool] | None:
+    """Resolves a service by name together with whether one key is associated with it.
+
+    One statement rather than two: testing membership by walking `key.services` hydrates every
+    service the key can reach, which grows with the key rather than with the question being asked.
+
+    Args:
+        db (Session): The database session.
+        service_name (str): The name of the service being requested.
+        key (APIKey): The authenticated key.
+
+    Returns:
+        tuple[Service, bool] | None: The service and whether the key is associated with it, or
+            None when no live service carries the name.
+    """
+    associated = (
+        select(key_service_association.c.service_id)
+        .where(
+            key_service_association.c.api_key_id == key.key_id,
+            key_service_association.c.service_id == Service.service_id,
+        )
+        .exists()
+    )
+    row = (
+        db.query(Service, associated.label("associated"))
+        .filter(Service.service_name == service_name, Service.deleted_at.is_(None))
+        .one_or_none()
+    )
+    return (row.Service, row.associated) if row is not None else None
 
 
 def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:
@@ -593,14 +621,24 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     db.commit()
 
 
-def update_active_time(db: Session, service: Service):
-    """Updates the last active time of a service.
+# suppressed writes age last_active_time, which the reconciler compares against inactivity_timeout:
+# too much staleness would scale a service to zero under traffic, so a hundredth keeps the margin
+# wide, and integer division makes any timeout under 100s write every time.
+LIVENESS_WRITE_DIVISOR = 100
+
+
+def record_activity(db: Session, service: Service) -> None:
+    """Records that a service is being used, coalescing writes the reconciler cannot observe.
 
     Args:
         db (Session): The database session.
-        service (Service): The service to update.
+        service (Service): The service being reached.
     """
-    service.last_active_time = timezone_aware_now()
+    now = timezone_aware_now()
+    liveness_write_window = service.inactivity_timeout // LIVENESS_WRITE_DIVISOR
+    if (now - service.last_active_time).total_seconds() < liveness_write_window:
+        return
+    service.last_active_time = now
     db.commit()
 
 
