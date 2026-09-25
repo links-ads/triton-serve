@@ -435,3 +435,17 @@ def test_status_still_records_wake_intent_for_an_idle_service(test_client, test_
     assert "Retry-After" in response.headers
     test_db.refresh(service)
     assert service.last_active_time > before
+
+
+@pytest.mark.order(after="test_status_endpoint_auth")
+def test_status_reports_404_before_403_for_an_unknown_service(test_client, create_api_key):
+    """Absence outranks entitlement. The single-statement lookup must still return the row
+    regardless of entitlement, or this collapses into a 403."""
+    outsider = create_api_key(KeyType.SERVICE, "ordering", "scoping")
+
+    response = test_client.get(
+        "/status/trt-srv_test_no_such_service",
+        headers={"X-API-Key": outsider.value},
+    )
+
+    assert response.status_code == 404

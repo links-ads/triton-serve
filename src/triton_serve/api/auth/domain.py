@@ -178,7 +178,7 @@ def remove_service_from_key(db: Session, key: APIKey, service: Service) -> APIKe
     return key
 
 
-def key_allows_service(key: APIKey, service: Service) -> bool:
+def key_allows_service(key: APIKey, associated: bool) -> bool:
     """Reports whether a key is entitled to reach one service.
 
     ADMIN keys are the platform's master keys and reach every service; a SERVICE key reaches only
@@ -187,11 +187,10 @@ def key_allows_service(key: APIKey, service: Service) -> bool:
 
     Args:
         key (APIKey): the authenticated key.
-        service (Service): the service being requested.
+        associated (bool): whether the key is associated with the service, as resolved by the
+            service lookup.
 
     Returns:
         bool: True if the key may reach the service.
     """
-    if key.key_type == KeyType.ADMIN:
-        return True
-    return any(associated.service_id == service.service_id for associated in key.services)
+    return key.key_type == KeyType.ADMIN or associated

@@ -21,6 +21,7 @@ from triton_serve.builder.resolve import resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
 from triton_serve.database.model import (
+    APIKey,
     DesiredState,
     Device,
     DeviceAllocation,
@@ -29,6 +30,7 @@ from triton_serve.database.model import (
     RuntimeStatus,
     Service,
     ServiceResources,
+    key_service_association,
     timezone_aware_now,
 )
 from triton_serve.storage import WorkerRepository
@@ -106,9 +108,35 @@ def get_service_or_not_found(db: Session, service_id: int) -> Service:
     return service
 
 
-def get_service_record_by_name(db: Session, service_name: str) -> Service | None:
-    """Pure DB lookup for the status projection hook. No Docker call."""
-    return db.query(Service).filter(Service.service_name == service_name, Service.deleted_at.is_(None)).one_or_none()
+def get_service_and_entitlement(db: Session, service_name: str, key: APIKey) -> tuple[Service, bool] | None:
+    """Resolves a service by name together with whether one key is associated with it.
+
+    One statement rather than two: testing membership by walking `key.services` hydrates every
+    service the key can reach, which grows with the key rather than with the question being asked.
+
+    Args:
+        db (Session): The database session.
+        service_name (str): The name of the service being requested.
+        key (APIKey): The authenticated key.
+
+    Returns:
+        tuple[Service, bool] | None: The service and whether the key is associated with it, or
+            None when no live service carries the name.
+    """
+    associated = (
+        select(key_service_association.c.service_id)
+        .where(
+            key_service_association.c.api_key_id == key.key_id,
+            key_service_association.c.service_id == Service.service_id,
+        )
+        .exists()
+    )
+    row = (
+        db.query(Service, associated.label("associated"))
+        .filter(Service.service_name == service_name, Service.deleted_at.is_(None))
+        .one_or_none()
+    )
+    return (row[0], row[1]) if row is not None else None
 
 
 def set_desired_state(db: Session, service_id: int, desired: DesiredState, wake: bool = False) -> None:
