@@ -108,7 +108,7 @@ def get_service_or_not_found(db: Session, service_id: int) -> Service:
     return service
 
 
-def get_service_and_entitlement(db: Session, service_name: str, key: APIKey) -> tuple[Service, bool] | None:
+def get_service_with_key_association(db: Session, service_name: str, key: APIKey) -> tuple[Service, bool] | None:
     """Resolves a service by name together with whether one key is associated with it.
 
     One statement rather than two: testing membership by walking `key.services` hydrates every
@@ -621,11 +621,8 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
     db.commit()
 
 
-# the reconciler compares last_active_time against the service's own inactivity_timeout, so the
-# staleness a suppressed write introduces must stay far below that timeout or a service under
-# traffic would be scaled to zero mid-service. a hundredth keeps two orders of magnitude of
-# margin, and integer division means any timeout below 100s writes every time -- the case where
-# coalescing could not be safe disables itself instead of needing its own validation.
+# suppressed writes age last_active_time, which the reconciler compares against inactivity_timeout:
+# a hundredth keeps the margin wide, and integer division makes any timeout under 100s write every time.
 LIVENESS_WRITE_DIVISOR = 100
 
 

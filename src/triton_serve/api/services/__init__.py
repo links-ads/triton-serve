@@ -234,7 +234,7 @@ def service_status(
     Not-ready never returns 2XX (a 2XX makes forwardAuth forward to a dead backend).
     IDLE additionally records wake intent; the reconciler brings the service up out of band.
     """
-    resolved = domain.get_service_and_entitlement(db=db, service_name=service_name, key=key)
+    resolved = domain.get_service_with_key_association(db=db, service_name=service_name, key=key)
     if resolved is None or resolved[0].runtime_status == RuntimeStatus.RETIRED:
         return Response(status_code=404)
     service, associated = resolved
