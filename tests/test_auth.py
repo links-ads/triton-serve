@@ -335,6 +335,7 @@ def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, c
     outsider = create_api_key(KeyType.SERVICE, "nowake", "scoping")
     service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_another_test_service").one()
     service.runtime_status = RuntimeStatus.IDLE
+    service.inactivity_timeout = 3600  # a 36s coalescing window, so the 40s age below would be written
     service.last_active_time = datetime.now(UTC) - timedelta(seconds=40)
     test_db.commit()
     before = service.last_active_time
@@ -344,9 +345,10 @@ def test_status_does_not_record_wake_intent_for_an_unentitled_key(test_client, c
         headers={"X-API-Key": outsider.value},
     )
 
-    assert response.status_code == 403
+    # timestamp first: displacing the 403 guard must fail here, not on the status code
     test_db.refresh(service)
     assert service.last_active_time == before
+    assert response.status_code == 403
 
 
 @pytest.mark.order(after="test_status_endpoint_auth")
@@ -469,7 +471,10 @@ def test_status_refuses_a_service_key_associated_with_a_different_service(test_c
     assert other_response.status_code == 201
     other_service_id = other_response.json()["service_id"]
 
-    associate = test_client.post(f"/keys/{key.key_id}/services/{other_service_id}")
-    assert associate.status_code == 200
+    try:
+        associate = test_client.post(f"/keys/{key.key_id}/services/{other_service_id}")
+        assert associate.status_code == 200
 
-    assert status_of("trt-srv_test_another_test_service", key.value).status_code == 403
+        assert status_of("trt-srv_test_another_test_service", key.value).status_code == 403
+    finally:
+        test_client.delete(f"/services/{other_service_id}")

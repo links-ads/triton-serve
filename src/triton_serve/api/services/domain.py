@@ -622,7 +622,8 @@ def delete_service(db: Session, traefik: TraefikConfigManager, service_id: int) 
 
 
 # suppressed writes age last_active_time, which the reconciler compares against inactivity_timeout:
-# a hundredth keeps the margin wide, and integer division makes any timeout under 100s write every time.
+# too much staleness would scale a service to zero under traffic, so a hundredth keeps the margin
+# wide, and integer division makes any timeout under 100s write every time.
 LIVENESS_WRITE_DIVISOR = 100
 
 
