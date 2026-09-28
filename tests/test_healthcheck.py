@@ -1,4 +1,4 @@
-from triton_serve.api.services.domain import docker_healthcheck
+from triton_serve.api.services.container import docker_healthcheck
 
 
 def test_no_healthcheck_is_none():

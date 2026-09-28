@@ -248,7 +248,7 @@ def test_an_azure_layout_that_exposes_the_stash_is_refused(kwargs):
 
 def test_storage_wiring_wins_over_a_user_supplied_environment():
     """A service creator must not be able to repoint a worker at a repository of their choosing."""
-    from triton_serve.api.services.domain import merge_environment
+    from triton_serve.api.services.container import merge_environment
 
     merged = merge_environment(
         {"WORKER_REPOSITORY": "/somewhere/else", "MY_FLAG": "1"},

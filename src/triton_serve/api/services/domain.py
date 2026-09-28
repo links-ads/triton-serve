@@ -1,22 +1,14 @@
-import contextlib
 import logging
 import math
 from typing import cast
 
-from docker import DockerClient
-from docker.errors import APIError, ImageNotFound, NotFound
-from docker.models.containers import Container
-from docker.models.images import Image
-from docker.types import DeviceRequest
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from triton_serve.api.dto import ServiceCreateBody, ServiceCreateResources, ServiceHealthcheck, ServiceUpdateBody
 from triton_serve.api.models.domain import get_single_model
-from triton_serve.api.services.observe import effective_image_ref
 from triton_serve.builder.execute import enqueue_build
-from triton_serve.builder.registry import RegistryAuth, auth_config
 from triton_serve.builder.resolve import resolve_service_image
 from triton_serve.config.schema import AppSettings
 from triton_serve.config.traefik import TraefikConfigManager
@@ -33,22 +25,8 @@ from triton_serve.database.model import (
     key_service_association,
     timezone_aware_now,
 )
-from triton_serve.storage import WorkerRepository
 
 LOG = logging.getLogger("uvicorn")
-
-
-def get_container_by_name(client: DockerClient, name: str) -> Container | None:
-    """Returns the container currently holding `name` (in any state), or None if absent.
-
-    Lookup is by name rather than id: a MISSING service's stored container_id is exactly what
-    no longer resolves, while a container under the service name may still exist (e.g. it came
-    back under a new id after a host reboot, or a stale one is squatting the name).
-    """
-    try:
-        return client.containers.get(name)
-    except NotFound:
-        return None
 
 
 def list_services(
@@ -253,131 +231,6 @@ def get_available_devices(db: Session, count: int, required_percentage: float = 
     )
 
     return cast(list, db.scalars(query).all())
-
-
-def get_service_image(docker_client: DockerClient, image_name: str, auth: RegistryAuth) -> Image:
-    """Returns a local image, pulling it from the registry if it is not present.
-
-    Images are private, so the pull is always authenticated when credentials are configured. An
-    unauthenticated pull of a private package 404s, which would otherwise surface as a missing
-    image rather than as the auth error it is.
-
-    Args:
-        docker_client (DockerClient): The docker client.
-        image_name (str): The full reference of the image.
-        auth (RegistryAuth): The credential provider for the pull.
-
-    Returns:
-        Image: The local image.
-
-    Raises:
-        HTTPException: 412 if the image can be neither found nor pulled.
-    """
-    try:
-        try:
-            return docker_client.images.get(image_name)
-        except ImageNotFound:
-            return docker_client.images.pull(image_name, auth_config=auth_config(auth))
-    except APIError as e:
-        if e.status_code in (401, 403):
-            raise HTTPException(status_code=412, detail=f"Registry rejected credentials for {image_name}") from e
-        raise HTTPException(status_code=412, detail=f"Cannot retrieve image: {e.explanation}") from e
-
-
-def docker_healthcheck(healthcheck: dict | None) -> dict | None:
-    """Converts a stored healthcheck (seconds, snake_case) to the docker API shape (ns, PascalCase).
-
-    Services store the user-facing shape so it round-trips through the API unchanged; docker only
-    accepts durations in nanoseconds. Returns None when the service has no healthcheck configured,
-    which leaves the container without one and falls back to the boot-grace timer in `observe`.
-    """
-    if not healthcheck:
-        return None
-    return {
-        "Test": healthcheck["test"],
-        "Interval": int(healthcheck["interval"] * 1e9),
-        "Timeout": int(healthcheck["timeout"] * 1e9),
-        "Retries": healthcheck["retries"],
-        "StartPeriod": int(healthcheck["start_period"] * 1e9),
-    }
-
-
-def merge_environment(user: dict[str, str], storage: dict[str, str]) -> dict[str, str]:
-    """Storage wiring wins: a service creator must not be able to repoint a worker's repository."""
-    return {**user, **storage}
-
-
-def spawn_service_container(
-    client: DockerClient,
-    image_id: str,
-    worker_name: str,
-    worker_network: str,
-    repository: WorkerRepository,
-    models: list[Model],
-    resources: ServiceCreateResources,
-    devices: list | None = None,
-    environment: dict[str, str] | None = None,
-    healthcheck: dict | None = None,
-):
-    """Spawns a triton worker container.
-
-    Args:
-        client (DockerClient): The docker client.
-        image_id (str): The identifier of the docker image to use.
-        worker_name (str): The name of the worker container.
-        worker_network (str): The name of the docker network to use.
-        repository (WorkerRepository): The mounts and environment that point the worker at the
-            model repository.
-        models (list[Model]): The list of models to load.
-        resources (ServiceCreateResources): The resources to use for the container.
-        devices (list, optional): The list of devices to use. Defaults to None.
-        environment (dict[str, str], optional): The environment variables to pass to the container. Defaults to None.
-        healthcheck (dict, optional): The stored healthcheck config, or None for no healthcheck.
-
-    Returns:
-        str: The id of the created container.
-
-    Raises:
-        HTTPException: If the container could not be created.
-    """
-    # check if container with the same name already exists
-    if worker_name in [container.name for container in client.containers.list(all=True)]:
-        raise HTTPException(status_code=409, detail=f"Container with name {worker_name} already exists")
-
-    environment = merge_environment(environment or {}, repository.environment)
-
-    # prepare the list of models to load
-    triton_args = " ".join([f"--load-model={model.model_name}" for model in models])
-
-    volumes = repository.mounts
-
-    gpus, runtime = None, None
-    if devices:
-        runtime = "nvidia"
-        gpus = [
-            DeviceRequest(device_ids=[str(gpu.uuid)], capabilities=[["gpu", "nvidia", "compute"]]) for gpu in devices
-        ]
-
-    # no restart_policy: the reconciler owns restarts. a docker-level on-failure policy would
-    # restart the container behind its back, showing up as `restarting` (-> BOOTING) and silently
-    # multiplying the crash budget by the policy's retry count.
-    container = client.containers.run(
-        detach=True,
-        remove=False,
-        image=image_id,
-        name=worker_name,
-        command=triton_args,
-        network=worker_network,
-        volumes=volumes,
-        environment=environment,
-        healthcheck=docker_healthcheck(healthcheck),  # type: ignore
-        runtime=runtime,
-        device_requests=gpus,
-        nano_cpus=int(resources.cpu_count * 1e9),
-        mem_limit=f"{resources.mem_size}m",
-        shm_size=f"{resources.shm_size}m",
-    )
-    return container.id
 
 
 def validate_models(db: Session, model_infos: list) -> list:
@@ -640,76 +493,6 @@ def record_activity(db: Session, service: Service) -> None:
         return
     service.last_active_time = now
     db.commit()
-
-
-def recreate_service_container(
-    db: Session,
-    client: DockerClient,
-    service: Service,
-    service_network: str,
-    repository: WorkerRepository,
-    pull_credentials: RegistryAuth,
-) -> Service:
-    """Tears down the current container (if any) and spawns a fresh one from DB state.
-
-    Does not touch deleted_at, Traefik config, or device allocation records.
-
-    Args:
-        db (Session): The database session.
-        client (DockerClient): The Docker client.
-        service (Service): The service ORM object.
-        service_network (str): The Docker network name.
-        repository (WorkerRepository): The mounts and environment that point the worker at the
-            model repository.
-        pull_credentials (RegistryAuth): Credentials for pulling a private image.
-
-    Returns:
-        Service: The updated service.
-    """
-    try:
-        if service.container_id:
-            with contextlib.suppress(NotFound):
-                client.containers.get(service.container_id).remove(force=True)
-            service.container_id = None
-
-        # a stale/foreign container may still hold the name under a different id (e.g. dirty
-        # docker after a host reboot); clear it by name so the spawn below cannot 409.
-        if (squatter := get_container_by_name(client, service.service_name)) is not None:
-            squatter.remove(force=True)
-
-        image = get_service_image(client, effective_image_ref(service), pull_credentials)
-        res = service.resources
-        device_objs = [alloc.device for alloc in service.device_allocations]
-
-        container_id = spawn_service_container(
-            client=client,
-            image_id=cast(str, image.id),
-            worker_name=service.service_name,
-            worker_network=service_network,
-            repository=repository,
-            models=service.models,
-            resources=ServiceCreateResources(
-                gpus=0.0,
-                shm_size=res.shm_size,
-                mem_size=res.mem_size,
-                cpu_count=res.cpu_count,
-            ),
-            devices=device_objs,
-            environment=res.environment_variables or {},
-            healthcheck=res.healthcheck,
-        )
-
-        service.container_id = str(container_id)
-        db.commit()
-        db.refresh(service)
-        return service
-
-    except AssertionError as e:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=f"Error recreating service: {e!s}") from e
-    except APIError as e:
-        db.rollback()
-        raise HTTPException(status_code=e.status_code or 500, detail=f"Error recreating service: {e!s}") from e
 
 
 def update_service(

@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 from celery.signals import worker_process_init, worker_process_shutdown
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from triton_serve.api.services.execute import execute
 from triton_serve.api.services.observe import observe
@@ -101,10 +101,16 @@ def update_service_status() -> None:
             return
         with database_manager.session() as db:
             # joinedload: the tick reads service.image.status for every service, and an
-            # N+1 per tick is exactly what this loop must not do
+            # N+1 per tick is exactly what this loop must not do. the three collections are what
+            # the drift check reads through container_spec, on every service that has a container
             services = (
                 db.query(Service)
-                .options(joinedload(Service.image))
+                .options(
+                    joinedload(Service.image),
+                    selectinload(Service.resources),
+                    selectinload(Service.models),
+                    selectinload(Service.device_allocations),
+                )
                 .filter(Service.runtime_status != RuntimeStatus.RETIRED)
                 .all()
             )
@@ -129,20 +135,22 @@ def update_service_status() -> None:
 
                     target = _replica_target(service, now) if service.desired_state == DesiredState.AVAILABLE else 0
                     image_status = service.image.status if service.image is not None else None
-                    observed = observe(client, service, settings.service_boot_grace, image_status)
+                    observation = observe(client, service, settings.service_boot_grace, image_status)
                     decision = decide(
                         desired=service.desired_state,
-                        observed=observed,
+                        observed=observation.state,
+                        drifted=observation.drifted,
                         replica_target=target,
                         attempts=service.restart_attempts,
                         max_attempts=settings.service_max_restart_attempts,
                     )
                     LOG.debug(
-                        "reconcile %s: desired=%s target=%d observed=%s attempts=%d -> %s => %s",
+                        "reconcile %s: desired=%s target=%d observed=%s drifted=%s attempts=%d -> %s => %s",
                         service.service_name,
                         service.desired_state.value,
                         target,
-                        observed.value,
+                        observation.state.value,
+                        observation.drifted,
                         service.restart_attempts,
                         decision.action.value,
                         decision.status.value,

@@ -1,11 +1,11 @@
 import logging
 import time
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import requests
 
-from triton_serve.database.model import DesiredState, Device, Model, RuntimeStatus, Service
+from triton_serve.database.model import DesiredState, Device, Model, RuntimeStatus, Service, ServiceResources
 from triton_serve.tasks import update_service_status
 
 LOG = logging.getLogger(pytest.__name__)
@@ -332,6 +332,74 @@ def test_reconciler_idles_then_wakes(test_db, test_docker, test_settings):
 
 
 @pytest.mark.order(after="test_reconciler_idles_then_wakes")
+def test_edited_service_is_recreated_by_the_reconciler(test_client, test_db, test_docker):
+    """#128: a container-affecting edit reaches the running container without manual docker."""
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    service.desired_state = DesiredState.AVAILABLE
+    test_db.commit()
+    _drive_reconciler(test_db, service, until={RuntimeStatus.READY}, ticks=12, delay=5)
+    before = test_docker.containers.get(service.service_name).id
+
+    response = test_client.put(f"/services/{service.service_id}", json={"environment": {"DRIFT_MARKER": "128"}})
+    assert response.status_code == 200
+
+    _drive_reconciler(test_db, service, until={RuntimeStatus.READY}, ticks=12, delay=5)
+    container = test_docker.containers.get(service.service_name)
+    assert container.id != before, "the edit never reached the container"
+    assert "DRIFT_MARKER=128" in container.attrs["Config"]["Env"]
+
+
+@pytest.mark.order(after="test_edited_service_is_recreated_by_the_reconciler")
+def test_drift_recreate_clears_the_budget(test_db, test_docker, test_settings):
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    service.restart_attempts = 2
+    service.last_attempt_at = datetime.now(UTC)
+    test_db.commit()
+
+    execute(
+        db=test_db,
+        client=test_docker,
+        service=service,
+        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True),
+        settings=test_settings,
+    )
+    test_db.refresh(service)
+    assert service.restart_attempts == 0
+    assert service.last_attempt_at is None
+
+
+@pytest.mark.order(after="test_drift_recreate_clears_the_budget")
+def test_a_failing_bring_up_spends_the_budget_even_without_increment(test_db, test_settings):
+    from triton_serve.api.services.execute import execute
+    from triton_serve.api.services.reconcile import Action, Decision
+
+    class _ExplodingDocker:
+        @property
+        def containers(self):
+            raise RuntimeError("daemon is gone")
+
+    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
+    service.restart_attempts = 0
+    test_db.commit()
+
+    # without this, a drift that can never be brought up would retry forever: the decision resets
+    # the budget every tick and nothing ever exhausts it
+    execute(
+        db=test_db,
+        client=_ExplodingDocker(),
+        service=service,
+        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True),
+        settings=test_settings,
+    )
+    test_db.refresh(service)
+    assert service.restart_attempts == 1
+    assert service.runtime_status == RuntimeStatus.RECOVERING
+
+
+@pytest.mark.order(after="test_a_failing_bring_up_spends_the_budget_even_without_increment")
 def test_delete_is_db_only(test_client, test_db):
     """Delete is DB-only: it tombstones the record and drops it from listings; the reconciler
     tears down the container out of band."""
@@ -369,6 +437,9 @@ def test_bad_image_service_ends_failed(test_db, test_docker, test_settings):
         desired_state=DesiredState.AVAILABLE,
         runtime_status=RuntimeStatus.WARMING,
     )
+    # every service created through the API owns a resources row; without one the recreate path
+    # fails reading the row instead of failing on the pull, which is what this test is about
+    svc.resources = ServiceResources(cpu_count=1, shm_size=64, mem_size=256)
     test_db.add(svc)
     test_db.commit()
 

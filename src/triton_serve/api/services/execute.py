@@ -3,7 +3,7 @@ import logging
 from docker import DockerClient
 from sqlalchemy.orm import Session
 
-from triton_serve.api.services.domain import get_container_by_name, recreate_service_container
+from triton_serve.api.services.container import get_container_by_name, recreate_service_container
 from triton_serve.api.services.reconcile import Action, Decision
 from triton_serve.builder.registry import pull_auth
 from triton_serve.config import get_storage
@@ -11,6 +11,8 @@ from triton_serve.config.schema import AppSettings
 from triton_serve.database.model import RuntimeStatus, Service, timezone_aware_now
 
 LOG = logging.getLogger(__name__)
+
+_BRING_UP = frozenset({Action.RECREATE, Action.PULL, Action.START})
 
 
 def _recreate(db: Session, client: DockerClient, service: Service, settings: AppSettings) -> None:
@@ -89,9 +91,10 @@ def execute(
     except Exception:
         LOG.exception("Action %s failed for service %s", action, service.service_id)
         db.rollback()
-        # a budgeted action (recreate/pull) that raised must still spend the budget, or a broken
-        # image would retry forever; RECOVERING makes the next tick honor the backoff gate
-        if decision.increment_attempt:
+        # any bring-up that raised must spend the budget, or a spec that cannot be brought up at
+        # all would retry forever: a drift decision resets the counter on every tick and nothing
+        # would ever exhaust it. RECOVERING makes the next tick honor the backoff gate.
+        if decision.increment_attempt or action in _BRING_UP:
             _spend_attempt(service)
             service.runtime_status = RuntimeStatus.RECOVERING
             db.commit()
@@ -100,6 +103,10 @@ def execute(
 
     if decision.increment_attempt:
         _spend_attempt(service)
+    elif decision.reset_attempts:
+        # an edit is a new bet: the fixed spec gets a clean budget, and this is what lifts FAILED
+        service.restart_attempts = 0
+        service.last_attempt_at = None
     elif decision.status == RuntimeStatus.READY:
         _maybe_reset_budget(service, settings.service_restart_cooldown)
     service.runtime_status = decision.status
