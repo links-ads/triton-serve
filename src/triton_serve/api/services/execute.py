@@ -104,7 +104,7 @@ def execute(
     if decision.increment_attempt:
         _spend_attempt(service)
     elif decision.reset_attempts:
-        # an edit is a new bet: the fixed spec gets a clean budget, and this is what lifts FAILED
+        # reset when a failing service has been edited in order to retry
         service.restart_attempts = 0
         service.last_attempt_at = None
     elif decision.status == RuntimeStatus.READY:

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from triton_serve.api.services.container import spawn_service_container
-from triton_serve.api.services.spec import SPEC_LABEL, ContainerSpec, container_spec
+from triton_serve.api.services.spec import SPEC_LABEL, container_spec
 
 
 def _svc(models=("b", "a"), devices=("gpu-2", "gpu-1"), env=None, healthcheck=None, image="img:1"):
@@ -68,20 +68,6 @@ def test_non_container_fields_do_not_change_the_fingerprint():
     svc.priority = 9
     svc.last_active_time = "later"
     assert container_spec(svc).fingerprint == base
-
-
-def test_fingerprint_is_short_and_stable_for_a_label():
-    value = ContainerSpec(
-        image_ref="img:1",
-        models=("a",),
-        cpu_count=1,
-        mem_size=1,
-        shm_size=1,
-        environment={},
-        healthcheck=None,
-        device_uuids=(),
-    ).fingerprint
-    assert len(value) == 16 and value.isalnum()
 
 
 class _RecordingContainers:

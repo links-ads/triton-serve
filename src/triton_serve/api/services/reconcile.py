@@ -37,17 +37,15 @@ class Decision:
 def _available(observed: ObservedState, drifted: bool, target: int, attempts: int, max_attempts: int) -> Decision:
     exhausted = attempts >= max_attempts
     if target == 0:
-        # scaled to zero; only surface FAILED if a crash already spent the budget. drift is left
-        # alone here on purpose: acting on it would start the container and defeat scale-to-zero,
-        # and the wake path below recreates rather than starts a drifted one anyway
+        # scaled to zero; only surface FAILED if a crash already spent the budget. drift waits:
+        # acting on it here would start the container and defeat scale-to-zero
         if observed in (ObservedState.RUNNING, ObservedState.BOOTING):
             return Decision(Action.STOP, RuntimeStatus.IDLE)
         if observed is ObservedState.CRASHED and exhausted:
             return Decision(Action.NONE, RuntimeStatus.FAILED)
         return Decision(Action.NONE, RuntimeStatus.IDLE)
 
-    # a container that no longer matches the service row is wrong whatever its liveness, and an
-    # edit is a new bet: it clears the budget rather than spending it, and lifts FAILED
+    # a container that no longer matches the service row is wrong whatever its liveness
     if drifted and observed not in (ObservedState.IMAGE_PENDING, ObservedState.IMAGE_FAILED):
         return Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True)
 
