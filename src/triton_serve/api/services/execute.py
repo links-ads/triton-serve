@@ -91,10 +91,10 @@ def execute(
     except Exception:
         LOG.exception("Action %s failed for service %s", action, service.service_id)
         db.rollback()
-        # any bring-up that raised must spend the budget, or a spec that cannot be brought up at
-        # all would retry forever: a drift decision resets the counter on every tick and nothing
-        # would ever exhaust it. RECOVERING makes the next tick honor the backoff gate.
-        if decision.increment_attempt or action in _BRING_UP:
+        # a bring-up that carries no increment_attempt (ABSENT -> RECREATE, START) would otherwise
+        # retry forever: a recreate that removes the container and then fails leaves every later
+        # tick observing ABSENT. RECOVERING makes the next tick honor the backoff gate.
+        if action in _BRING_UP:
             _spend_attempt(service)
             service.runtime_status = RuntimeStatus.RECOVERING
             db.commit()

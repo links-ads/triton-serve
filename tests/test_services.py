@@ -340,6 +340,9 @@ def test_edited_service_is_recreated_by_the_reconciler(test_client, test_db, tes
     _drive_reconciler(test_db, service, until={RuntimeStatus.READY}, ticks=12, delay=5)
     before = test_docker.containers.get(service.service_name).id
 
+    service.restart_attempts = 2
+    service.last_attempt_at = datetime.now(UTC)
+    test_db.commit()
     response = test_client.put(f"/services/{service.service_id}", json={"environment": {"DRIFT_MARKER": "128"}})
     assert response.status_code == 200
 
@@ -347,31 +350,11 @@ def test_edited_service_is_recreated_by_the_reconciler(test_client, test_db, tes
     container = test_docker.containers.get(service.service_name)
     assert container.id != before, "the edit never reached the container"
     assert "DRIFT_MARKER=128" in container.attrs["Config"]["Env"]
+    test_db.refresh(service)
+    assert (service.restart_attempts, service.last_attempt_at) == (0, None), "the edit did not clear the budget"
 
 
 @pytest.mark.order(after="test_edited_service_is_recreated_by_the_reconciler")
-def test_drift_recreate_clears_the_budget(test_db, test_docker, test_settings):
-    from triton_serve.api.services.execute import execute
-    from triton_serve.api.services.reconcile import Action, Decision
-
-    service = test_db.query(Service).filter(Service.service_name == "trt-srv_test_svc2").one()
-    service.restart_attempts = 2
-    service.last_attempt_at = datetime.now(UTC)
-    test_db.commit()
-
-    execute(
-        db=test_db,
-        client=test_docker,
-        service=service,
-        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True),
-        settings=test_settings,
-    )
-    test_db.refresh(service)
-    assert service.restart_attempts == 0
-    assert service.last_attempt_at is None
-
-
-@pytest.mark.order(after="test_drift_recreate_clears_the_budget")
 def test_a_failing_bring_up_spends_the_budget_even_without_increment(test_db, test_settings):
     from triton_serve.api.services.execute import execute
     from triton_serve.api.services.reconcile import Action, Decision
@@ -385,13 +368,13 @@ def test_a_failing_bring_up_spends_the_budget_even_without_increment(test_db, te
     service.restart_attempts = 0
     test_db.commit()
 
-    # without this, a drift that can never be brought up would retry forever: the decision resets
-    # the budget every tick and nothing ever exhausts it
+    # without this, a recreate that removes the container and then fails would retry forever: every
+    # later tick observes ABSENT, whose decision carries no increment_attempt
     execute(
         db=test_db,
         client=_ExplodingDocker(),
         service=service,
-        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True),
+        decision=Decision(Action.RECREATE, RuntimeStatus.WARMING),
         settings=test_settings,
     )
     test_db.refresh(service)

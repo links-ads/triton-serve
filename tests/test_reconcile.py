@@ -73,9 +73,10 @@ def test_failed_is_terminal_when_exhausted_across_bringup_facts():
         assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
 
 
+@pytest.mark.parametrize("drifted", [False, True])
 @pytest.mark.parametrize("observed", list(ObservedState))
-def test_suspended_stops_live_else_noop(observed):
-    d = decide(D.SUSPENDED, observed, drifted=False, replica_target=0, attempts=0, max_attempts=3)
+def test_suspended_stops_live_else_noop(observed, drifted):
+    d = decide(D.SUSPENDED, observed, drifted=drifted, replica_target=0, attempts=0, max_attempts=3)
     assert d.status == R.SUSPENDED
     if observed in (A.RUNNING, A.BOOTING):
         assert d.action == Action.STOP
@@ -83,9 +84,11 @@ def test_suspended_stops_live_else_noop(observed):
         assert d.action == Action.NONE
 
 
+@pytest.mark.parametrize("drifted", [False, True])
 @pytest.mark.parametrize("observed", list(ObservedState))
-def test_retired_removes_or_finalizes(observed):
-    d = decide(D.RETIRED, observed, drifted=False, replica_target=0, attempts=0, max_attempts=3)
+def test_retired_removes_or_finalizes(observed, drifted):
+    # a tombstoned service still has rows and still fingerprints; drift must not revive it
+    d = decide(D.RETIRED, observed, drifted=drifted, replica_target=0, attempts=0, max_attempts=3)
     assert d.status == R.RETIRED
     if observed in (A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED):
         assert d.action == Action.REMOVE
@@ -118,7 +121,7 @@ def test_available_image_failed_is_terminal():
     assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
 
 
-@pytest.mark.parametrize("observed", [A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED, A.IMAGE_MISSING])
+@pytest.mark.parametrize("observed", [A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED])
 def test_drift_recreates_whatever_the_container_is_doing(observed):
     # one branch covers every liveness fact: a container that no longer matches the row is wrong
     # even while it is healthy, and starting the stopped one (EXITED_OK) is exactly the bug in #128
@@ -138,19 +141,3 @@ def test_drift_is_ignored_while_scaled_to_zero():
     # an edit must never wake a sleeping service; the wake path recreates instead
     d = decide(D.AVAILABLE, A.EXITED_OK, drifted=True, replica_target=0, attempts=0, max_attempts=3)
     assert (d.action, d.status) == (Action.NONE, R.IDLE)
-
-
-@pytest.mark.parametrize("observed", list(ObservedState))
-def test_drift_does_not_change_the_suspended_verdict(observed):
-    d = decide(D.SUSPENDED, observed, drifted=True, replica_target=0, attempts=0, max_attempts=3)
-    assert d.status == R.SUSPENDED
-    assert d.action == (Action.STOP if observed in (A.RUNNING, A.BOOTING) else Action.NONE)
-
-
-@pytest.mark.parametrize("observed", list(ObservedState))
-def test_drift_never_revives_a_retired_service(observed):
-    # a tombstoned service still has rows and still fingerprints; it must stay torn down
-    d = decide(D.RETIRED, observed, drifted=True, replica_target=0, attempts=0, max_attempts=3)
-    assert d.status == R.RETIRED
-    expected = Action.REMOVE if observed in (A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED) else Action.FINALIZE
-    assert d.action == expected

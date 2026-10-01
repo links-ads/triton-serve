@@ -19,6 +19,9 @@ class ContainerSpec:
     Deployment-level inputs (the docker network, the storage repository's mounts and environment)
     are deliberately absent: they come from settings, not from the service row, and including them
     would make a settings change recreate every container at once.
+
+    Changing these fields or the way they are serialised changes every fingerprint, which recreates
+    every AVAILABLE service that is scaled up and revives FAILED ones that still have a container.
     """
 
     image_ref: str

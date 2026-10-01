@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from docker.errors import NotFound
 
 from triton_serve.api.services.observe import observe
@@ -200,25 +201,20 @@ def test_matching_label_is_not_drifted():
     assert observe(FakeClient(container=c), svc, 30, ImageStatus.READY).drifted is False
 
 
-def test_mismatched_label_is_drifted():
-    svc = _svc()
-    c = _container("running", health="healthy", labels={SPEC_LABEL: "0000000000000000"})
-    observation = observe(FakeClient(container=c), svc, 30, ImageStatus.READY)
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {SPEC_LABEL: "0000000000000000"},
+        {},  # a container from before this feature: recreate it once rather than trust it
+        None,  # docker-py returns None when Config.Labels is null; .get on it would break the tick
+    ],
+)
+def test_a_label_that_does_not_match_is_drifted(labels):
+    c = _container("running", health="healthy", labels=labels)
+    observation = observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY)
     assert observation.drifted is True
     # drift must not cost the liveness fact: suspending a drifted service still has to stop it
     assert observation.state is ObservedState.RUNNING
-
-
-def test_unlabelled_container_is_drifted():
-    # a container from before this feature: recreate it once rather than trust it
-    c = _container("running", health="healthy", labels={})
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).drifted is True
-
-
-def test_null_labels_are_drifted_and_do_not_raise():
-    # docker-py returns None when Config.Labels is null; .get on it would break the whole tick
-    c = _container("running", health="healthy", labels=None)
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).drifted is True
 
 
 def test_absent_container_is_never_drifted():

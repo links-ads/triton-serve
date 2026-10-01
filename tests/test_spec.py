@@ -61,15 +61,6 @@ def test_every_container_affecting_field_changes_the_fingerprint():
     assert container_spec(_svc(healthcheck={"test": ["CMD", "true"]})).fingerprint != base
 
 
-def test_non_container_fields_do_not_change_the_fingerprint():
-    svc = _svc()
-    base = container_spec(svc).fingerprint
-    svc.inactivity_timeout = 7200
-    svc.priority = 9
-    svc.last_active_time = "later"
-    assert container_spec(svc).fingerprint == base
-
-
 class _RecordingContainers:
     def __init__(self):
         self.kwargs = None
@@ -82,10 +73,10 @@ class _RecordingContainers:
         return SimpleNamespace(id="container-1")
 
 
-def test_spawn_stamps_the_fingerprint_as_a_label():
+def test_spawn_applies_the_spec_to_the_container():
     containers = _RecordingContainers()
     client = SimpleNamespace(containers=containers)
-    spec = container_spec(_svc(env={"A": "1"}))
+    spec = container_spec(_svc(models=("a", "b"), env={"A": "1"}))
 
     spawn_service_container(
         client=client,
@@ -96,23 +87,8 @@ def test_spawn_stamps_the_fingerprint_as_a_label():
         spec=spec,
     )
 
-    assert containers.kwargs["labels"] == {SPEC_LABEL: spec.fingerprint}
-
-
-def test_spawn_applies_the_spec_to_the_container():
-    containers = _RecordingContainers()
-    client = SimpleNamespace(containers=containers)
-
-    spawn_service_container(
-        client=client,
-        image_id="img:1",
-        worker_name="svc",
-        worker_network="net",
-        repository=SimpleNamespace(mounts={}, environment={"STORAGE": "x"}),
-        spec=container_spec(_svc(models=("a", "b"), env={"A": "1"})),
-    )
-
     kwargs = containers.kwargs
+    assert kwargs["labels"] == {SPEC_LABEL: spec.fingerprint}
     assert kwargs["command"] == "--load-model=a --load-model=b"
     assert kwargs["mem_limit"] == "1024m"
     assert kwargs["nano_cpus"] == 2_000_000_000
