@@ -1,15 +1,26 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
 from docker.errors import NotFound
 
 from triton_serve.api.services.observe import observe
 from triton_serve.api.services.reconcile import ObservedState
+from triton_serve.api.services.spec import SPEC_LABEL, container_spec
 from triton_serve.database.model import ImageStatus
 
 
 def _svc(name="svc", image="img:1"):
-    return SimpleNamespace(service_name=name, service_image=image, image=None)
+    return SimpleNamespace(
+        service_name=name,
+        service_image=image,
+        image=None,
+        models=[],
+        device_allocations=[],
+        resources=SimpleNamespace(
+            cpu_count=1, mem_size=512, shm_size=64, environment_variables=None, healthcheck=None
+        ),
+    )
 
 
 class FakeContainers:
@@ -42,10 +53,11 @@ class FakeClient:
         self.images = FakeImages(image_present)
 
 
-def _container(status, exit_code=0, health=None, started=None, oom_killed=False):
+def _container(status, exit_code=0, health=None, started=None, oom_killed=False, labels=None):
     started = started or datetime.now(UTC)
     return SimpleNamespace(
         status=status,
+        labels=labels,
         attrs={
             "State": {
                 "ExitCode": exit_code,
@@ -59,72 +71,74 @@ def _container(status, exit_code=0, health=None, started=None, oom_killed=False)
 
 def test_absent_with_image_present_is_absent():
     assert (
-        observe(FakeClient(container=None, image_present=True), _svc(), 30, ImageStatus.READY) is ObservedState.ABSENT
+        observe(FakeClient(container=None, image_present=True), _svc(), 30, ImageStatus.READY).state
+        is ObservedState.ABSENT
     )
 
 
 def test_absent_with_image_missing_is_image_missing():
     assert (
-        observe(FakeClient(container=None, image_present=False), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=None, image_present=False), _svc(), 30, ImageStatus.READY).state
         is ObservedState.IMAGE_MISSING
     )
 
 
 def test_running_healthy_is_running():
     c = _container("running", health="healthy")
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.RUNNING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.RUNNING
 
 
 def test_running_health_starting_is_booting():
     c = _container("running", health="starting", started=datetime.now(UTC))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.BOOTING
 
 
 def test_running_health_unhealthy_is_crashed():
     # docker only reports unhealthy past the start period and after the configured retries, so
     # there is nothing left to wait for: the boot grace must not delay the verdict
     c = _container("running", health="unhealthy", started=datetime.now(UTC))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.CRASHED
 
 
 def test_running_health_stuck_past_grace_is_crashed():
     c = _container("running", health="unhealthy", started=datetime.now(UTC) - timedelta(seconds=120))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.CRASHED
 
 
 def test_running_health_starting_ignores_boot_grace():
     # starting cannot hang forever, docker leaves it after the start period; calling it crashed on
     # our own clock would recreate a container docker still considers to be warming up
     c = _container("running", health="starting", started=datetime.now(UTC) - timedelta(seconds=120))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.BOOTING
 
 
 def test_running_no_health_within_grace_is_booting():
     c = _container("running", started=datetime.now(UTC))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.BOOTING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.BOOTING
 
 
 def test_running_no_health_past_grace_is_running():
     c = _container("running", started=datetime.now(UTC) - timedelta(seconds=120))
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.RUNNING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.RUNNING
 
 
 def test_exited_zero_is_exited_ok():
     assert (
-        observe(FakeClient(container=_container("exited", 0)), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=_container("exited", 0)), _svc(), 30, ImageStatus.READY).state
         is ObservedState.EXITED_OK
     )
 
 
 def test_exited_nonzero_is_crashed():
     assert (
-        observe(FakeClient(container=_container("exited", 1)), _svc(), 30, ImageStatus.READY) is ObservedState.CRASHED
+        observe(FakeClient(container=_container("exited", 1)), _svc(), 30, ImageStatus.READY).state
+        is ObservedState.CRASHED
     )
 
 
 def test_exited_on_sigsegv_is_crashed():
     assert (
-        observe(FakeClient(container=_container("exited", 139)), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=_container("exited", 139)), _svc(), 30, ImageStatus.READY).state
         is ObservedState.CRASHED
     )
 
@@ -132,7 +146,7 @@ def test_exited_on_sigsegv_is_crashed():
 def test_exited_on_sigterm_is_exited_ok():
     # 143 is 128+SIGTERM: the container was asked to stop, it did not fail on its own
     assert (
-        observe(FakeClient(container=_container("exited", 143)), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=_container("exited", 143)), _svc(), 30, ImageStatus.READY).state
         is ObservedState.EXITED_OK
     )
 
@@ -140,7 +154,7 @@ def test_exited_on_sigterm_is_exited_ok():
 def test_exited_on_sigkill_is_exited_ok():
     # 137 is 128+SIGKILL: what a container that ignores SIGTERM reports once the stop grace expires
     assert (
-        observe(FakeClient(container=_container("exited", 137)), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=_container("exited", 137)), _svc(), 30, ImageStatus.READY).state
         is ObservedState.EXITED_OK
     )
 
@@ -148,26 +162,26 @@ def test_exited_on_sigkill_is_exited_ok():
 def test_oom_killed_is_crashed():
     # the kernel's OOM killer also uses SIGKILL, but that one is a real crash to back off from
     assert (
-        observe(FakeClient(container=_container("exited", 137, oom_killed=True)), _svc(), 30, ImageStatus.READY)
+        observe(FakeClient(container=_container("exited", 137, oom_killed=True)), _svc(), 30, ImageStatus.READY).state
         is ObservedState.CRASHED
     )
 
 
 def test_pending_image_short_circuits_before_docker():
-    assert observe(None, _svc(), 30, ImageStatus.PENDING) is ObservedState.IMAGE_PENDING
+    assert observe(None, _svc(), 30, ImageStatus.PENDING).state is ObservedState.IMAGE_PENDING
 
 
 def test_building_image_short_circuits_before_docker():
-    assert observe(None, _svc(), 30, ImageStatus.BUILDING) is ObservedState.IMAGE_PENDING
+    assert observe(None, _svc(), 30, ImageStatus.BUILDING).state is ObservedState.IMAGE_PENDING
 
 
 def test_failed_image_short_circuits_before_docker():
-    assert observe(None, _svc(), 30, ImageStatus.FAILED) is ObservedState.IMAGE_FAILED
+    assert observe(None, _svc(), 30, ImageStatus.FAILED).state is ObservedState.IMAGE_FAILED
 
 
 def test_ready_image_falls_through_to_docker():
     c = _container("running", health="healthy")
-    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY) is ObservedState.RUNNING
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.RUNNING
 
 
 def test_image_presence_uses_the_resolved_ref():
@@ -177,5 +191,39 @@ def test_image_presence_uses_the_resolved_ref():
         image=SimpleNamespace(image_ref="ghcr.io/links-ads/serve-runtime:abc123456789"),
     )
     client = FakeClient(container=None, image_present=True)
-    assert observe(client, service, 30, ImageStatus.READY) is ObservedState.ABSENT
+    assert observe(client, service, 30, ImageStatus.READY).state is ObservedState.ABSENT
     assert client.images.requested == "ghcr.io/links-ads/serve-runtime:abc123456789"
+
+
+def test_matching_label_is_not_drifted():
+    svc = _svc()
+    c = _container("running", health="healthy", labels={SPEC_LABEL: container_spec(svc).fingerprint})
+    assert observe(FakeClient(container=c), svc, 30, ImageStatus.READY).drifted is False
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {SPEC_LABEL: "0000000000000000"},
+        {},  # a container from before this feature: recreate it once rather than trust it
+        None,  # docker-py returns None when Config.Labels is null; .get on it would break the tick
+    ],
+)
+def test_a_label_that_does_not_match_is_drifted(labels):
+    c = _container("running", health="healthy", labels=labels)
+    observation = observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY)
+    assert observation.drifted is True
+    # drift must not cost the liveness fact: suspending a drifted service still has to stop it
+    assert observation.state is ObservedState.RUNNING
+
+
+def test_absent_container_is_never_drifted():
+    observation = observe(FakeClient(container=None, image_present=True), _svc(), 30, ImageStatus.READY)
+    assert (observation.state, observation.drifted) == (ObservedState.ABSENT, False)
+
+
+def test_pending_image_reports_no_drift_verdict():
+    # an edit that queues a rebuild must not recreate the container on the stale image mid-build
+    c = _container("running", health="healthy", labels={SPEC_LABEL: "0000000000000000"})
+    observation = observe(FakeClient(container=c), _svc(), 30, ImageStatus.PENDING)
+    assert (observation.state, observation.drifted) == (ObservedState.IMAGE_PENDING, False)

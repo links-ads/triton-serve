@@ -31,17 +31,23 @@ class Decision:
     action: Action
     status: RuntimeStatus
     increment_attempt: bool = False
+    reset_attempts: bool = False
 
 
-def _available(observed: ObservedState, target: int, attempts: int, max_attempts: int) -> Decision:
+def _available(observed: ObservedState, drifted: bool, target: int, attempts: int, max_attempts: int) -> Decision:
     exhausted = attempts >= max_attempts
     if target == 0:
-        # scaled to zero; only surface FAILED if a crash already spent the budget
+        # scaled to zero; only surface FAILED if a crash already spent the budget. drift waits:
+        # acting on it here would start the container and defeat scale-to-zero
         if observed in (ObservedState.RUNNING, ObservedState.BOOTING):
             return Decision(Action.STOP, RuntimeStatus.IDLE)
         if observed is ObservedState.CRASHED and exhausted:
             return Decision(Action.NONE, RuntimeStatus.FAILED)
         return Decision(Action.NONE, RuntimeStatus.IDLE)
+
+    # a container that no longer matches the service row is wrong whatever its liveness
+    if drifted and observed not in (ObservedState.IMAGE_PENDING, ObservedState.IMAGE_FAILED):
+        return Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True)
 
     # target == 1: drive toward serving. once the budget is spent every bring-up refuses, so
     # FAILED stays terminal (even if the dead container is later removed) until /retry resets it
@@ -89,6 +95,8 @@ def _retired(observed: ObservedState) -> Decision:
 def decide(
     desired: DesiredState,
     observed: ObservedState,
+    *,
+    drifted: bool,
     replica_target: int,
     attempts: int,
     max_attempts: int,
@@ -98,6 +106,8 @@ def decide(
     Args:
         desired (DesiredState): The operator intent recorded on the service.
         observed (ObservedState): The fact observed on the docker daemon.
+        drifted (bool): Whether the container was built from a spec that no longer matches the
+            service row.
         replica_target (int): 0 or 1, and only ever 1 under AVAILABLE (the autoscaler's decision).
         attempts (int): Recovery attempts already spent.
         max_attempts (int): The crash budget.
@@ -107,7 +117,7 @@ def decide(
     """
     match desired:
         case DesiredState.AVAILABLE:
-            return _available(observed, replica_target, attempts, max_attempts)
+            return _available(observed, drifted, replica_target, attempts, max_attempts)
         case DesiredState.SUSPENDED:
             return _suspended(observed)
         case DesiredState.RETIRED:
