@@ -68,7 +68,7 @@ def test_available_booting_target1_waits_warming():
 def test_failed_is_terminal_when_exhausted_across_bringup_facts():
     # a FAILED (budget-exhausted) service must not auto-revive, even once its dead container is
     # removed (-> ABSENT) or a stale exited one lingers (-> EXITED_OK)
-    for observed in (A.ABSENT, A.EXITED_OK, A.CRASHED, A.IMAGE_MISSING):
+    for observed in (A.ABSENT, A.EXITED_OK, A.CRASHED, A.CREATED, A.IMAGE_MISSING):
         d = decide(D.AVAILABLE, observed, drifted=False, replica_target=1, attempts=3, max_attempts=3)
         assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
 
@@ -80,6 +80,9 @@ def test_suspended_stops_live_else_noop(observed, drifted):
     assert d.status == R.SUSPENDED
     if observed in (A.RUNNING, A.BOOTING):
         assert d.action == Action.STOP
+    elif observed is A.CREATED:
+        # nothing to stop: a never-started container is removed so the next tick reads ABSENT
+        assert d.action == Action.REMOVE
     else:
         assert d.action == Action.NONE
 
@@ -90,7 +93,7 @@ def test_retired_removes_or_finalizes(observed, drifted):
     # a tombstoned service still has rows and still fingerprints; drift must not revive it
     d = decide(D.RETIRED, observed, drifted=drifted, replica_target=0, attempts=0, max_attempts=3)
     assert d.status == R.RETIRED
-    if observed in (A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED):
+    if observed in (A.RUNNING, A.BOOTING, A.EXITED_OK, A.CRASHED, A.CREATED):
         assert d.action == Action.REMOVE
     else:
         assert d.action == Action.FINALIZE
@@ -141,3 +144,20 @@ def test_drift_is_ignored_while_scaled_to_zero():
     # an edit must never wake a sleeping service; the wake path recreates instead
     d = decide(D.AVAILABLE, A.EXITED_OK, drifted=True, replica_target=0, attempts=0, max_attempts=3)
     assert (d.action, d.status) == (Action.NONE, R.IDLE)
+
+
+def test_available_created_target1_recreates_and_increments():
+    # a container created but never started is a failed bring-up, not a container still booting
+    d = decide(D.AVAILABLE, A.CREATED, drifted=False, replica_target=1, attempts=1, max_attempts=3)
+    assert (d.action, d.status, d.increment_attempt) == (Action.RECREATE, R.RECOVERING, True)
+
+
+def test_available_created_budget_exhausted_fails():
+    d = decide(D.AVAILABLE, A.CREATED, drifted=False, replica_target=1, attempts=3, max_attempts=3)
+    assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
+
+
+def test_available_created_target0_removes_the_shell():
+    # keeping it would leave the wake path a container it has to clean up before it can start one
+    d = decide(D.AVAILABLE, A.CREATED, drifted=False, replica_target=0, attempts=0, max_attempts=3)
+    assert (d.action, d.status) == (Action.REMOVE, R.IDLE)

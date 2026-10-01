@@ -7,6 +7,7 @@ from triton_serve.database.model import DesiredState, RuntimeStatus
 class ObservedState(enum.Enum):
     RUNNING = "running"  # container up, health passing
     BOOTING = "booting"  # up, health not yet passing, within boot grace
+    CREATED = "created"  # container exists but was never started: a bring-up that died midway
     EXITED_OK = "exited_ok"  # exited, code 0
     CRASHED = "crashed"  # exited, code != 0
     ABSENT = "absent"  # no container bound to the service (vanished / stale id)
@@ -41,6 +42,10 @@ def _available(observed: ObservedState, drifted: bool, target: int, attempts: in
         # acting on it here would start the container and defeat scale-to-zero
         if observed in (ObservedState.RUNNING, ObservedState.BOOTING):
             return Decision(Action.STOP, RuntimeStatus.IDLE)
+        if observed is ObservedState.CREATED:
+            # a never-started shell cannot be stopped, and leaving it would make the wake path
+            # clear it before it can spawn; removing it now settles the service on ABSENT
+            return Decision(Action.REMOVE, RuntimeStatus.IDLE)
         if observed is ObservedState.CRASHED and exhausted:
             return Decision(Action.NONE, RuntimeStatus.FAILED)
         return Decision(Action.NONE, RuntimeStatus.IDLE)
@@ -64,7 +69,9 @@ def _available(observed: ObservedState, drifted: bool, target: int, attempts: in
             if exhausted:
                 return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.RECREATE, RuntimeStatus.WARMING)
-        case ObservedState.CRASHED:
+        case ObservedState.CRASHED | ObservedState.CREATED:
+            # CREATED is a bring-up that died between create and start: it has no boot grace to
+            # wait out (no StartedAt), so treating it as still booting parks the service forever
             if exhausted:
                 return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.RECREATE, RuntimeStatus.RECOVERING, increment_attempt=True)
@@ -83,11 +90,19 @@ def _available(observed: ObservedState, drifted: bool, target: int, attempts: in
 def _suspended(observed: ObservedState) -> Decision:
     if observed in (ObservedState.RUNNING, ObservedState.BOOTING):
         return Decision(Action.STOP, RuntimeStatus.SUSPENDED)
+    if observed is ObservedState.CREATED:
+        return Decision(Action.REMOVE, RuntimeStatus.SUSPENDED)
     return Decision(Action.NONE, RuntimeStatus.SUSPENDED)
 
 
 def _retired(observed: ObservedState) -> Decision:
-    if observed in (ObservedState.RUNNING, ObservedState.BOOTING, ObservedState.EXITED_OK, ObservedState.CRASHED):
+    if observed in (
+        ObservedState.RUNNING,
+        ObservedState.BOOTING,
+        ObservedState.EXITED_OK,
+        ObservedState.CRASHED,
+        ObservedState.CREATED,
+    ):
         return Decision(Action.REMOVE, RuntimeStatus.RETIRED)
     return Decision(Action.FINALIZE, RuntimeStatus.RETIRED)
 

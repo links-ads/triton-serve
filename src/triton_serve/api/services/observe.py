@@ -113,7 +113,11 @@ def observe(
     drifted = _drifted(container, service)
     if container.status == "running":
         return Observation(_running_fact(container, boot_grace_seconds), drifted)
-    if container.status in ("created", "restarting"):
+    if container.status == "created":
+        # docker leaves the container in `created` when `containers.run` fails at the start step;
+        # it has no StartedAt, so the boot grace can never expire on it
+        return Observation(ObservedState.CREATED, drifted)
+    if container.status == "restarting":
         return Observation(ObservedState.BOOTING, drifted)
     state = container.attrs.get("State", {})
     exit_code = state.get("ExitCode", 0)
