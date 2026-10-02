@@ -43,11 +43,28 @@ def test_available_crashed_budget_exhausted_fails():
     assert (d.action, d.status) == (Action.MARK_FAILED, R.FAILED)
 
 
-def test_available_crashed_target0_defers_but_flags_failed_if_spent():
-    assert decide(D.AVAILABLE, A.CRASHED, drifted=False, replica_target=0, attempts=0, max_attempts=3).status == R.IDLE
-    assert (
-        decide(D.AVAILABLE, A.CRASHED, drifted=False, replica_target=0, attempts=3, max_attempts=3).status == R.FAILED
-    )
+@pytest.mark.parametrize("observed", list(ObservedState))
+def test_available_target0_keeps_a_refused_service_failed(observed):
+    # projecting IDLE would let /status wake a service whose every bring-up is refused, flipping it
+    # between IDLE and FAILED every inactivity window
+    d = decide(D.AVAILABLE, observed, drifted=False, replica_target=0, attempts=3, max_attempts=3)
+    live = observed in (A.RUNNING, A.BOOTING)
+    assert d.status == (R.IDLE if live or observed is A.IMAGE_PENDING else R.FAILED)
+    assert d.action == (Action.STOP if live else Action.REMOVE if observed is A.CREATED else Action.NONE)
+
+
+def test_available_image_failed_target0_is_failed_whatever_the_budget():
+    d = decide(D.AVAILABLE, A.IMAGE_FAILED, drifted=False, replica_target=0, attempts=0, max_attempts=3)
+    assert (d.action, d.status) == (Action.NONE, R.FAILED)
+
+
+@pytest.mark.parametrize("attempts", [0, 3])
+@pytest.mark.parametrize("observed", list(ObservedState))
+def test_available_target0_fails_exactly_where_target1_marks_failed(observed, attempts):
+    # scale must never change the verdict, only the action
+    idle = decide(D.AVAILABLE, observed, drifted=False, replica_target=0, attempts=attempts, max_attempts=3)
+    wanted = decide(D.AVAILABLE, observed, drifted=False, replica_target=1, attempts=attempts, max_attempts=3)
+    assert (idle.status == R.FAILED) == (wanted.action == Action.MARK_FAILED)
 
 
 def test_available_image_missing_target1_pulls():

@@ -35,55 +35,54 @@ class Decision:
     reset_attempts: bool = False
 
 
+def _refused(observed: ObservedState, exhausted: bool) -> bool:
+    # a spent budget refuses every bring-up of a service not already up or waiting on a build, and a
+    # failed build refuses it whatever the budget. not plain `exhausted`: a service whose last
+    # recovery attempt succeeded is READY with the budget spent until the cooldown returns it
+    return observed is ObservedState.IMAGE_FAILED or (
+        exhausted and observed not in (ObservedState.RUNNING, ObservedState.BOOTING, ObservedState.IMAGE_PENDING)
+    )
+
+
 def _available(observed: ObservedState, drifted: bool, target: int, attempts: int, max_attempts: int) -> Decision:
-    exhausted = attempts >= max_attempts
+    refused = _refused(observed, attempts >= max_attempts)
     if target == 0:
-        # scaled to zero; only surface FAILED if a crash already spent the budget. drift waits:
+        # scale picks the action, never the verdict: projecting IDLE on a refused service would let
+        # /status wake it, flipping it between IDLE and FAILED every inactivity window. drift waits:
         # acting on it here would start the container and defeat scale-to-zero
+        status = RuntimeStatus.FAILED if refused else RuntimeStatus.IDLE
         if observed in (ObservedState.RUNNING, ObservedState.BOOTING):
-            return Decision(Action.STOP, RuntimeStatus.IDLE)
+            return Decision(Action.STOP, status)
         if observed is ObservedState.CREATED:
             # a never-started shell cannot be stopped, and leaving it would make the wake path
             # clear it before it can spawn; removing it now settles the service on ABSENT
-            return Decision(Action.REMOVE, RuntimeStatus.IDLE)
-        if observed is ObservedState.CRASHED and exhausted:
-            return Decision(Action.NONE, RuntimeStatus.FAILED)
-        return Decision(Action.NONE, RuntimeStatus.IDLE)
+            return Decision(Action.REMOVE, status)
+        return Decision(Action.NONE, status)
 
     # a container that no longer matches the service row is wrong whatever its liveness
     if drifted and observed not in (ObservedState.IMAGE_PENDING, ObservedState.IMAGE_FAILED):
         return Decision(Action.RECREATE, RuntimeStatus.WARMING, reset_attempts=True)
 
-    # target == 1: drive toward serving. once the budget is spent every bring-up refuses, so
-    # FAILED stays terminal (even if the dead container is later removed) until /retry resets it
+    # target == 1: drive toward serving. once refused, FAILED stays terminal (even if the dead
+    # container is later removed) until /retry resets it
+    if refused:
+        return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
     match observed:
         case ObservedState.RUNNING:
             return Decision(Action.NONE, RuntimeStatus.READY)
-        case ObservedState.BOOTING:
+        case ObservedState.BOOTING | ObservedState.IMAGE_PENDING:
+            # a build runs for minutes against a 10s tick; waiting must not spend the crash budget
             return Decision(Action.NONE, RuntimeStatus.WARMING)
         case ObservedState.EXITED_OK:
-            if exhausted:
-                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.START, RuntimeStatus.WARMING)
         case ObservedState.ABSENT:
-            if exhausted:
-                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.RECREATE, RuntimeStatus.WARMING)
         case ObservedState.CRASHED | ObservedState.CREATED:
             # CREATED is a bring-up that died between create and start: it has no boot grace to
             # wait out (no StartedAt), so treating it as still booting parks the service forever
-            if exhausted:
-                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.RECREATE, RuntimeStatus.RECOVERING, increment_attempt=True)
         case ObservedState.IMAGE_MISSING:
-            if exhausted:
-                return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
             return Decision(Action.PULL, RuntimeStatus.WARMING, increment_attempt=True)
-        case ObservedState.IMAGE_PENDING:
-            # a build runs for minutes against a 10s tick; waiting must not spend the crash budget
-            return Decision(Action.NONE, RuntimeStatus.WARMING)
-        case ObservedState.IMAGE_FAILED:
-            return Decision(Action.MARK_FAILED, RuntimeStatus.FAILED)
     raise AssertionError(f"unreachable observed={observed}")  # pragma: no cover
 
 
