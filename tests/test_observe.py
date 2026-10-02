@@ -227,3 +227,24 @@ def test_pending_image_reports_no_drift_verdict():
     c = _container("running", health="healthy", labels={SPEC_LABEL: "0000000000000000"})
     observation = observe(FakeClient(container=c), _svc(), 30, ImageStatus.PENDING)
     assert (observation.state, observation.drifted) == (ObservedState.IMAGE_PENDING, False)
+
+
+def test_created_but_never_started_is_created():
+    # containers.run leaves the container behind in `created` when it fails at the start step
+    assert (
+        observe(FakeClient(container=_container("created")), _svc(), 30, ImageStatus.READY).state
+        is ObservedState.CREATED
+    )
+
+
+def test_created_is_not_rescued_by_the_boot_grace():
+    # a never-started container has no StartedAt, so no amount of waiting can settle it
+    c = _container("created", started=datetime.now(UTC) - timedelta(seconds=120))
+    assert observe(FakeClient(container=c), _svc(), 30, ImageStatus.READY).state is ObservedState.CREATED
+
+
+def test_restarting_is_booting():
+    assert (
+        observe(FakeClient(container=_container("restarting")), _svc(), 30, ImageStatus.READY).state
+        is ObservedState.BOOTING
+    )
